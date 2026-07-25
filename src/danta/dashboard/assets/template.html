@@ -65,7 +65,7 @@
               <tr>
                 <th class="sticky-select">선택</th><th class="sticky-rank">순위</th><th class="sticky-name">종목명</th>
                 <th id="reviewGradeHeader">AI 등급</th><th>현재가</th><th title="선택 기간 첫 거래일 수정종가 대비 현재가 변화율">기간수익률</th><th>가격 흐름</th>
-                <th title="반복 지지로 계산한 박스 하단 경계">박스 하단</th><th title="반복 저항으로 계산한 박스 상단 경계">박스 상단</th><th>진폭</th><th>현재 위치</th><th>왕복</th>
+                <th title="60분봉 저가의 10분위로 계산한 하단 경계">박스 하단</th><th title="60분봉 고가의 90분위로 계산한 상단 경계">박스 상단</th><th>진폭</th><th>현재 위치</th><th title="박스 하단 접촉 뒤 하단 대비 10% 높은 가격에 실제 도달한 횟수">하단+10% 도달</th>
                 <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
                 <th>정량점수</th><th id="reviewScoreHeader">AI점수</th><th id="reviewCommentHeader">AI 코멘트</th>
                 <th>최신 뉴스</th><th>토론 요약</th><th>차트보기</th>
@@ -76,6 +76,26 @@
         </div>
       </section>
   </main>
+
+  <div id="chartModal" class="chart-modal" role="dialog" aria-modal="true" aria-labelledby="chartModalTitle" hidden>
+    <div class="chart-modal-backdrop" data-close-chart></div>
+    <section class="chart-modal-card">
+      <header class="chart-modal-header">
+        <div>
+          <h2 id="chartModalTitle"></h2>
+          <p id="chartModalSummary"></p>
+        </div>
+        <button type="button" class="chart-modal-close" data-close-chart aria-label="가격 흐름 팝업 닫기">×</button>
+      </header>
+      <div id="chartModalPlot" class="chart-modal-plot"></div>
+      <div class="chart-modal-table-wrap">
+        <table class="chart-modal-table">
+          <thead><tr><th>거래일</th><th>시간</th><th>시가</th><th>고가</th><th>저가</th><th>종가</th><th>거래량</th></tr></thead>
+          <tbody id="chartModalBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
   <footer>
     <span>투자 판단과 매수 승인은 사용자에게 있습니다. 계좌·주문·비밀정보는 이 페이지에 포함하지 않습니다.</span>

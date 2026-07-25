@@ -128,7 +128,7 @@
     return `<td class="sticky-name ${extra}"><span class="stock-name">${h(candidate.name)}</span><span class="stock-meta">${h(candidate.code)} · ${h(candidate.sector)}</span></td>`;
   }
 
-  function sparkline(item, name) {
+  function sparkline(item, name, code) {
     if (item.structure_status === "WARMING_UP" || !item.closes.length) return "";
     const values = item.closes.map(n);
     const width = 132;
@@ -142,12 +142,19 @@
     const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
     const upper = y(n(item.box_high));
     const lower = y(n(item.box_low));
-    return `<svg class="spark" viewBox="0 0 ${width} ${height}" role="img" aria-label="${h(name)} ${state.window}일 가격 흐름">
+    return `<button type="button" class="spark-button" data-chart-code="${h(code)}" aria-label="${h(name)} ${state.window}일 60분봉 상세 보기"><svg class="spark" viewBox="0 0 ${width} ${height}" aria-hidden="true">
       <rect class="spark-band" x="${pad}" y="${upper}" width="${width - pad * 2}" height="${Math.max(1, lower - upper)}"></rect>
       <line class="spark-bound" x1="${pad}" y1="${upper}" x2="${width - pad}" y2="${upper}"></line>
       <line class="spark-bound" x1="${pad}" y1="${lower}" x2="${width - pad}" y2="${lower}"></line>
       <polyline class="spark-line" points="${points}"></polyline>
-    </svg>`;
+    </svg></button>`;
+  }
+
+  function targetReachCell(item) {
+    const pending = n(item.target_pending_count);
+    return `<b>${item.target_reach_count}회</b><small class="target-detail">목표 ${won.format(
+      n(item.target_price_10pct),
+    )}원 · 하단 접촉 ${item.lower_contact_count}회${pending ? " · 진행 중" : ""}</small>`;
   }
 
   function structureCell(item, content) {
@@ -177,12 +184,12 @@
         <td>${grade(item)}</td>
         <td>${won.format(n(candidate.current_price))}</td>
         <td class="${tone(item.return_pct)}"><b>${percent(item.return_pct)}</b></td>
-        <td>${structureCell(item, sparkline(item, candidate.name))}</td>
+        <td>${structureCell(item, sparkline(item, candidate.name, candidate.code))}</td>
         <td>${structureCell(item, won.format(n(item.box_low)))}</td>
         <td>${structureCell(item, won.format(n(item.box_high)))}</td>
         <td>${structureCell(item, `<b>${one.format(n(item.amplitude_pct))}%</b>`)}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
-        <td>${structureCell(item, `${item.traversal_count}회`)}</td>
+        <td>${structureCell(item, targetReachCell(item))}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
         <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>
         <td class="${tone(flows.institution)}">${signed(flows.institution)}</td>
@@ -198,6 +205,69 @@
       </tr>`;
     }).join("");
     bindSelectionInputs();
+    bindChartButtons();
+  }
+
+  function expandedPlot(item, name) {
+    const values = item.chart_bars.map((bar) => n(bar.close));
+    const width = 900;
+    const height = 210;
+    const padX = 42;
+    const padY = 18;
+    const low = Math.min(n(item.box_low), ...item.chart_bars.map((bar) => n(bar.low)));
+    const high = Math.max(
+      n(item.target_price_10pct),
+      ...item.chart_bars.map((bar) => n(bar.high)),
+    );
+    const spread = Math.max(1, high - low);
+    const x = (index) => padX + index * ((width - padX * 2) / Math.max(1, values.length - 1));
+    const y = (value) => padY + (high - value) / spread * (height - padY * 2);
+    const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
+    const lowerY = y(n(item.box_low));
+    const targetY = y(n(item.target_price_10pct));
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${h(name)} ${state.window}일 60분봉 종가 흐름">
+      <line class="modal-target-line" x1="${padX}" y1="${targetY}" x2="${width - padX}" y2="${targetY}"></line>
+      <line class="modal-lower-line" x1="${padX}" y1="${lowerY}" x2="${width - padX}" y2="${lowerY}"></line>
+      <text x="4" y="${Math.max(12, targetY - 4)}">+10%</text>
+      <text x="4" y="${Math.min(height - 4, lowerY + 13)}">하단</text>
+      <polyline class="modal-price-line" points="${points}"></polyline>
+    </svg>`;
+  }
+
+  function openChartModal(code) {
+    const candidate = candidates.find((item) => item.code === code);
+    if (!candidate) return;
+    const item = metric(candidate);
+    if (item.structure_status !== "READY" || !item.chart_bars.length) return;
+    $("#chartModalTitle").textContent = `${candidate.name} · ${state.window}일 60분봉`;
+    $("#chartModalSummary").textContent = `박스 하단 ${won.format(n(item.box_low))}원 · +10% 목표 ${won.format(
+      n(item.target_price_10pct),
+    )}원 · 도달 ${item.target_reach_count}회 · 하단 접촉 ${item.lower_contact_count}회`;
+    $("#chartModalPlot").innerHTML = expandedPlot(item, candidate.name);
+    $("#chartModalBody").innerHTML = item.chart_bars.map((bar) => `
+      <tr>
+        <td>${h(`${bar.trading_date.slice(4, 6)}.${bar.trading_date.slice(6, 8)}`)}</td>
+        <td>${h(bar.bucket)}시</td>
+        <td>${won.format(n(bar.open))}</td>
+        <td>${won.format(n(bar.high))}</td>
+        <td>${won.format(n(bar.low))}</td>
+        <td><b>${won.format(n(bar.close))}</b></td>
+        <td>${won.format(n(bar.volume))}</td>
+      </tr>`).join("");
+    $("#chartModal").hidden = false;
+    document.body.classList.add("modal-open");
+    $(".chart-modal-close").focus();
+  }
+
+  function closeChartModal() {
+    $("#chartModal").hidden = true;
+    document.body.classList.remove("modal-open");
+  }
+
+  function bindChartButtons() {
+    $$(".spark-button").forEach((button) => button.addEventListener(
+      "click", () => openChartModal(button.dataset.chartCode),
+    ));
   }
 
   function bindSelectionInputs() {
@@ -381,6 +451,10 @@
     saveSelection();
     $("#selectionMessage").textContent = "선택 초안을 모두 지웠습니다.";
     renderAll();
+  });
+  $$("[data-close-chart]").forEach((button) => button.addEventListener("click", closeChartModal));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#chartModal").hidden) closeChartModal();
   });
   const copyButton = $("#copySelection");
   const copyButtonIdleHtml = copyButton.innerHTML;

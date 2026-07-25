@@ -5,7 +5,15 @@ from decimal import Decimal
 
 from danta.adapters.kis.client import KisMinuteBar
 from danta.adapters.krx.client import DailyBar, MarketDataset
-from danta.services.intraday_report import aggregate_hour_bars, balanced_prefilter
+from danta.services.intraday_report import (
+    HourBar,
+    PrefilterCandidate,
+    _Analyzed,
+    _score_all,
+    _target_reach_episodes,
+    aggregate_hour_bars,
+    balanced_prefilter,
+)
 
 
 def test_balanced_prefilter_applies_all_three_thresholds() -> None:
@@ -75,3 +83,65 @@ def test_aggregate_hour_bars_uses_full_ohlcv() -> None:
     assert bars[0].low == 99
     assert bars[0].close == 108
     assert bars[0].volume == 30
+
+
+def test_target_reach_requires_a_later_minute_after_lower_contact() -> None:
+    rows = [
+        KisMinuteBar(
+            trading_date="20260724",
+            trading_time=trading_time,
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=10,
+            accumulated_trading_value=0,
+        )
+        for trading_time, open_, high, low, close in [
+            ("090000", 100, 111, 99, 108),
+            ("090100", 108, 109, 105, 106),
+            ("090200", 106, 110, 106, 110),
+            ("090300", 110, 111, 100, 101),
+        ]
+    ]
+
+    assert _target_reach_episodes(rows, Decimal("100")) == (2, 1, 1)
+
+
+def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
+    hour_bar = HourBar(
+        trading_date="20260724",
+        bucket="09",
+        open=Decimal("100"),
+        high=Decimal("110"),
+        low=Decimal("99"),
+        close=Decimal("108"),
+        volume=Decimal("1000"),
+    )
+    analysis = _Analyzed(
+        symbol="000001",
+        low=Decimal("100"),
+        high=Decimal("120"),
+        amplitude=Decimal("18"),
+        position=Decimal("20"),
+        target_price=Decimal("110"),
+        lower_contacts=1,
+        target_reaches=1,
+        target_pending=0,
+        box_inclusion=Decimal("80"),
+        hour_bars=[hour_bar],
+        hourly_closes=[Decimal("108")],
+        score=Decimal("0"),
+    )
+    candidate = PrefilterCandidate(
+        symbol="000001",
+        name="테스트",
+        market_cap=Decimal("500000000000"),
+        latest_price=Decimal("108"),
+        average_trading_value=Decimal("5000000000"),
+    )
+
+    scored = _score_all([analysis], {"000001": candidate})
+
+    assert scored[0].hour_bars == [hour_bar]
+    assert isinstance(scored[0].hour_bars[0], HourBar)

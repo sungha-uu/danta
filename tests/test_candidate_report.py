@@ -60,8 +60,15 @@ def test_quant_report_contains_ranked_real_candidate_shape() -> None:
         )
 
 
-def test_round_trip_count_changes_with_window() -> None:
+def test_target_reach_episodes_are_internally_consistent() -> None:
     report = build_quant_report(_dataset())
     candidate = report.candidates[0]
 
-    assert candidate.windows["21"].traversal_count >= candidate.windows["7"].traversal_count
+    for window in ("7", "14", "21"):
+        metrics = candidate.windows[window]
+        assert metrics.target_price_10pct == (
+            metrics.box_low * Decimal("1.10")
+        ).quantize(Decimal("0.01"))
+        assert metrics.lower_contact_count == (
+            metrics.target_reach_count + metrics.target_pending_count
+        )

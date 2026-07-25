@@ -104,6 +104,9 @@ main { flex: 1 1 auto; min-height: 0; padding: 8px 8px 0; overflow: hidden; }
 .position-track { height: 5px; margin-top: 4px; background: #e1e6ed; }
 .position-track span { display: block; height: 100%; background: linear-gradient(90deg, #56a2e8, #58ad77); }
 .spark { display: block; width: 132px; height: 34px; overflow: visible; }
+.spark-button { padding: 0; border: 0; border-radius: 3px; background: transparent; cursor: zoom-in; }
+.spark-button:hover { background: #e8f1fb; }
+.spark-button:focus-visible { outline: 2px solid #5791d4; outline-offset: 2px; }
 .spark-band { fill: #eef4e8; }
 .spark-bound { stroke: #a7bb91; stroke-width: .7; stroke-dasharray: 3 3; }
 .spark-line { fill: none; stroke: #294e78; stroke-width: 1.7; vector-effect: non-scaling-stroke; }
@@ -111,6 +114,29 @@ main { flex: 1 1 auto; min-height: 0; padding: 8px 8px 0; overflow: hidden; }
 .news-link:hover { text-decoration: underline; }
 .news-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .chart-link { display: inline-block; padding: 5px 8px; border: 1px solid #a9bad0; border-radius: 3px; color: #174f97; background: #f5f9ff; text-decoration: none; }
+.target-detail { display: block; margin-top: 3px; color: var(--muted); font-size: 8px; }
+
+body.modal-open { overflow: hidden; }
+.chart-modal[hidden] { display: none; }
+.chart-modal { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; }
+.chart-modal-backdrop { position: absolute; inset: 0; background: rgba(9, 19, 34, .68); }
+.chart-modal-card { position: relative; width: min(1080px, 96vw); max-height: 92vh; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border-radius: 7px; background: white; box-shadow: 0 18px 60px rgba(0,0,0,.35); }
+.chart-modal-header { position: static; min-height: 0; padding: 14px 18px; display: flex; align-items: flex-start; justify-content: space-between; color: white; background: #121d2e; }
+.chart-modal-header h2 { margin: 0; font-size: 18px; }
+.chart-modal-header p { margin: 5px 0 0; color: #cbd6e6; font-size: 11px; }
+.chart-modal-close { width: 34px; height: 34px; border: 1px solid #63728a; border-radius: 4px; color: white; background: transparent; font-size: 25px; line-height: 1; cursor: pointer; }
+.chart-modal-plot { padding: 10px 18px 4px; background: #f8fafc; }
+.chart-modal-plot svg { display: block; width: 100%; height: 210px; }
+.modal-price-line { fill: none; stroke: #254f7a; stroke-width: 2.2; vector-effect: non-scaling-stroke; }
+.modal-target-line { stroke: #cf3b3b; stroke-width: 1.2; stroke-dasharray: 6 4; }
+.modal-lower-line { stroke: #397d58; stroke-width: 1.2; stroke-dasharray: 6 4; }
+.chart-modal-plot text { fill: #627087; font-size: 10px; font-weight: 700; }
+.chart-modal-table-wrap { min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
+.chart-modal-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.chart-modal-table th, .chart-modal-table td { padding: 7px 10px; border-right: 1px solid var(--cell-line); border-bottom: 1px solid var(--cell-line); text-align: right; }
+.chart-modal-table th { position: sticky; top: 0; z-index: 1; color: white; background: var(--blue); text-align: center; }
+.chart-modal-table td:first-child, .chart-modal-table td:nth-child(2) { text-align: center; }
+.chart-modal-table tbody tr:nth-child(even) { background: #f7f9fc; }
 
 .selection-tray { min-height: 65px; padding: 6px 10px 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: end; gap: 4px 8px; color: var(--text); border-top: 1px solid #aeb9c8; background: #eef2f7; }
 .selection-summary { grid-column: 1 / -1; min-width: 0; display: flex; align-items: center; gap: 9px; min-height: 14px; line-height: 1; }

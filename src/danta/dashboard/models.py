@@ -25,6 +25,24 @@ class FlowBreakdown(BaseModel):
     strength_pct: Decimal
 
 
+class ChartBar(BaseModel):
+    trading_date: str = Field(pattern=r"^\d{8}$")
+    bucket: str = Field(pattern=r"^\d{2}$")
+    open: Decimal = Field(gt=0)
+    high: Decimal = Field(gt=0)
+    low: Decimal = Field(gt=0)
+    close: Decimal = Field(gt=0)
+    volume: Decimal = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_ohlc(self) -> ChartBar:
+        if self.high < max(self.open, self.close, self.low):
+            raise ValueError("high must be the greatest OHLC value")
+        if self.low > min(self.open, self.close, self.high):
+            raise ValueError("low must be the smallest OHLC value")
+        return self
+
+
 class WindowMetrics(BaseModel):
     days: Literal[7, 14, 21]
     structure_status: Literal["READY", "WARMING_UP"] = "READY"
@@ -37,7 +55,10 @@ class WindowMetrics(BaseModel):
     return_pct: Decimal
     average_trading_value_billion: Decimal = Field(ge=0)
     volume_ratio: Decimal = Field(ge=0)
-    traversal_count: int | None = Field(default=None, ge=0)
+    target_price_10pct: Decimal | None = Field(default=None, gt=0)
+    lower_contact_count: int | None = Field(default=None, ge=0)
+    target_reach_count: int | None = Field(default=None, ge=0)
+    target_pending_count: int | None = Field(default=None, ge=0, le=1)
     breakdown_risk_pct: Decimal | None = Field(default=None, ge=0, le=100)
     quant_score: Decimal | None = Field(default=None, ge=0, le=100)
     ai_score: Decimal | None = Field(default=None, ge=0, le=100)
@@ -48,6 +69,7 @@ class WindowMetrics(BaseModel):
     risks: list[str] = Field(default_factory=list, max_length=5)
     invalidation: str | None = Field(default=None, min_length=1, max_length=240)
     closes: list[Decimal] = Field(default_factory=list, max_length=200)
+    chart_bars: list[ChartBar] = Field(default_factory=list, max_length=200)
     flows: FlowBreakdown
 
     @model_validator(mode="after")
@@ -66,7 +88,10 @@ class WindowMetrics(BaseModel):
             self.box_high,
             self.amplitude_pct,
             self.position_pct,
-            self.traversal_count,
+            self.target_price_10pct,
+            self.lower_contact_count,
+            self.target_reach_count,
+            self.target_pending_count,
             self.breakdown_risk_pct,
             self.quant_score,
             self.ai_score,
@@ -82,9 +107,19 @@ class WindowMetrics(BaseModel):
                 raise ValueError("READY structure must include reasons and risks")
             if self.box_high is None or self.box_low is None or self.box_high <= self.box_low:
                 raise ValueError("box_high must be greater than box_low")
+            if (
+                self.lower_contact_count is None
+                or self.target_reach_count is None
+                or self.target_pending_count is None
+                or self.lower_contact_count
+                != self.target_reach_count + self.target_pending_count
+            ):
+                raise ValueError("lower contacts must equal reached plus pending episodes")
             if len(self.closes) < 2:
                 raise ValueError("READY structure must include chart closes")
-        elif any(value is not None for value in structural) or self.closes:
+            if len(self.chart_bars) != len(self.closes):
+                raise ValueError("READY structure must include one OHLC bar per chart close")
+        elif any(value is not None for value in structural) or self.closes or self.chart_bars:
             raise ValueError("WARMING_UP structure must not contain fabricated structure fields")
         return self
 

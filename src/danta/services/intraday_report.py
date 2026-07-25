@@ -5,11 +5,10 @@ import json
 import math
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
 
 from pydantic import HttpUrl
 
@@ -18,6 +17,7 @@ from danta.adapters.krx.client import MarketDataset
 from danta.dashboard.models import (
     AiGrade,
     CandidateView,
+    ChartBar,
     DashboardReport,
     FlowBreakdown,
     WindowMetrics,
@@ -59,8 +59,12 @@ class _Analyzed:
     high: Decimal
     amplitude: Decimal
     position: Decimal
-    round_trips: int
+    target_price: Decimal
+    lower_contacts: int
+    target_reaches: int
+    target_pending: int
     box_inclusion: Decimal
+    hour_bars: list[HourBar]
     hourly_closes: list[Decimal]
     score: Decimal
 
@@ -218,28 +222,27 @@ def aggregate_hour_bars(minute_bars: list[KisMinuteBar]) -> list[HourBar]:
     return result
 
 
-def _complete_round_trips(
+def _target_reach_episodes(
     minute_bars: list[KisMinuteBar],
     low: Decimal,
-    high: Decimal,
-) -> int:
-    width = high - low
-    lower_ceiling = low + width * Decimal("0.15")
-    upper_floor = high - width * Decimal("0.15")
-    previous: Literal["LOW", "HIGH"] | None = None
-    transitions = 0
+    *,
+    target_gain: Decimal = Decimal("0.10"),
+) -> tuple[int, int, int]:
+    """Count lower-box contacts that later reach the configured profit target."""
+    target = low * (Decimal("1") + target_gain)
+    armed = False
+    contacts = 0
+    reaches = 0
     for bar in sorted(minute_bars, key=lambda item: (item.trading_date, item.trading_time)):
-        close = Decimal(bar.close)
-        zone: Literal["LOW", "HIGH"] | None = None
-        if close <= lower_ceiling:
-            zone = "LOW"
-        elif close >= upper_floor:
-            zone = "HIGH"
-        if zone is not None and previous is not None and zone != previous:
-            transitions += 1
-        if zone is not None:
-            previous = zone
-    return transitions // 2
+        if armed:
+            if Decimal(bar.high) >= target:
+                reaches += 1
+                armed = False
+            continue
+        if Decimal(bar.low) <= low:
+            contacts += 1
+            armed = True
+    return contacts, reaches, int(armed)
 
 
 def _flow_for(
@@ -326,15 +329,21 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
     position = (current - low) / (high - low) * HUNDRED
     included = sum(1 for bar in hour_bars if bar.low >= low and bar.high <= high)
     box_inclusion = Decimal(included) / Decimal(len(hour_bars)) * HUNDRED
-    round_trips = _complete_round_trips(minute_bars, low, high)
+    lower_contacts, target_reaches, target_pending = _target_reach_episodes(
+        minute_bars, low
+    )
     return _Analyzed(
         symbol=symbol,
         low=low,
         high=high,
         amplitude=amplitude,
         position=position,
-        round_trips=round_trips,
+        target_price=low * Decimal("1.10"),
+        lower_contacts=lower_contacts,
+        target_reaches=target_reaches,
+        target_pending=target_pending,
         box_inclusion=box_inclusion,
+        hour_bars=hour_bars,
         hourly_closes=[bar.close for bar in hour_bars],
         score=Decimal("0"),
     )
@@ -345,7 +354,7 @@ def _score_all(
     candidates: dict[str, PrefilterCandidate],
 ) -> list[_Analyzed]:
     max_amplitude = max(item.amplitude for item in analyses)
-    max_round_trips = max(item.round_trips for item in analyses) or 1
+    max_target_reaches = max(item.target_reaches for item in analyses) or 1
     max_liquidity_log = max(
         math.log10(float(item.average_trading_value))
         for item in candidates.values()
@@ -353,9 +362,9 @@ def _score_all(
     result: list[_Analyzed] = []
     for item in analyses:
         amplitude_score = min(HUNDRED, item.amplitude / max_amplitude * HUNDRED)
-        traversal_score = min(
+        target_reach_score = min(
             HUNDRED,
-            Decimal(item.round_trips) / Decimal(max_round_trips) * HUNDRED,
+            Decimal(item.target_reaches) / Decimal(max_target_reaches) * HUNDRED,
         )
         liquidity_log = Decimal(
             str(math.log10(float(candidates[item.symbol].average_trading_value)))
@@ -363,19 +372,14 @@ def _score_all(
         liquidity_score = liquidity_log / Decimal(str(max_liquidity_log)) * HUNDRED
         lower_score = max(Decimal("0"), HUNDRED - max(Decimal("0"), item.position))
         score = (
-            amplitude_score * Decimal("0.30")
-            + traversal_score * Decimal("0.25")
+            target_reach_score * Decimal("0.35")
+            + amplitude_score * Decimal("0.20")
             + liquidity_score * Decimal("0.20")
             + lower_score * Decimal("0.15")
             + item.box_inclusion * Decimal("0.10")
         )
         result.append(
-            _Analyzed(
-                **{
-                    **asdict(item),
-                    "score": min(HUNDRED, max(Decimal("0"), score)),
-                }
-            )
+            replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
         )
     return sorted(result, key=lambda item: item.score, reverse=True)
 
@@ -417,7 +421,7 @@ def build_intraday_report(
         risk = min(
             HUNDRED,
             max(Decimal("0"), -period_return) * Decimal("2")
-            + (Decimal("20") if analysis.round_trips == 0 else Decimal("0"))
+            + (Decimal("20") if analysis.target_reaches == 0 else Decimal("0"))
             + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
         )
         score = analysis.score.quantize(Decimal("0.01"))
@@ -434,7 +438,10 @@ def build_intraday_report(
             return_pct=period_return,
             average_trading_value_billion=average_value,
             volume_ratio=volume_ratio,
-            traversal_count=analysis.round_trips,
+            target_price_10pct=analysis.target_price.quantize(Decimal("0.01")),
+            lower_contact_count=analysis.lower_contacts,
+            target_reach_count=analysis.target_reaches,
+            target_pending_count=analysis.target_pending,
             breakdown_risk_pct=risk.quantize(Decimal("0.01")),
             quant_score=score,
             ai_score=score,
@@ -442,14 +449,14 @@ def build_intraday_report(
             ai_grade=grade,
             ai_comment=(
                 f"실제 7거래일 1분봉을 60분봉으로 집계한 정량 기준선입니다. "
-                f"진폭 {analysis.amplitude.quantize(Decimal('0.1'))}%, 완전 왕복 "
-                f"{analysis.round_trips}회, 현재 위치 "
+                f"진폭 {analysis.amplitude.quantize(Decimal('0.1'))}%, 박스 하단 대비 "
+                f"+10% 목표 도달 {analysis.target_reaches}회, 현재 위치 "
                 f"{analysis.position.quantize(Decimal('0.1'))}%입니다. "
                 "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
             ),
             reasons=[
                 f"60분봉 진폭 {analysis.amplitude.quantize(Decimal('0.1'))}%",
-                f"완전 왕복 {analysis.round_trips}회",
+                f"하단+10% 목표 도달 {analysis.target_reaches}회",
                 f"박스 내부 봉 {analysis.box_inclusion.quantize(Decimal('0.1'))}%",
             ],
             risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
@@ -457,6 +464,18 @@ def build_intraday_report(
                 f"박스 하단 {analysis.low.quantize(Decimal('1'))}원 이탈 후 재진입 실패"
             ),
             closes=analysis.hourly_closes,
+            chart_bars=[
+                ChartBar(
+                    trading_date=bar.trading_date,
+                    bucket=bar.bucket,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                )
+                for bar in analysis.hour_bars
+            ],
             flows=flows,
         )
         windows: dict[str, WindowMetrics] = {"7": ready}
@@ -493,7 +512,7 @@ def build_intraday_report(
         generated_at=datetime.now(KST),
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime="실제 7거래일 분봉 · 연구용 기준선",
-        calculation_version="box-intraday-v2-60m-prefilter-balanced-v1",
+        calculation_version="box-elasticity-v3-60m-target10-prefilter-balanced-v1",
         strategy_status="RESEARCH_ONLY",
         source_bar_interval_minutes=1,
         analysis_bar_interval_minutes=60,

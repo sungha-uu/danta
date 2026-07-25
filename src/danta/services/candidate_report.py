@@ -10,6 +10,7 @@ from danta.adapters.krx.client import DailyBar, MarketDataset
 from danta.dashboard.models import (
     AiGrade,
     CandidateView,
+    ChartBar,
     DashboardReport,
     FlowBreakdown,
     NewsItem,
@@ -30,23 +31,24 @@ def _round(value: Decimal, places: str = "0.01") -> Decimal:
     return value.quantize(Decimal(places))
 
 
-def _complete_round_trips(closes: list[Decimal], low: Decimal, high: Decimal) -> int:
-    width = high - low
-    lower_ceiling = low + width * Decimal("0.20")
-    upper_floor = high - width * Decimal("0.20")
-    previous: Literal["LOW", "HIGH"] | None = None
-    transitions = 0
+def _target_reach_episodes(
+    closes: list[Decimal],
+    low: Decimal,
+) -> tuple[int, int, int]:
+    target = low * Decimal("1.10")
+    armed = False
+    contacts = 0
+    reaches = 0
     for close in closes:
-        zone: Literal["LOW", "HIGH"] | None = None
-        if close <= lower_ceiling:
-            zone = "LOW"
-        elif close >= upper_floor:
-            zone = "HIGH"
-        if zone is not None and previous is not None and zone != previous:
-            transitions += 1
-        if zone is not None:
-            previous = zone
-    return transitions // 2
+        if armed:
+            if close >= target:
+                reaches += 1
+                armed = False
+            continue
+        if close <= low:
+            contacts += 1
+            armed = True
+    return contacts, reaches, int(armed)
 
 
 def _flow_for(
@@ -134,22 +136,26 @@ def _metrics(
         if prior_average_volume > 0
         else Decimal("0")
     )
-    round_trips = _complete_round_trips(closes, low, high)
+    lower_contacts, target_reaches, target_pending = _target_reach_episodes(
+        closes, low
+    )
     downside_trend = max(Decimal("0"), -period_return)
     risk = min(
         HUNDRED,
         downside_trend * Decimal("3")
-        + (Decimal("20") if round_trips == 0 else Decimal("0"))
+        + (Decimal("20") if target_reaches == 0 else Decimal("0"))
         + (Decimal("20") if average_value_billion < 10 else Decimal("0")),
     )
     amplitude_score = min(HUNDRED, amplitude / Decimal("15") * HUNDRED)
-    traversal_score = min(HUNDRED, Decimal(round_trips) / Decimal("2") * HUNDRED)
+    target_reach_score = min(
+        HUNDRED, Decimal(target_reaches) / Decimal("2") * HUNDRED
+    )
     liquidity_score = min(HUNDRED, average_value_billion / Decimal("100") * HUNDRED)
     lower_score = max(Decimal("0"), HUNDRED - position)
     stability_score = HUNDRED - risk
     quant_score = (
-        amplitude_score * Decimal("0.30")
-        + traversal_score * Decimal("0.25")
+        target_reach_score * Decimal("0.35")
+        + amplitude_score * Decimal("0.20")
         + liquidity_score * Decimal("0.20")
         + lower_score * Decimal("0.15")
         + stability_score * Decimal("0.10")
@@ -158,7 +164,7 @@ def _metrics(
     flows = _flow_for(dataset, symbol, days, average_value_billion)
     reasons = [
         f"{days}일 진폭 {_round(amplitude)}%",
-        f"완전 왕복 {round_trips}회",
+        f"하단+10% 목표 도달 {target_reaches}회",
         f"일평균 거래대금 {_round(average_value_billion, '0.1')}십억원",
     ]
     risks = [
@@ -178,21 +184,36 @@ def _metrics(
         return_pct=_round(period_return),
         average_trading_value_billion=_round(average_value_billion, "0.1"),
         volume_ratio=_round(volume_ratio),
-        traversal_count=round_trips,
+        target_price_10pct=_round(low * Decimal("1.10")),
+        lower_contact_count=lower_contacts,
+        target_reach_count=target_reaches,
+        target_pending_count=target_pending,
         breakdown_risk_pct=_round(risk),
         quant_score=_round(quant_score),
         ai_score=_round(quant_score),
         final_score=_round(quant_score),
         ai_grade=grade,
         ai_comment=(
-            f"정량 기준선: {days}일 진폭 {_round(amplitude)}%, 완전 왕복 "
-            f"{round_trips}회, 박스 위치 {_round(position)}%입니다. "
+            f"정량 기준선: {days}일 진폭 {_round(amplitude)}%, 하단+10% 목표 도달 "
+            f"{target_reaches}회, 박스 위치 {_round(position)}%입니다. "
             "뉴스·공시·AI 전수 검토는 아직 적용되지 않았습니다."
         ),
         reasons=reasons,
         risks=risks,
         invalidation=f"{days}일 하단 {_round(low, '1')}원 이탈 후 재진입 실패",
         closes=closes,
+        chart_bars=[
+            ChartBar(
+                trading_date=bar.trading_date.strftime("%Y%m%d"),
+                bucket="15",
+                open=bar.close,
+                high=bar.close,
+                low=bar.close,
+                close=bar.close,
+                volume=bar.volume,
+            )
+            for bar in selected
+        ],
         flows=flows,
     )
 

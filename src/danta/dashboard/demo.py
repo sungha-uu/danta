@@ -10,6 +10,7 @@ from pydantic import HttpUrl
 from danta.dashboard.models import (
     AiGrade,
     CandidateView,
+    ChartBar,
     DashboardReport,
     FlowBreakdown,
     NewsItem,
@@ -77,25 +78,24 @@ def _series(base: int, index: int) -> list[Decimal]:
     return values
 
 
-def _traversal_count(closes: list[Decimal], low: Decimal, high: Decimal) -> int:
-    """Count alternating lower/upper zone contacts inside one price window."""
-    width = high - low
-    lower_ceiling = low + width * Decimal("0.20")
-    upper_floor = high - width * Decimal("0.20")
-    previous_zone: Literal["LOW", "HIGH"] | None = None
-    traversals = 0
+def _target_reach_episodes(
+    closes: list[Decimal],
+    low: Decimal,
+) -> tuple[int, int, int]:
+    target = low * Decimal("1.10")
+    armed = False
+    contacts = 0
+    reaches = 0
     for close in closes:
-        zone: Literal["LOW", "HIGH"] | None = None
-        if close <= lower_ceiling:
-            zone = "LOW"
-        elif close >= upper_floor:
-            zone = "HIGH"
-        if zone is None:
+        if armed:
+            if close >= target:
+                reaches += 1
+                armed = False
             continue
-        if previous_zone is not None and zone != previous_zone:
-            traversals += 1
-        previous_zone = zone
-    return traversals // 2
+        if close <= low:
+            contacts += 1
+            armed = True
+    return contacts, reaches, int(armed)
 
 
 def _window(
@@ -116,6 +116,8 @@ def _window(
     financial = Decimal((rank % 7) - 2) * scale
     pension = Decimal((rank % 5) - 1) * scale
     retail = -(foreign + institution) * Decimal("0.72")
+    contacts, reaches, pending = _target_reach_episodes(closes, low)
+    start = datetime.now(KST).date() - timedelta(days=len(closes) - 1)
     return WindowMetrics(
         days=days,
         rank=rank,
@@ -126,14 +128,17 @@ def _window(
         return_pct=period_return.quantize(Decimal("0.01")),
         average_trading_value_billion=Decimal(38 + rank * 4 + days).quantize(Decimal("0.1")),
         volume_ratio=Decimal("1.85") - Decimal(rank) * Decimal("0.02"),
-        traversal_count=_traversal_count(closes, low, high),
+        target_price_10pct=(low * Decimal("1.10")).quantize(Decimal("0.01")),
+        lower_contact_count=contacts,
+        target_reach_count=reaches,
+        target_pending_count=pending,
         breakdown_risk_pct=min(Decimal(8 + rank * 2), Decimal("78")),
         quant_score=Decimal(96 - rank * 1.25),
         ai_score=Decimal(94 - rank * 1.1 if rank <= 10 else 60),
         final_score=Decimal(95 - rank * 1.18),
         ai_grade=_grade(rank),
         ai_comment=(
-            f"{days}일 반복 왕복과 외국인·기관 순유입이 함께 확인됩니다. "
+            f"{days}일 하단+10% 도달 {reaches}회와 외국인·기관 순유입이 확인됩니다. "
             f"{days}일 박스 하단 재접근 시 거래대금 유지 여부를 우선 확인합니다."
             if rank <= 14
             else (
@@ -141,10 +146,22 @@ def _window(
                 "수급 연속성 또는 박스 안정성 확인이 더 필요합니다."
             )
         ),
-        reasons=[f"{days}일 왕복 구조", "거래대금 유지", "스마트머니 순유입"],
+        reasons=[f"{days}일 하단+10% 도달 {reaches}회", "거래대금 유지", "스마트머니 순유입"],
         risks=["시장 급락 동조", f"{days}일 박스 하단 거래량 동반 이탈"],
         invalidation=f"{days}일 하단 이탈 후 2개 봉 내 재진입 실패",
         closes=closes,
+        chart_bars=[
+            ChartBar(
+                trading_date=(start + timedelta(days=index)).strftime("%Y%m%d"),
+                bucket="15",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=Decimal("0"),
+            )
+            for index, close in enumerate(closes)
+        ],
         flows=FlowBreakdown(
             retail=retail.quantize(Decimal("0.1")),
             foreign=foreign.quantize(Decimal("0.1")),
