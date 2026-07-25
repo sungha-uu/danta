@@ -1030,7 +1030,7 @@ strategy:
   min_roundtrips_7d: 1
   min_roundtrips_14d: 2
   candidate_pool_size: 30
-  realtime_candidate_size: 10
+  realtime_candidate_size: 3
 
 realtime:
   stale_after_seconds: 10

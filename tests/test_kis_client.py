@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -92,6 +93,97 @@ async def test_daily_chart_uses_official_contract(credentials: KisCredentials) -
 
     assert bars[0].trading_date == "20260724"
     assert bars[0].close == 249_500
+
+
+@pytest.mark.asyncio
+async def test_order_submission_is_locked_before_network(credentials: KisCredentials) -> None:
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500)
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(PermissionError, match="locked"):
+            await client.submit_cash_order(
+                side="BUY",
+                symbol="005930",
+                quantity=1,
+                order_type="LIMIT",
+                limit_price=249_500,
+            )
+    finally:
+        await client.close()
+
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_paper_orderable_cash_uses_no_credit_fields(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.headers["tr_id"] == "VTTC8908R"
+        assert request.url.params["ORD_DVSN"] == "01"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": {"nrcvb_buy_amt": "10000000", "nrcvb_buy_qty": "40"},
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        orderable = await client.orderable_cash("005930", reference_price=249_500)
+    finally:
+        await client.close()
+
+    assert orderable.amount == 10_000_000
+    assert orderable.quantity == 40
+
+
+@pytest.mark.asyncio
+async def test_enabled_paper_limit_buy_maps_official_order_contract(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.headers["tr_id"] == "VTTC0012U"
+        body = json.loads(request.content)
+        assert body["ORD_DVSN"] == "00"
+        assert body["ORD_QTY"] == "2"
+        assert body["ORD_UNPR"] == "249500"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": {"ODNO": "0000123456", "ORD_TMD": "090001"},
+            },
+        )
+
+    client = KisClient(
+        credentials,
+        transport=httpx.MockTransport(handler),
+        order_submission_enabled=True,
+    )
+    try:
+        receipt = await client.submit_cash_order(
+            side="BUY",
+            symbol="005930",
+            quantity=2,
+            order_type="LIMIT",
+            limit_price=249_500,
+        )
+    finally:
+        await client.close()
+
+    assert receipt.broker_order_no == "0000123456"
 
 
 @pytest.mark.asyncio

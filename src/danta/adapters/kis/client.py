@@ -19,6 +19,8 @@ WS_APPROVAL_PATH = "/oauth2/Approval"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 DAILY_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
+ORDERABLE_PATH = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+CASH_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
 
 
 class KisApiError(RuntimeError):
@@ -41,6 +43,18 @@ class KisDailyBar:
     trading_value: int
 
 
+@dataclass(frozen=True, slots=True)
+class OrderableCash:
+    amount: int
+    quantity: int
+
+
+@dataclass(frozen=True, slots=True)
+class CashOrderReceipt:
+    broker_order_no: str
+    order_time: str
+
+
 class KisClient:
     def __init__(
         self,
@@ -49,6 +63,7 @@ class KisClient:
         timeout_seconds: float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
         token_cache_path: Path | None = None,
+        order_submission_enabled: bool = False,
     ) -> None:
         self.credentials = credentials
         self.base_url = (
@@ -62,6 +77,7 @@ class KisClient:
             transport=transport,
         )
         self._token_cache_path = token_cache_path
+        self._order_submission_enabled = order_submission_enabled
         self._token = self._load_cached_token()
         self._token_lock = asyncio.Lock()
         self._rest_lock = asyncio.Lock()
@@ -230,6 +246,84 @@ class KisClient:
                 )
             )
         return result
+
+    async def orderable_cash(self, symbol: str, *, reference_price: int) -> OrderableCash:
+        self._validate_symbol(symbol)
+        if reference_price <= 0:
+            raise ValueError("reference_price must be positive")
+        tr_id = (
+            "VTTC8908R"
+            if self.credentials.environment is TradingEnvironment.PAPER
+            else "TTTC8908R"
+        )
+        body = await self._authorized_request(
+            "GET",
+            ORDERABLE_PATH,
+            tr_id=tr_id,
+            params={
+                "CANO": self.credentials.account_no,
+                "ACNT_PRDT_CD": self.credentials.product_code,
+                "PDNO": symbol,
+                "ORD_UNPR": str(reference_price),
+                "ORD_DVSN": "01",
+                "CMA_EVLU_AMT_ICLD_YN": "N",
+                "OVRS_ICLD_YN": "N",
+            },
+        )
+        output = body.get("output")
+        if not isinstance(output, dict):
+            raise KisApiError("KIS orderable cash response did not include output")
+        return OrderableCash(
+            amount=int(output.get("nrcvb_buy_amt", "0") or "0"),
+            quantity=int(output.get("nrcvb_buy_qty", "0") or "0"),
+        )
+
+    async def submit_cash_order(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        quantity: int,
+        order_type: str,
+        limit_price: int | None = None,
+    ) -> CashOrderReceipt:
+        if not self._order_submission_enabled:
+            raise PermissionError("KIS order submission is locked")
+        if self.credentials.environment is TradingEnvironment.PROD:
+            raise PermissionError("KIS production order submission is locked during Phase 0")
+        self._validate_symbol(symbol)
+        if side not in {"BUY", "SELL"}:
+            raise ValueError("side must be BUY or SELL")
+        if quantity <= 0:
+            raise ValueError("quantity must be positive")
+        if order_type not in {"MARKET", "LIMIT"}:
+            raise ValueError("order_type must be MARKET or LIMIT")
+        if order_type == "LIMIT" and (limit_price is None or limit_price <= 0):
+            raise ValueError("positive limit_price is required for LIMIT orders")
+        tr_id = "VTTC0012U" if side == "BUY" else "VTTC0011U"
+        body = await self._authorized_request(
+            "POST",
+            CASH_ORDER_PATH,
+            tr_id=tr_id,
+            json_body={
+                "CANO": self.credentials.account_no,
+                "ACNT_PRDT_CD": self.credentials.product_code,
+                "PDNO": symbol,
+                "ORD_DVSN": "01" if order_type == "MARKET" else "00",
+                "ORD_QTY": str(quantity),
+                "ORD_UNPR": "0" if order_type == "MARKET" else str(limit_price),
+                "EXCG_ID_DVSN_CD": "KRX",
+                "SLL_TYPE": "01" if side == "SELL" else "",
+                "CNDT_PRIC": "",
+            },
+        )
+        output = body.get("output")
+        if not isinstance(output, dict) or not output.get("ODNO"):
+            raise KisApiError("KIS cash order response did not include an order number")
+        return CashOrderReceipt(
+            broker_order_no=str(output["ODNO"]),
+            order_time=str(output.get("ORD_TMD", "")),
+        )
 
     async def _authorized_request(
         self,

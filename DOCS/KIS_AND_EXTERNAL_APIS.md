@@ -130,6 +130,8 @@ KRX 접근 구현은 `pykrx` 어댑터를 사용하되 제3자 라이브러리 �
 
 KIS 일봉 교차검증은 공식 샘플의 `inquire-daily-itemchartprice`, 경로 `/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice`, TR ID `FHKST03010100`을 사용한다. 종목별 투자자 일별 자료가 필요할 때는 공식 샘플의 `investor-trade-by-stock-daily`, 경로 `/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily`, TR ID `FHPTJ04160001`을 사용한다. 호출 필드와 응답 계약은 공식 샘플 기준 계약 테스트로 고정한다.
 
+매수가능조회는 공식 샘플의 `/uapi/domestic-stock/v1/trading/inquire-psbl-order`와 모의 `VTTC8908R`·실전 `TTTC8908R`을 사용한다. 현금주문은 `/uapi/domestic-stock/v1/trading/order-cash`와 모의 매수·매도 `VTTC0012U`·`VTTC0011U`, 실전 매수·매도 `TTTC0012U`·`TTTC0011U`를 사용한다. 시장가 매수가능수량은 종목 증거금률 반영을 위해 공식 안내대로 주문구분 `01`로 조회하고 미수 없는 금액·수량만 사용한다.
+
 ## 7. AI 에이전트 연동
 
 AI는 매일 정량 후보 30개 전부를 검토하고 각 종목에 4단계 등급과 코멘트를 부여한다. 입력은 정량 특징, 박스 이동, 수급, 공시, 시장·업종, 데이터 품질이며 계좌·키·보유금액을 포함하지 않는다.
@@ -150,7 +152,7 @@ AI는 30개 밖의 종목을 추가하거나 원시 숫자를 수정할 수 없�
 | DART API Key | 기존 프로젝트에서 안전 경로로 복사됨, 실제 호출 재검증 필요 |
 | KRX 계정 정보 | 기존 프로젝트에서 안전 경로로 복사됨, 실제 호출 재검증 필요 |
 | SMTP 설정 | 기존 프로젝트에서 안전 경로로 복사됨, 시험메일 필요 |
-| KIS 모의 App Key·Secret | 입력 완료, 2026-07-26 live doctor 통과 |
+| KIS 모의 App Key·Secret | 입력 완료, 2026-07-26 토큰·현재가·일봉·잔고·주문가능조회·WebSocket 접속키 검증 통과 |
 | KIS 실전 App Key·Secret | 사용자 준비 완료, `.secrets/kis/prod.json` 입력 가능·실전 실행 잠금 |
 | KIS 실전·모의 계좌번호·상품코드 | 모의 계좌 검증 통과, 실전 실행 잠금 |
 | KIS HTS ID | WebSocket 접속키 검증 통과 |
