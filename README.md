@@ -22,3 +22,5 @@ KOSPI 단기매매 후보를 매일 선별하고 사용자 승인 범위에서 �
 ```
 
 비밀정보와 계좌정보는 `.secrets/`에만 저장하며 Git과 GitHub Pages에 게시하지 않습니다.
+
+데모·일일 리포트: https://sungha-uu.github.io/danta_report/

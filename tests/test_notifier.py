@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from email.message import EmailMessage
+from types import TracebackType
+
+from danta.config import SmtpConfig
+from danta.services.notifier import SmtpNotifier
+
+
+class FakeSmtp:
+    instances: list[FakeSmtp] = []
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        self.login_user = ""
+        self.login_password = ""
+        self.message: EmailMessage | None = None
+        self.started_tls = False
+        self.__class__.instances.append(self)
+
+    def __enter__(self) -> FakeSmtp:
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+    def starttls(self, **_kwargs: object) -> None:
+        self.started_tls = True
+
+    def login(self, user: str, password: str) -> None:
+        self.login_user = user
+        self.login_password = password
+
+    def send_message(self, message: EmailMessage) -> None:
+        self.message = message
+
+
+def _config(*, use_ssl: bool) -> SmtpConfig:
+    return SmtpConfig.model_validate(
+        {
+            "smtp_server": "smtp.example.com",
+            "smtp_port": 465 if use_ssl else 587,
+            "use_ssl": use_ssl,
+            "sender": "sender@example.com",
+            "password": "app-password",
+            "recipients": ["owner@example.com"],
+        }
+    )
+
+
+def test_report_notification_uses_ssl_and_contains_public_url(monkeypatch: object) -> None:
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    receipt = SmtpNotifier(_config(use_ssl=True)).send_report_published(
+        "https://example.github.io/danta_report/",
+        is_demo=True,
+    )
+
+    client = FakeSmtp.instances[-1]
+    assert receipt.recipient_count == 1
+    assert client.login_password == "app-password"
+    assert client.message is not None
+    assert "DEMO" in client.message["Subject"]
+    plain_body = client.message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert "https://example.github.io/danta_report/" in plain_body.get_content()
+
+
+def test_report_notification_uses_starttls(monkeypatch: object) -> None:
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=False)).send_report_published(
+        "https://example.github.io/danta_report/",
+        is_demo=False,
+    )
+
+    assert FakeSmtp.instances[-1].started_tls is True

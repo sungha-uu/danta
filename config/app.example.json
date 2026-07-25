@@ -3,6 +3,8 @@
   "environment": "paper",
   "database_url": "sqlite+aiosqlite:///./data/danta-paper.db",
   "kis_credentials_path": ".secrets/kis/paper.json",
+  "smtp_config_path": ".secrets/imported_financial_statement_analysis/email_config.json",
+  "smtp_enabled": true,
   "log_level": "INFO",
   "buy_requires_user_approval": true,
   "unattended_auto_buy_enabled": false,
@@ -12,4 +14,3 @@
   "paper_order_execution_enabled": false,
   "real_order_execution_enabled": false
 }
-

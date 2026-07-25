@@ -21,6 +21,10 @@ class AppSettings(BaseModel):
     environment: TradingEnvironment = TradingEnvironment.PAPER
     database_url: str = "sqlite+aiosqlite:///./data/danta-paper.db"
     kis_credentials_path: Path = Path(".secrets/kis/paper.json")
+    smtp_config_path: Path = Path(
+        ".secrets/imported_financial_statement_analysis/email_config.json"
+    )
+    smtp_enabled: bool = True
     log_level: str = "INFO"
     buy_requires_user_approval: bool = True
     unattended_auto_buy_enabled: bool = False
@@ -97,6 +101,51 @@ def load_kis_credentials(settings: AppSettings) -> KisCredentials:
             f"{credentials.environment} != {settings.environment}"
         )
     return credentials
+
+
+class SmtpConfig(BaseModel):
+    smtp_server: str
+    smtp_port: int = Field(ge=1, le=65535)
+    use_ssl: bool = False
+    sender: str
+    password: SecretStr
+    recipients: list[str]
+
+    @field_validator("smtp_server", "sender")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip()
+
+    @field_validator("password")
+    @classmethod
+    def reject_blank_password(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("recipients", mode="before")
+    @classmethod
+    def normalize_recipients(cls, value: object) -> list[str]:
+        if isinstance(value, str):
+            return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(part).strip() for part in value if str(part).strip()]
+        raise ValueError("recipients must be a string or list")
+
+    @field_validator("recipients")
+    @classmethod
+    def require_recipients(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("at least one recipient is required")
+        return value
+
+
+def load_smtp_config(settings: AppSettings) -> SmtpConfig:
+    if not settings.smtp_enabled:
+        raise ValueError("SMTP notifications are disabled")
+    return SmtpConfig.model_validate(_read_json(settings.smtp_config_path))
 
 
 def clear_settings_cache() -> None:

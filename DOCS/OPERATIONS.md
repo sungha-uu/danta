@@ -55,6 +55,11 @@
 
 ## 5. GitHub Pages
 
+- 코드 저장소: `https://github.com/sungha-uu/danta`
+- 공개 리포트 저장소: `https://github.com/sungha-uu/danta_report`
+- 공개 URL: `https://sungha-uu.github.io/danta_report/`
+- 배포 기준: `danta_report`의 `main` 브랜치 루트
+
 Pages는 정량 후보 30개 전체의 AI 등급·코멘트·수급·박스 정보를 보여주는 정적 분석 프런트엔드일 뿐 주문·계좌 서버가 아니다.
 
 공개 가능:
@@ -75,6 +80,8 @@ Pages는 정량 후보 30개 전체의 AI 등급·코멘트·수급·박스 정�
 최초 화면과 일일 공식 후보는 14거래일 기준이다. 상단의 7·14·21일 버튼을 누르면 순위·AI 코멘트·기간수익률·박스·차트·거래량·거래대금·수급을 포함한 모든 기간형 데이터를 같은 창으로 동시에 전환한다. 기간 혼합을 검증 오류로 처리한다. Pages는 KIS·뉴스 API를 직접 호출하지 않고 운영 호스트가 정제한 공개 JSON만 사용한다.
 
 배포 결과는 CSS·JavaScript·공개 JSON을 내장한 단일 `index.html`과 `.nojekyll`이며 GitHub Pages에서 별도 웹 애플리케이션 서버 없이 동작한다. 기간 전환·필터·선택·기본 숨김인 상단 선택창의 단일 토글·미니차트는 파일에 포함된 브라우저 JavaScript만 사용한다. 개발 중 `python -m http.server`는 로컬 확인 수단일 뿐 운영 구성요소가 아니다.
+
+2026-07-26 데모 리포트의 최초 Pages 배포와 HTTPS 200 응답을 확인했고, 로컬 SMTP 모듈로 데모 배포 알림을 발송했다. 실제 데이터 전환 후에는 `DEMO DATA` 표시가 제거된 배포 응답을 확인한 뒤 두 번째 알림을 발송한다.
 
 ```mermaid
 flowchart LR

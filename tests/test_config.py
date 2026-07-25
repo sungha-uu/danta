@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from danta.config import (
     AppSettings,
+    SmtpConfig,
     TradingEnvironment,
     load_kis_credentials,
 )
@@ -45,3 +46,18 @@ def test_credentials_environment_must_match(paper_credentials_file: Path) -> Non
     with pytest.raises(ValueError, match="does not match"):
         load_kis_credentials(settings)
 
+
+def test_smtp_config_normalizes_recipients_without_exposing_password() -> None:
+    config = SmtpConfig.model_validate(
+        {
+            "smtp_server": "smtp.example.com",
+            "smtp_port": 465,
+            "use_ssl": True,
+            "sender": "sender@example.com",
+            "password": "secret-password",
+            "recipients": "first@example.com; second@example.com",
+        }
+    )
+
+    assert config.recipients == ["first@example.com", "second@example.com"]
+    assert "secret-password" not in repr(config)

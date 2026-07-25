@@ -10,9 +10,10 @@ import uvicorn
 from pydantic import ValidationError
 
 from danta.adapters.kis.client import KisApiError
-from danta.config import load_kis_credentials, load_settings
+from danta.config import load_kis_credentials, load_settings, load_smtp_config
 from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
+from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.provider_doctor import KisProviderDoctor
 
 
@@ -32,6 +33,10 @@ def _parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--input", type=Path, help="validated public report JSON")
     dashboard.add_argument("--output", type=Path, default=Path("dashboard/dist"))
     dashboard.add_argument("--demo", action="store_true", help="build with deterministic demo data")
+
+    notify = subparsers.add_parser("notify-report", help="email a published report link")
+    notify.add_argument("--url", required=True)
+    notify.add_argument("--demo", action="store_true")
     return parser
 
 
@@ -77,6 +82,16 @@ def main() -> None:
         report = demo_report() if args.demo else load_dashboard_report(args.input)
         target = build_dashboard(report, args.output)
         print(f"dashboard built: {target}")
+        return
+    if args.command == "notify-report":
+        try:
+            settings = load_settings()
+            notifier = SmtpNotifier(load_smtp_config(settings))
+            receipt = notifier.send_report_published(args.url, is_demo=args.demo)
+        except (ValueError, ValidationError, NotificationError) as exc:
+            print(f"report notification failed: {exc}", file=sys.stderr)
+            raise SystemExit(4) from None
+        print(f"report notification sent to {receipt.recipient_count} configured recipient(s)")
         return
 
 
