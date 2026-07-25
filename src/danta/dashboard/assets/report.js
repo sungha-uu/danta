@@ -3,6 +3,7 @@
 
   const report = JSON.parse(document.getElementById("reportData").textContent);
   const candidates = [...report.candidates];
+  const quantBaseline = report.model_id === "quant-baseline-no-llm";
   const state = { window: "14" };
   const selectionKey = `danta-watch-draft:v3:${report.data_as_of}`;
   const selection = new Map();
@@ -30,6 +31,9 @@
     STRONG_RECOMMEND: "적극 추천", RECOMMEND: "추천",
     NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
   })[grade] || grade;
+  const reviewGradeLabel = (grade) => (
+    quantBaseline ? `정량 ${gradeLabel(grade)}` : gradeLabel(grade)
+  );
   const gradeClass = (grade) => ({
     STRONG_RECOMMEND: "grade-strong", RECOMMEND: "grade-recommend",
     NOT_RECOMMEND: "grade-avoid", STRONG_NOT_RECOMMEND: "grade-strong-avoid",
@@ -109,7 +113,7 @@
   }
 
   function grade(item) {
-    return `<span class="grade ${gradeClass(item.ai_grade)}">${h(gradeLabel(item.ai_grade))}</span>`;
+    return `<span class="grade ${gradeClass(item.ai_grade)}">${h(reviewGradeLabel(item.ai_grade))}</span>`;
   }
 
   function stockCell(candidate, extra = "") {
@@ -250,7 +254,7 @@
     $("#selectionCount").textContent = items.length;
     $("#selectionItems").innerHTML = items.map((candidate) => `
       <div class="selection-item">
-        <strong>${h(candidate.name)}</strong><small>${h(gradeLabel(metric(candidate).ai_grade))}</small>
+        <strong>${h(candidate.name)}</strong><small>${h(reviewGradeLabel(metric(candidate).ai_grade))}</small>
         <div class="selection-fields">
           <label><span>진입 목표가(원)</span>
             <input class="price-input tray-price" data-tray-code="${h(candidate.code)}" type="text" inputmode="numeric" aria-label="${h(candidate.name)} 진입 목표가" value="${won.format(selection.get(candidate.code).entryTargetPrice)}">
@@ -309,7 +313,7 @@
         `  entry_target_price_krw: ${draft.entryTargetPrice}`,
         `  entry_price_source: ${draft.auto ? "BOX_LOW_AUTO" : "USER_EDITED"}`,
         `  allocation_pct: ${allocationOne.format(draft.allocationPct)}`,
-        `  ai_grade: ${gradeLabel(item.ai_grade)}`,
+        `  ai_grade: ${reviewGradeLabel(item.ai_grade)}`,
         `  box_low: ${item.box_low}`, `  box_high: ${item.box_high}`,
       );
     });
@@ -391,5 +395,12 @@
   $("#dataAsOf").textContent = `기준 ${formatDate(report.data_as_of)}`;
   $("#demoBadge").hidden = !report.is_demo;
   $("#versions").textContent = `${report.calculation_version} · ${report.model_id} · ${report.prompt_version}`;
+  if (quantBaseline) {
+    $("#analysisDescription").textContent = "박스·수익률·차트·수급·정량 기준선을 한 행에서 비교합니다. AI 정성 검토는 아직 미연결입니다.";
+    $("#recommendFilterLabel").textContent = "정량 추천 이상";
+    $("#reviewGradeHeader").textContent = "정량 등급";
+    $("#reviewScoreHeader").textContent = "검토점수";
+    $("#reviewCommentHeader").textContent = "정량 코멘트";
+  }
   renderAll();
 })();

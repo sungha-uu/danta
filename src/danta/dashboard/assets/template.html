@@ -50,10 +50,10 @@
         <div class="section-bar">
           <div>
             <h2>📊 후보 30 종합</h2>
-            <p>박스·수익률·차트·수급·AI 분석을 한 행에서 비교합니다.</p>
+            <p id="analysisDescription">박스·수익률·차트·수급·AI 분석을 한 행에서 비교합니다.</p>
           </div>
           <div class="filters">
-            <label><input id="recommendedOnly" type="checkbox"> 추천 이상</label>
+            <label><input id="recommendedOnly" type="checkbox"> <span id="recommendFilterLabel">추천 이상</span></label>
             <label><input id="lowerOnly" type="checkbox"> 박스 하단 35%↓</label>
             <span><b id="visibleCount">30</b> / 30</span>
           </div>
@@ -63,10 +63,10 @@
             <thead>
               <tr>
                 <th class="sticky-select">선택</th><th class="sticky-rank">순위</th><th class="sticky-name">종목명</th>
-                <th>AI 등급</th><th>현재가</th><th title="선택 기간 첫 거래일 종가 대비 현재가 변화율">기간수익률</th><th>가격 흐름</th>
+                <th id="reviewGradeHeader">AI 등급</th><th>현재가</th><th title="선택 기간 첫 거래일 종가 대비 현재가 변화율">기간수익률</th><th>가격 흐름</th>
                 <th title="반복 지지로 계산한 박스 하단 경계">박스 하단</th><th title="반복 저항으로 계산한 박스 상단 경계">박스 상단</th><th>진폭</th><th>현재 위치</th><th>왕복</th>
                 <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
-                <th>정량점수</th><th>AI점수</th><th>AI 코멘트</th>
+                <th>정량점수</th><th id="reviewScoreHeader">AI점수</th><th id="reviewCommentHeader">AI 코멘트</th>
                 <th>최신 뉴스</th><th>토론 요약</th><th>차트보기</th>
               </tr>
             </thead>

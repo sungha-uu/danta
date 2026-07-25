@@ -78,6 +78,9 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "item.flows" in html
     assert "후보 30 종합" in html
     assert "AI 코멘트" in html
+    assert "정량 등급" in html
+    assert "AI 정성 검토는 아직 미연결입니다." in html
+    assert "reviewGradeLabel" in html
     assert "최신 뉴스" in html
     assert "개인(순매수억)" in html
     assert "외국인(순매수억)" in html
