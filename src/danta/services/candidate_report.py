@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import HttpUrl
+
+from danta.adapters.krx.client import DailyBar, MarketDataset
+from danta.dashboard.models import (
+    AiGrade,
+    CandidateView,
+    DashboardReport,
+    FlowBreakdown,
+    NewsItem,
+    WindowMetrics,
+)
+
+KST = timezone(timedelta(hours=9))
+WINDOWS: tuple[Literal[7], Literal[14], Literal[21]] = (7, 14, 21)
+ONE = Decimal("1")
+HUNDRED = Decimal("100")
+
+
+class CandidateReportError(RuntimeError):
+    """Raised when a valid set of 30 KOSPI candidates cannot be produced."""
+
+
+def _round(value: Decimal, places: str = "0.01") -> Decimal:
+    return value.quantize(Decimal(places))
+
+
+def _complete_round_trips(closes: list[Decimal], low: Decimal, high: Decimal) -> int:
+    width = high - low
+    lower_ceiling = low + width * Decimal("0.20")
+    upper_floor = high - width * Decimal("0.20")
+    previous: Literal["LOW", "HIGH"] | None = None
+    transitions = 0
+    for close in closes:
+        zone: Literal["LOW", "HIGH"] | None = None
+        if close <= lower_ceiling:
+            zone = "LOW"
+        elif close >= upper_floor:
+            zone = "HIGH"
+        if zone is not None and previous is not None and zone != previous:
+            transitions += 1
+        if zone is not None:
+            previous = zone
+    return transitions // 2
+
+
+def _flow_for(
+    dataset: MarketDataset,
+    symbol: str,
+    days: int,
+    average_value_billion: Decimal,
+) -> FlowBreakdown:
+    values = dataset.flows.get(days, {}).get(symbol, {})
+    retail = values.get("retail", Decimal("0"))
+    foreign = values.get("foreign", Decimal("0"))
+    institution = values.get("institution", Decimal("0"))
+    financial = values.get("financial_investment", Decimal("0"))
+    pension = values.get("pension", Decimal("0"))
+    total_traded_eok = average_value_billion * Decimal(days) * Decimal("10")
+    strength = (
+        (foreign + institution) / total_traded_eok * HUNDRED
+        if total_traded_eok > 0
+        else Decimal("0")
+    )
+    return FlowBreakdown(
+        retail=_round(retail, "0.1"),
+        foreign=_round(foreign, "0.1"),
+        institution=_round(institution, "0.1"),
+        financial_investment=_round(financial, "0.1"),
+        pension=_round(pension, "0.1"),
+        strength_pct=_round(strength),
+    )
+
+
+def _grade(score: Decimal) -> AiGrade:
+    if score >= 75:
+        return "STRONG_RECOMMEND"
+    if score >= 60:
+        return "RECOMMEND"
+    if score >= 45:
+        return "NOT_RECOMMEND"
+    return "STRONG_NOT_RECOMMEND"
+
+
+def _metrics(
+    dataset: MarketDataset,
+    symbol: str,
+    bars: list[DailyBar],
+    days: Literal[7, 14, 21],
+    *,
+    rank: int,
+) -> WindowMetrics:
+    selected = bars[-days:]
+    closes = [bar.close for bar in selected]
+    low, high = min(closes), max(closes)
+    if high <= low:
+        raise CandidateReportError(f"{symbol} has no price range in the {days}-day window")
+    midpoint = (high + low) / Decimal("2")
+    amplitude = (high - low) / midpoint * HUNDRED
+    position = (closes[-1] - low) / (high - low) * HUNDRED
+    period_return = (closes[-1] / closes[0] - ONE) * HUNDRED
+    average_value = sum((bar.trading_value for bar in selected), Decimal("0")) / Decimal(
+        days
+    )
+    average_value_billion = average_value / Decimal("1000000000")
+    prior = bars[-days * 2 : -days]
+    current_average_volume = sum((bar.volume for bar in selected), Decimal("0")) / Decimal(
+        days
+    )
+    prior_average_volume = (
+        sum((bar.volume for bar in prior), Decimal("0")) / Decimal(len(prior))
+        if prior
+        else current_average_volume
+    )
+    volume_ratio = (
+        current_average_volume / prior_average_volume
+        if prior_average_volume > 0
+        else Decimal("0")
+    )
+    round_trips = _complete_round_trips(closes, low, high)
+    downside_trend = max(Decimal("0"), -period_return)
+    risk = min(
+        HUNDRED,
+        downside_trend * Decimal("3")
+        + (Decimal("20") if round_trips == 0 else Decimal("0"))
+        + (Decimal("20") if average_value_billion < 10 else Decimal("0")),
+    )
+    amplitude_score = min(HUNDRED, amplitude / Decimal("15") * HUNDRED)
+    traversal_score = min(HUNDRED, Decimal(round_trips) / Decimal("2") * HUNDRED)
+    liquidity_score = min(HUNDRED, average_value_billion / Decimal("100") * HUNDRED)
+    lower_score = max(Decimal("0"), HUNDRED - position)
+    stability_score = HUNDRED - risk
+    quant_score = (
+        amplitude_score * Decimal("0.30")
+        + traversal_score * Decimal("0.25")
+        + liquidity_score * Decimal("0.20")
+        + lower_score * Decimal("0.15")
+        + stability_score * Decimal("0.10")
+    )
+    grade = _grade(quant_score)
+    flows = _flow_for(dataset, symbol, days, average_value_billion)
+    reasons = [
+        f"{days}일 진폭 {_round(amplitude)}%",
+        f"완전 왕복 {round_trips}회",
+        f"일평균 거래대금 {_round(average_value_billion, '0.1')}십억원",
+    ]
+    risks = [
+        (
+            "하방 추세와 박스 하단 이탈 여부 확인 필요"
+            if period_return < 0
+            else "상단 접근 시 추격매수 위험"
+        )
+    ]
+    return WindowMetrics(
+        days=days,
+        rank=rank,
+        box_low=low,
+        box_high=high,
+        amplitude_pct=_round(amplitude),
+        position_pct=_round(position),
+        return_pct=_round(period_return),
+        average_trading_value_billion=_round(average_value_billion, "0.1"),
+        volume_ratio=_round(volume_ratio),
+        traversal_count=round_trips,
+        breakdown_risk_pct=_round(risk),
+        quant_score=_round(quant_score),
+        ai_score=_round(quant_score),
+        final_score=_round(quant_score),
+        ai_grade=grade,
+        ai_comment=(
+            f"정량 기준선: {days}일 진폭 {_round(amplitude)}%, 완전 왕복 "
+            f"{round_trips}회, 박스 위치 {_round(position)}%입니다. "
+            "뉴스·공시·AI 전수 검토는 아직 적용되지 않았습니다."
+        ),
+        reasons=reasons,
+        risks=risks,
+        invalidation=f"{days}일 하단 {_round(low, '1')}원 이탈 후 재진입 실패",
+        closes=closes,
+        flows=flows,
+    )
+
+
+def build_quant_report(dataset: MarketDataset) -> DashboardReport:
+    provisional: list[tuple[str, WindowMetrics]] = []
+    for symbol, bars in dataset.bars.items():
+        if len(bars) < 21:
+            continue
+        try:
+            metrics = _metrics(dataset, symbol, bars, 14, rank=1)
+        except CandidateReportError:
+            continue
+        if (
+            bars[-1].close < Decimal("1000")
+            or metrics.average_trading_value_billion < Decimal("5")
+            or metrics.amplitude_pct < Decimal("3")
+        ):
+            continue
+        provisional.append((symbol, metrics))
+    provisional.sort(key=lambda item: item[1].quant_score, reverse=True)
+    selected_symbols = [symbol for symbol, _ in provisional[:30]]
+    if len(selected_symbols) != 30:
+        raise CandidateReportError(
+            f"only {len(selected_symbols)} candidates passed the data and liquidity gates"
+        )
+
+    metrics_by_window: dict[int, dict[str, WindowMetrics]] = {}
+    for days in WINDOWS:
+        window_values = [
+            (symbol, _metrics(dataset, symbol, dataset.bars[symbol], days, rank=1))
+            for symbol in selected_symbols
+        ]
+        window_values.sort(key=lambda item: item[1].quant_score, reverse=True)
+        ranked: dict[str, WindowMetrics] = {}
+        for rank, (symbol, metrics) in enumerate(window_values, start=1):
+            ranked[symbol] = metrics.model_copy(update={"rank": rank})
+        metrics_by_window[days] = ranked
+
+    candidates: list[CandidateView] = []
+    selected_symbols.sort(key=lambda symbol: metrics_by_window[14][symbol].rank)
+    data_date = dataset.trading_dates[-1]
+    published_at = datetime.combine(data_date, time(15, 30), tzinfo=KST)
+    for symbol in selected_symbols:
+        name = dataset.names.get(symbol, symbol)
+        naver_url = HttpUrl(f"https://finance.naver.com/item/main.naver?code={symbol}")
+        candidates.append(
+            CandidateView(
+                code=symbol,
+                name=name,
+                sector="KOSPI",
+                current_price=dataset.bars[symbol][-1].close,
+                windows={
+                    "7": metrics_by_window[7][symbol],
+                    "14": metrics_by_window[14][symbol],
+                    "21": metrics_by_window[21][symbol],
+                },
+                news=[
+                    NewsItem(
+                        title="최신 뉴스 확인 — 자동 뉴스 수집기 연결 전",
+                        source="네이버 증권",
+                        published_at=published_at,
+                        url=naver_url,
+                        sentiment="NEUTRAL",
+                    )
+                ],
+                discussion_summary=(
+                    "실제 KRX 가격·수급 기반 정량 보고서입니다. "
+                    "뉴스·토론·AI 정성 검토는 아직 연결되지 않았습니다."
+                ),
+                naver_url=naver_url,
+            )
+        )
+    average_return = sum(
+        (candidate.windows["14"].return_pct for candidate in candidates),
+        Decimal("0"),
+    ) / Decimal(len(candidates))
+    regime = "상승" if average_return > 3 else "하락" if average_return < -3 else "중립"
+    now = datetime.now(KST).replace(microsecond=0)
+    return DashboardReport(
+        generated_at=now,
+        data_as_of=published_at,
+        market_regime=f"KRX · {regime}",
+        calculation_version="box-quant-v1",
+        model_id="quant-baseline-no-llm",
+        prompt_version="candidate-review-not-connected",
+        is_demo=False,
+        candidates=candidates,
+    )

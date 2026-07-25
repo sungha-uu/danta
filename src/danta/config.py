@@ -24,6 +24,9 @@ class AppSettings(BaseModel):
     smtp_config_path: Path = Path(
         ".secrets/imported_financial_statement_analysis/email_config.json"
     )
+    krx_credentials_path: Path = Path(
+        ".secrets/imported_financial_statement_analysis/key.txt"
+    )
     smtp_enabled: bool = True
     log_level: str = "INFO"
     buy_requires_user_approval: bool = True
@@ -146,6 +149,28 @@ def load_smtp_config(settings: AppSettings) -> SmtpConfig:
     if not settings.smtp_enabled:
         raise ValueError("SMTP notifications are disabled")
     return SmtpConfig.model_validate(_read_json(settings.smtp_config_path))
+
+
+def load_krx_environment(settings: AppSettings) -> None:
+    try:
+        lines = settings.krx_credentials_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"KRX credential file not found: {settings.krx_credentials_path}"
+        ) from exc
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    krx_id = values.get("KRX_DATA_ID", "")
+    krx_password = values.get("KRX_DATA_PW", values.get("KRX_DATA_PASSWORD", ""))
+    if not krx_id or not krx_password:
+        raise ValueError("KRX_DATA_ID and KRX_DATA_PW must be configured")
+    os.environ["KRX_ID"] = krx_id
+    os.environ["KRX_PW"] = krx_password
 
 
 def clear_settings_cache() -> None:

@@ -10,9 +10,16 @@ import uvicorn
 from pydantic import ValidationError
 
 from danta.adapters.kis.client import KisApiError
-from danta.config import load_kis_credentials, load_settings, load_smtp_config
+from danta.adapters.krx.client import KrxDataError, PykrxMarketDataClient
+from danta.config import (
+    load_kis_credentials,
+    load_krx_environment,
+    load_settings,
+    load_smtp_config,
+)
 from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
+from danta.services.candidate_report import CandidateReportError, build_quant_report
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.provider_doctor import KisProviderDoctor
 
@@ -37,6 +44,21 @@ def _parser() -> argparse.ArgumentParser:
     notify = subparsers.add_parser("notify-report", help="email a published report link")
     notify.add_argument("--url", required=True)
     notify.add_argument("--demo", action="store_true")
+
+    daily = subparsers.add_parser(
+        "daily-report",
+        help="collect KRX data and build the real KOSPI candidate report",
+    )
+    daily.add_argument(
+        "--json-output",
+        type=Path,
+        default=Path("data/candidate_public_report.json"),
+    )
+    daily.add_argument(
+        "--dashboard-output",
+        type=Path,
+        default=Path("dashboard/dist"),
+    )
     return parser
 
 
@@ -92,6 +114,32 @@ def main() -> None:
             print(f"report notification failed: {exc}", file=sys.stderr)
             raise SystemExit(4) from None
         print(f"report notification sent to {receipt.recipient_count} configured recipient(s)")
+        return
+    if args.command == "daily-report":
+        try:
+            settings = load_settings()
+            load_krx_environment(settings)
+            dataset = PykrxMarketDataClient().collect()
+            report = build_quant_report(dataset)
+            args.json_output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.json_output.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    report.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(args.json_output)
+            target = build_dashboard(report, args.dashboard_output)
+        except (ValueError, KrxDataError, CandidateReportError) as exc:
+            print(f"daily report failed: {exc}", file=sys.stderr)
+            raise SystemExit(5) from None
+        print(
+            f"real KOSPI report built: {target} "
+            f"(data as of {report.data_as_of.isoformat()})"
+        )
         return
 
 

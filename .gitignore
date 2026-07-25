@@ -21,6 +21,7 @@ data/
 # Secrets
 .env
 .env.*
+!.env.example
 .secrets/
 !config/*.example.json
 

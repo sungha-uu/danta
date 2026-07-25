@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from danta.config import (
     SmtpConfig,
     TradingEnvironment,
     load_kis_credentials,
+    load_krx_environment,
 )
 
 
@@ -61,3 +63,22 @@ def test_smtp_config_normalizes_recipients_without_exposing_password() -> None:
 
     assert config.recipients == ["first@example.com", "second@example.com"]
     assert "secret-password" not in repr(config)
+
+
+def test_krx_credentials_are_loaded_into_expected_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials = tmp_path / "key.txt"
+    credentials.write_text(
+        "KRX_DATA_ID=test-id\nKRX_DATA_PW=test-password\n",
+        encoding="utf-8",
+    )
+    settings = AppSettings(krx_credentials_path=credentials)
+    monkeypatch.delenv("KRX_ID", raising=False)
+    monkeypatch.delenv("KRX_PW", raising=False)
+
+    load_krx_environment(settings)
+
+    assert os.environ["KRX_ID"] == "test-id"
+    assert os.environ["KRX_PW"] == "test-password"
