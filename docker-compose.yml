@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: danta
+      POSTGRES_USER: danta
+      POSTGRES_PASSWORD: local_development_only
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U danta -d danta"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - danta_postgres:/var/lib/postgresql/data
+
+volumes:
+  danta_postgres:
+

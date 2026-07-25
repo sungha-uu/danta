@@ -1,0 +1,395 @@
+(() => {
+  "use strict";
+
+  const report = JSON.parse(document.getElementById("reportData").textContent);
+  const candidates = [...report.candidates];
+  const state = { window: "14" };
+  const selectionKey = `danta-watch-draft:v3:${report.data_as_of}`;
+  const selection = new Map();
+  let copyBusy = false;
+  let toastTimer;
+  const won = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
+  const one = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 });
+  const allocationOne = new Intl.NumberFormat("ko-KR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  const flowOne = new Intl.NumberFormat("ko-KR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  const h = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]);
+  const n = (value) => Number(value);
+  const metric = (candidate) => candidate.windows[state.window];
+  const ranked = () => [...candidates].sort((a, b) => metric(a).rank - metric(b).rank);
+  const gradeLabel = (grade) => ({
+    STRONG_RECOMMEND: "적극 추천", RECOMMEND: "추천",
+    NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
+  })[grade] || grade;
+  const gradeClass = (grade) => ({
+    STRONG_RECOMMEND: "grade-strong", RECOMMEND: "grade-recommend",
+    NOT_RECOMMEND: "grade-avoid", STRONG_NOT_RECOMMEND: "grade-strong-avoid",
+  })[grade] || "";
+  const recommended = (grade) => grade === "STRONG_RECOMMEND" || grade === "RECOMMEND";
+  const signed = (value, suffix = "") => {
+    const number = n(value);
+    return `${flowOne.format(number)}${suffix}`;
+  };
+  const percent = (value) => {
+    const number = n(value);
+    return `${number < 0 ? "-" : ""}${one.format(Math.abs(number))}%`;
+  };
+  const tone = (value) => n(value) > 0 ? "pos" : n(value) < 0 ? "neg" : "";
+  const formatDate = (value) => new Intl.DateTimeFormat("ko-KR", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).format(new Date(value));
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(selectionKey) || "{}");
+    Object.entries(saved).slice(0, 3).forEach(([code, draft]) => {
+      const candidateExists = candidates.some((candidate) => candidate.code === code);
+      if (candidateExists && draft && typeof draft === "object") {
+        selection.set(code, {
+          entryTargetPrice: n(draft.entryTargetPrice) || 0,
+          auto: draft.auto !== false,
+          allocationPct: cleanAllocation(draft.allocationPct),
+        });
+      }
+    });
+  } catch {
+    try { localStorage.removeItem(selectionKey); } catch { /* no local storage */ }
+  }
+
+  function saveSelection() {
+    try { localStorage.setItem(selectionKey, JSON.stringify(Object.fromEntries(selection))); } catch { /* local only */ }
+  }
+
+  function cleanPrice(value) {
+    return Math.min(10_000_000_000, Math.max(0, n(String(value).replace(/[^\d]/g, "")) || 0));
+  }
+
+  function cleanAllocation(value) {
+    const raw = String(value ?? "").replace(/[^\d.]/g, "");
+    const dot = raw.indexOf(".");
+    const normalized = dot < 0
+      ? raw
+      : `${raw.slice(0, dot + 1)}${raw.slice(dot + 1).replace(/\./g, "").slice(0, 1)}`;
+    return Math.min(100, Math.max(0, n(normalized) || 0));
+  }
+
+  function rebalanceAllocations() {
+    if (!selection.size) return;
+    const equalPct = Math.floor((100 / selection.size) * 10) / 10;
+    selection.forEach((draft) => { draft.allocationPct = equalPct; });
+  }
+
+  function autoEntryTarget(candidate) {
+    return Math.max(1, Math.round(n(metric(candidate).box_low)));
+  }
+
+  function refreshAutoTargets() {
+    selection.forEach((draft, code) => {
+      if (!draft.auto) return;
+      const candidate = candidates.find((item) => item.code === code);
+      if (candidate) draft.entryTargetPrice = autoEntryTarget(candidate);
+    });
+    saveSelection();
+  }
+
+  function filtered() {
+    return ranked().filter((candidate) => {
+      const item = metric(candidate);
+      return (!$("#recommendedOnly").checked || recommended(item.ai_grade))
+        && (!$("#lowerOnly").checked || n(item.position_pct) <= 35);
+    });
+  }
+
+  function grade(item) {
+    return `<span class="grade ${gradeClass(item.ai_grade)}">${h(gradeLabel(item.ai_grade))}</span>`;
+  }
+
+  function stockCell(candidate, extra = "") {
+    return `<td class="sticky-name ${extra}"><span class="stock-name">${h(candidate.name)}</span><span class="stock-meta">${h(candidate.code)} · ${h(candidate.sector)}</span></td>`;
+  }
+
+  function sparkline(item, name) {
+    const values = item.closes.map(n);
+    const width = 132;
+    const height = 34;
+    const pad = 2;
+    const low = Math.min(n(item.box_low), ...values);
+    const high = Math.max(n(item.box_high), ...values);
+    const spread = Math.max(1, high - low);
+    const x = (index) => pad + index * ((width - pad * 2) / Math.max(1, values.length - 1));
+    const y = (value) => pad + (high - value) / spread * (height - pad * 2);
+    const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
+    const upper = y(n(item.box_high));
+    const lower = y(n(item.box_low));
+    return `<svg class="spark" viewBox="0 0 ${width} ${height}" role="img" aria-label="${h(name)} ${state.window}일 가격 흐름">
+      <rect class="spark-band" x="${pad}" y="${upper}" width="${width - pad * 2}" height="${Math.max(1, lower - upper)}"></rect>
+      <line class="spark-bound" x1="${pad}" y1="${upper}" x2="${width - pad}" y2="${upper}"></line>
+      <line class="spark-bound" x1="${pad}" y1="${lower}" x2="${width - pad}" y2="${lower}"></line>
+      <polyline class="spark-line" points="${points}"></polyline>
+    </svg>`;
+  }
+
+  function newsHtml(candidate) {
+    if (!candidate.news.length) return "수집된 뉴스 없음";
+    return candidate.news.slice(0, 2).map((news) => `
+      <a class="news-link" href="${h(news.url)}" target="_blank" rel="noopener noreferrer">${h(news.title)}</a>
+      <span class="news-meta">${h(news.source)} · ${formatDate(news.published_at)}</span>`).join("");
+  }
+
+  function renderRanking() {
+    const rows = filtered();
+    $("#visibleCount").textContent = rows.length;
+    $("#rankingBody").innerHTML = rows.map((candidate) => {
+      const item = metric(candidate);
+      const flows = item.flows;
+      return `<tr>
+        <td class="sticky-select"><input class="candidate-check" data-select-code="${h(candidate.code)}" type="checkbox" aria-label="${h(candidate.name)} 선택" ${selection.has(candidate.code) ? "checked" : ""}></td>
+        <td class="sticky-rank">${item.rank}</td>
+        ${stockCell(candidate)}
+        <td>${grade(item)}</td>
+        <td>${won.format(n(candidate.current_price))}</td>
+        <td class="${tone(item.return_pct)}"><b>${percent(item.return_pct)}</b></td>
+        <td>${sparkline(item, candidate.name)}</td>
+        <td>${won.format(n(item.box_low))}</td><td>${won.format(n(item.box_high))}</td>
+        <td><b>${one.format(n(item.amplitude_pct))}%</b></td>
+        <td class="position">${one.format(n(item.position_pct))}%<div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div></td>
+        <td>${item.traversal_count}회</td>
+        <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
+        <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>
+        <td class="${tone(flows.institution)}">${signed(flows.institution)}</td>
+        <td class="${tone(flows.financial_investment)}">${signed(flows.financial_investment)}</td>
+        <td class="${tone(flows.pension)}">${signed(flows.pension)}</td>
+        <td class="${tone(flows.strength_pct)}"><b>${percent(flows.strength_pct)}</b></td>
+        <td>${one.format(n(item.quant_score))}</td><td>${one.format(n(item.ai_score))}</td>
+        <td class="wrap">${h(item.ai_comment)}</td>
+        <td class="news-cell">${newsHtml(candidate)}</td>
+        <td class="discussion">${h(candidate.discussion_summary)}</td>
+        <td><a class="chart-link" href="${h(candidate.naver_url)}" target="_blank" rel="noopener noreferrer">차트보기</a></td>
+      </tr>`;
+    }).join("");
+    bindSelectionInputs();
+  }
+
+  function bindSelectionInputs() {
+    $$(".candidate-check").forEach((checkbox) => checkbox.addEventListener("change", () => {
+      const code = checkbox.dataset.selectCode;
+      if (checkbox.checked && !selection.has(code) && selection.size >= 3) {
+        checkbox.checked = false;
+        $("#selectionMessage").textContent = "최대 3개까지만 선택할 수 있습니다.";
+        return;
+      }
+      if (checkbox.checked) {
+        const candidate = candidates.find((item) => item.code === code);
+        if (candidate) {
+          selection.set(code, {
+            entryTargetPrice: autoEntryTarget(candidate),
+            auto: true,
+            allocationPct: 0,
+          });
+        }
+      } else selection.delete(code);
+      rebalanceAllocations();
+      saveSelection();
+      renderAll();
+    }));
+  }
+
+  function updateEntryTarget(code, value) {
+    const draft = selection.get(code);
+    if (!draft) return;
+    draft.entryTargetPrice = cleanPrice(value);
+    draft.auto = false;
+    saveSelection();
+    updateCopyAvailability();
+  }
+
+  function updateAllocation(code, value) {
+    const draft = selection.get(code);
+    if (!draft) return;
+    draft.allocationPct = cleanAllocation(value);
+    saveSelection();
+    updateCopyAvailability();
+  }
+
+  function selectedCandidates() {
+    return [...selection.keys()]
+      .map((code) => candidates.find((candidate) => candidate.code === code))
+      .filter(Boolean);
+  }
+
+  function updateCopyAvailability() {
+    const items = selectedCandidates();
+    const allocationTotal = items.reduce((sum, candidate) => {
+      const draft = selection.get(candidate.code);
+      return sum + (draft ? n(draft.allocationPct) : 0);
+    }, 0);
+    const invalidEntry = items.some((candidate) => {
+      const draft = selection.get(candidate.code);
+      return !draft || !draft.entryTargetPrice || n(draft.allocationPct) <= 0;
+    });
+    $("#copySelection").disabled = copyBusy
+      || items.length === 0 || invalidEntry || allocationTotal > 100;
+    const cashPct = Math.max(0, 100 - allocationTotal);
+    const summary = $("#allocationSummary");
+    summary.textContent = allocationTotal > 100
+      ? `배정 합계 ${allocationOne.format(allocationTotal)}% · ${allocationOne.format(allocationTotal - 100)}% 초과`
+      : `배정 합계 ${allocationOne.format(allocationTotal)}% · 현금 ${allocationOne.format(cashPct)}%`;
+    summary.classList.toggle("invalid", allocationTotal > 100);
+  }
+
+  function renderSelectionTray() {
+    const items = selectedCandidates();
+    $("#selectionCount").textContent = items.length;
+    $("#selectionItems").innerHTML = items.map((candidate) => `
+      <div class="selection-item">
+        <strong>${h(candidate.name)}</strong><small>${h(gradeLabel(metric(candidate).ai_grade))}</small>
+        <div class="selection-fields">
+          <label><span>진입 목표가(원)</span>
+            <input class="price-input tray-price" data-tray-code="${h(candidate.code)}" type="text" inputmode="numeric" aria-label="${h(candidate.name)} 진입 목표가" value="${won.format(selection.get(candidate.code).entryTargetPrice)}">
+          </label>
+          <label><span>비율(%)</span>
+            <input class="ratio-input tray-allocation" data-allocation-code="${h(candidate.code)}" type="text" inputmode="decimal" aria-label="${h(candidate.name)} 주문가능현금 비율" value="${allocationOne.format(selection.get(candidate.code).allocationPct)}">
+          </label>
+        </div>
+      </div>`).join("");
+    $$(".tray-price").forEach((input) => {
+      input.addEventListener("input", () => updateEntryTarget(input.dataset.trayCode, input.value));
+      input.addEventListener("blur", () => {
+        const draft = selection.get(input.dataset.trayCode);
+        input.value = draft && draft.entryTargetPrice ? won.format(draft.entryTargetPrice) : "";
+      });
+    });
+    $$(".tray-allocation").forEach((input) => {
+      input.addEventListener("input", () => updateAllocation(input.dataset.allocationCode, input.value));
+      input.addEventListener("blur", () => {
+        const draft = selection.get(input.dataset.allocationCode);
+        input.value = draft ? allocationOne.format(draft.allocationPct) : "";
+      });
+    });
+    updateCopyAvailability();
+  }
+
+  function selectionDraft() {
+    const selected = selectedCandidates();
+    const totalAllocationPct = selected.reduce(
+      (sum, candidate) => sum + n(selection.get(candidate.code).allocationPct), 0,
+    );
+    const lines = [
+      "DANTA ENTRY_MANDATE",
+      `report_data_as_of: ${report.data_as_of}`,
+      `window_days: ${state.window}`,
+      "authority: ENTRY_APPROVAL",
+      "execution_mode: USE_LOCKED_ACTIVE_MODE",
+      "capital_scope: KIS_ORDERABLE_CASH",
+      "allocation_policy: USER_DEFINED_ORDERABLE_CASH_PERCENT",
+      `total_allocation_pct: ${allocationOne.format(totalAllocationPct)}`,
+      `unallocated_cash_pct: ${allocationOne.format(Math.max(0, 100 - totalAllocationPct))}`,
+      `selected_symbol_count: ${selected.length}`,
+      "entry_trigger: LAST_PRICE_LTE_TARGET",
+      "validity_policy: UNTIL_FILLED_OR_BOX_INVALIDATED",
+      "partial_fill_policy: PROTECT_FILLED_CANCEL_REMAINDER_ON_INVALIDATION",
+      "duplicate_guard: INTERNAL_ON_INGEST",
+      "hard_stop_pct: -7.0",
+      "profit_policy: ACTIVE_VERSIONED_LOCAL_ENGINE",
+      "selections:",
+    ];
+    selected.forEach((candidate) => {
+      const item = metric(candidate);
+      const draft = selection.get(candidate.code);
+      lines.push(
+        `- rank: ${item.rank}`, `  symbol: ${candidate.code}`, `  name: ${candidate.name}`,
+        `  entry_target_price_krw: ${draft.entryTargetPrice}`,
+        `  entry_price_source: ${draft.auto ? "BOX_LOW_AUTO" : "USER_EDITED"}`,
+        `  allocation_pct: ${allocationOne.format(draft.allocationPct)}`,
+        `  ai_grade: ${gradeLabel(item.ai_grade)}`,
+        `  box_low: ${item.box_low}`, `  box_high: ${item.box_high}`,
+      );
+    });
+    lines.push("request: 승인문을 검증하고 현재 잠긴 계좌 모드에서 목표가 도달 시 자동매수를 위임한다.");
+    return lines.join("\n");
+  }
+
+  function showCopyToast(message, isError = false) {
+    const toast = $("#copyToast");
+    window.clearTimeout(toastTimer);
+    toast.textContent = message;
+    toast.classList.toggle("error", isError);
+    toast.hidden = false;
+    toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2600);
+  }
+
+  function renderAll() {
+    renderRanking();
+    renderSelectionTray();
+  }
+
+  $$(".window-picker button").forEach((button) => button.addEventListener("click", () => {
+    state.window = button.dataset.window;
+    $$(".window-picker button").forEach((item) => item.classList.toggle("active", item === button));
+    refreshAutoTargets();
+    renderAll();
+  }));
+  ["#recommendedOnly", "#lowerOnly"].forEach((selector) => {
+    $(selector).addEventListener("change", renderAll);
+  });
+  $("#toggleSelection").addEventListener("click", () => {
+    const willShow = $("#selectionTray").hidden;
+    $("#selectionTray").hidden = !willShow;
+    const label = willShow ? "선택창 숨김" : "선택창 표시";
+    $("#toggleSelection").setAttribute("aria-label", label);
+    $("#toggleSelection").setAttribute("title", label);
+    $("#toggleSelection").classList.toggle("active", willShow);
+    $("#toggleSelection").setAttribute("aria-expanded", String(willShow));
+  });
+  $("#clearSelection").addEventListener("click", () => {
+    selection.clear();
+    saveSelection();
+    $("#selectionMessage").textContent = "선택 초안을 모두 지웠습니다.";
+    renderAll();
+  });
+  const copyButton = $("#copySelection");
+  const copyButtonIdleHtml = copyButton.innerHTML;
+  copyButton.addEventListener("click", async () => {
+    if (copyButton.disabled || copyBusy) return;
+    copyBusy = true;
+    copyButton.innerHTML = '<span class="button-spinner" aria-hidden="true"></span>';
+    copyButton.setAttribute("aria-label", "승인문 복사 중");
+    copyButton.setAttribute("title", "승인문 복사 중");
+    updateCopyAvailability();
+    try {
+      const copyResult = navigator.clipboard.writeText(selectionDraft())
+        .then(() => true, () => false);
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      if (!await copyResult) throw new Error("clipboard write failed");
+      copyButton.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9.2 16.2-4.4-4.4-1.6 1.6 6 6L21 7.6 19.4 6 9.2 16.2Z"/></svg>';
+      copyButton.setAttribute("aria-label", "승인문 복사 완료");
+      copyButton.setAttribute("title", "승인문 복사 완료");
+      $("#selectionMessage").textContent = "승인문 복사 완료 — Android Codex 앱에 붙여넣으면 자동매수가 위임됩니다.";
+      showCopyToast("승인문 복사 완료 · Codex에 붙여넣으세요");
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+    } catch {
+      $("#selectionMessage").textContent = "복사 권한이 없습니다. 브라우저 권한을 확인해주세요.";
+      showCopyToast("복사하지 못했습니다 · 브라우저 권한을 확인하세요", true);
+    } finally {
+      copyBusy = false;
+      copyButton.innerHTML = copyButtonIdleHtml;
+      copyButton.setAttribute("aria-label", "자동매수 승인문 복사");
+      copyButton.setAttribute("title", "자동매수 승인문 복사");
+      updateCopyAvailability();
+    }
+  });
+
+  $("#marketRegime").textContent = report.market_regime;
+  $("#dataAsOf").textContent = `기준 ${formatDate(report.data_as_of)}`;
+  $("#demoBadge").hidden = !report.is_demo;
+  $("#versions").textContent = `${report.calculation_version} · ${report.model_id} · ${report.prompt_version}`;
+  renderAll();
+})();

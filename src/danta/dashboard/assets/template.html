@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="KOSPI 박스권·변동성·수급 기반 단기 후보 30개 리포트">
+  <title>Danta 단기 변동성 후보 리포트</title>
+  <style>/*__DANTA_CSS__*/</style>
+</head>
+<body>
+  <header>
+    <div class="toolbar">
+      <h1>Danta 단기 후보 리포트</h1>
+      <div class="window-picker" role="group" aria-label="분석 기간">
+        <span>기간</span>
+        <button type="button" data-window="7">7일</button>
+        <button type="button" class="active" data-window="14">14일</button>
+        <button type="button" data-window="21">21일</button>
+      </div>
+      <div class="meta">
+        <span id="demoBadge" class="demo" hidden>DEMO DATA</span>
+        <b id="marketRegime"></b>
+        <time id="dataAsOf"></time>
+        <button id="toggleSelection" type="button" class="icon-button show-selection" aria-label="선택창 표시" title="선택창 표시" aria-expanded="false" aria-controls="selectionTray">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h12a2 2 0 0 1 2 2v16l-8-3-8 3V5a2 2 0 0 1 2-2Zm2 4v2h8V7H8Zm0 4v2h8v-2H8Z"/></svg>
+        </button>
+      </div>
+    </div>
+    <aside id="selectionTray" class="selection-tray" aria-live="polite" hidden>
+      <div class="selection-summary">
+        <b>선택 <span id="selectionCount">0</span>/3</b>
+        <span id="allocationSummary" class="allocation-summary">배정 합계 0.0% · 현금 100.0%</span>
+        <span id="selectionMessage" class="sr-only" role="status">선택 종목과 주문 비율을 입력하세요.</span>
+      </div>
+      <div id="selectionItems" class="selection-items"></div>
+      <div class="selection-actions">
+        <button id="clearSelection" type="button" class="icon-button" aria-label="전체 해제" title="전체 해제">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm3 2v7h2v-7H9Zm4 0v7h2v-7h-2Z"/></svg>
+        </button>
+        <button id="copySelection" type="button" class="icon-button primary" aria-label="자동매수 승인문 복사" title="자동매수 승인문 복사" disabled>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m3 20 18-8L3 4v6l12 2-12 2v6Z"/></svg>
+        </button>
+      </div>
+    </aside>
+    <div id="copyToast" class="copy-toast" role="status" aria-live="polite" hidden></div>
+  </header>
+
+  <main>
+      <section id="rankingPanel" class="report-panel">
+        <div class="section-bar">
+          <div>
+            <h2>📊 후보 30 종합</h2>
+            <p>박스·수익률·차트·수급·AI 분석을 한 행에서 비교합니다.</p>
+          </div>
+          <div class="filters">
+            <label><input id="recommendedOnly" type="checkbox"> 추천 이상</label>
+            <label><input id="lowerOnly" type="checkbox"> 박스 하단 35%↓</label>
+            <span><b id="visibleCount">30</b> / 30</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="report-table comprehensive">
+            <thead>
+              <tr>
+                <th class="sticky-select">선택</th><th class="sticky-rank">순위</th><th class="sticky-name">종목명</th>
+                <th>AI 등급</th><th>현재가</th><th title="선택 기간 첫 거래일 종가 대비 현재가 변화율">기간수익률</th><th>가격 흐름</th>
+                <th title="반복 지지로 계산한 박스 하단 경계">박스 하단</th><th title="반복 저항으로 계산한 박스 상단 경계">박스 상단</th><th>진폭</th><th>현재 위치</th><th>왕복</th>
+                <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
+                <th>정량점수</th><th>AI점수</th><th>AI 코멘트</th>
+                <th>최신 뉴스</th><th>토론 요약</th><th>차트보기</th>
+              </tr>
+            </thead>
+            <tbody id="rankingBody"></tbody>
+          </table>
+        </div>
+      </section>
+  </main>
+
+  <footer>
+    <span>투자 판단과 매수 승인은 사용자에게 있습니다. 계좌·주문·비밀정보는 이 페이지에 포함하지 않습니다.</span>
+    <span id="versions"></span>
+  </footer>
+
+  <script id="reportData" type="application/json">__DANTA_REPORT_JSON__</script>
+  <script>/*__DANTA_JS__*/</script>
+</body>
+</html>

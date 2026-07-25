@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import httpx
+import pytest
+
+from danta.adapters.kis.client import KisClient
+from danta.config import KisCredentials
+
+
+@pytest.fixture
+def credentials() -> KisCredentials:
+    return KisCredentials.model_validate(
+        {
+            "environment": "paper",
+            "app_key": "app-key",
+            "app_secret": "app-secret",
+            "account_no": "12345678",
+            "product_code": "01",
+            "hts_id": "user",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_paper_client_uses_vts_and_maps_quote(credentials: KisCredentials) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.headers["tr_id"] == "FHKST01010100"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": {"stck_prpr": "81200", "prdy_ctrt": "1.23"},
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        quote = await client.current_price("005930")
+    finally:
+        await client.close()
+    assert client.base_url == "https://openapivts.koreainvestment.com:29443"
+    assert quote.price == 81_200
+
+
+@pytest.mark.asyncio
+async def test_invalid_symbol_never_calls_network(credentials: KisCredentials) -> None:
+    client = KisClient(credentials, transport=httpx.MockTransport(lambda _: None))
+    try:
+        with pytest.raises(ValueError, match="six digits"):
+            await client.current_price("5930")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_access_token_is_persisted_and_reused(
+    credentials: KisCredentials, tmp_path: Path
+) -> None:
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"access_token": "cached-token", "expires_in": 3600})
+
+    cache_path = tmp_path / "token.json"
+    first = KisClient(
+        credentials,
+        transport=httpx.MockTransport(handler),
+        token_cache_path=cache_path,
+    )
+    try:
+        assert await first.access_token() == "cached-token"
+    finally:
+        await first.close()
+
+    second = KisClient(
+        credentials,
+        transport=httpx.MockTransport(handler),
+        token_cache_path=cache_path,
+    )
+    try:
+        assert await second.access_token() == "cached-token"
+    finally:
+        await second.close()
+    assert calls == 1

@@ -1,0 +1,2 @@
+"""Broker-independent trading rules."""
+

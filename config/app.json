@@ -1,0 +1,15 @@
+{
+  "app_name": "danta",
+  "environment": "paper",
+  "database_url": "sqlite+aiosqlite:///./data/danta-paper.db",
+  "kis_credentials_path": ".secrets/kis/paper.json",
+  "log_level": "INFO",
+  "buy_requires_user_approval": true,
+  "unattended_auto_buy_enabled": false,
+  "auto_stop_sell_enabled": true,
+  "stop_loss_pct": "7.0",
+  "stop_sell_requires_confirmation": false,
+  "paper_order_execution_enabled": false,
+  "real_order_execution_enabled": false
+}
+
