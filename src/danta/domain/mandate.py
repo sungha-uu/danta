@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class EntrySelection(BaseModel):
     rank: int = Field(ge=1, le=30)
-    symbol: str = Field(pattern=r"^\d{6}$")
+    symbol: str = Field(pattern=r"^[0-9A-Z]{6}$")
     name: str = Field(min_length=1, max_length=80)
     entry_target_price_krw: int = Field(gt=0)
     entry_price_source: Literal["BOX_LOW_AUTO", "USER_EDITED"]

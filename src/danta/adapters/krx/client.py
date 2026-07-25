@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -24,6 +24,7 @@ class MarketDataset:
     names: dict[str, str]
     flows: dict[int, dict[str, dict[str, Decimal]]]
     trading_dates: list[date]
+    market_caps: dict[str, Decimal] = field(default_factory=dict)
 
 
 class PykrxMarketDataClient:
@@ -82,12 +83,33 @@ class PykrxMarketDataClient:
         }
         bars = {symbol: bars[symbol] for symbol in latest_symbols}
         flows, names = self._collect_flows(stock, trading_dates)
+        market_caps = self._collect_market_caps(stock, trading_dates[-1])
+        for symbol in latest_symbols:
+            names.setdefault(symbol, str(stock.get_market_ticker_name(symbol)))
         return MarketDataset(
             bars=bars,
             names=names,
             flows=flows,
             trading_dates=trading_dates,
+            market_caps=market_caps,
         )
+
+    def _collect_market_caps(self, stock: Any, trading_date: date) -> dict[str, Decimal]:
+        frame = stock.get_market_cap_by_ticker(
+            trading_date.strftime("%Y%m%d"),
+            market="KOSPI",
+        )
+        if frame is None or len(frame.index) < self.minimum_universe_size:
+            raise KrxDataError(
+                f"KRX KOSPI market-cap snapshot is incomplete: {trading_date.isoformat()}"
+            )
+        result: dict[str, Decimal] = {}
+        for symbol, row in frame.iterrows():
+            values = list(row.values)
+            if len(values) < 2:
+                raise KrxDataError("KRX market-cap response has fewer than two columns")
+            result[str(symbol)] = self._decimal(values[1])
+        return result
 
     def _collect_flows(
         self,

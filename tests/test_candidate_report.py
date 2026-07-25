@@ -50,6 +50,8 @@ def test_quant_report_contains_ranked_real_candidate_shape() -> None:
 
     assert report.is_demo is False
     assert report.calculation_version == "box-quant-v1"
+    assert report.strategy_status == "RESEARCH_ONLY"
+    assert report.analysis_bar_interval_minutes is None
     assert report.model_id == "quant-baseline-no-llm"
     assert len(report.candidates) == 30
     for window in ("7", "14", "21"):

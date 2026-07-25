@@ -25,6 +25,12 @@ from danta.services.candidate_validation import (
     CandidateValidationError,
     validate_candidate_quotes,
 )
+from danta.services.intraday_report import (
+    MinuteBarStore,
+    backfill_minute_bars,
+    balanced_prefilter,
+    build_intraday_report,
+)
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.provider_doctor import KisProviderDoctor
 
@@ -68,6 +74,25 @@ def _parser() -> argparse.ArgumentParser:
         "--skip-kis-validation",
         action="store_true",
         help="build an explicitly unverified offline report",
+    )
+    intraday = subparsers.add_parser(
+        "intraday-report",
+        help="backfill balanced KOSPI universe and build the real 60-minute report",
+    )
+    intraday.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data/intraday/1m"),
+    )
+    intraday.add_argument(
+        "--json-output",
+        type=Path,
+        default=Path("data/candidate_intraday_public_report.json"),
+    )
+    intraday.add_argument(
+        "--dashboard-output",
+        type=Path,
+        default=Path("dashboard/dist"),
     )
     return parser
 
@@ -166,6 +191,92 @@ def main() -> None:
         print(
             f"real KOSPI report built: {target} "
             f"(data as of {report.data_as_of.isoformat()})"
+        )
+        return
+    if args.command == "intraday-report":
+        try:
+            settings = load_settings()
+            load_krx_environment(settings)
+            print("collecting 21 KRX trading days...", flush=True)
+            dataset = PykrxMarketDataClient().collect(required_days=21)
+            prefiltered = balanced_prefilter(dataset)
+            if len(prefiltered) < 30:
+                raise CandidateReportError(
+                    f"balanced prefilter returned only {len(prefiltered)} symbols"
+                )
+            snapshot = Path("data/prefilter-balanced-v1.json")
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_temporary = snapshot.with_suffix(".tmp")
+            snapshot_temporary.write_text(
+                json.dumps(
+                    {
+                        "version": "prefilter-balanced-v1",
+                        "data_as_of": dataset.trading_dates[-1].isoformat(),
+                        "count": len(prefiltered),
+                        "symbols": [
+                            {
+                                "symbol": item.symbol,
+                                "name": item.name,
+                                "market_cap": str(item.market_cap),
+                                "latest_price": str(item.latest_price),
+                                "average_trading_value": str(
+                                    item.average_trading_value
+                                ),
+                            }
+                            for item in prefiltered
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            snapshot_temporary.replace(snapshot)
+            print(
+                f"balanced universe: {len(prefiltered)} symbols; "
+                "starting resumable 7-day minute backfill",
+                flush=True,
+            )
+            credentials = load_kis_credentials(settings)
+
+            async def collect_minutes() -> None:
+                async with KisClient(
+                    credentials,
+                    token_cache_path=Path("data/kis-token-cache.json"),
+                ) as client:
+                    await backfill_minute_bars(
+                        client,
+                        MinuteBarStore(args.data_root),
+                        prefiltered,
+                        dataset.trading_dates,
+                        progress=lambda message: print(message, flush=True),
+                    )
+
+            asyncio.run(collect_minutes())
+            report = build_intraday_report(
+                dataset,
+                prefiltered,
+                MinuteBarStore(args.data_root),
+            )
+            args.json_output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.json_output.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    report.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(args.json_output)
+            target = build_dashboard(report, args.dashboard_output)
+        except (ValueError, KrxDataError, KisApiError, CandidateReportError) as exc:
+            print(f"intraday report failed: {exc}", file=sys.stderr)
+            raise SystemExit(6) from None
+        print(
+            f"real intraday KOSPI report built: {target} "
+            f"(data as of {report.data_as_of.isoformat()})",
+            flush=True,
         )
         return
 

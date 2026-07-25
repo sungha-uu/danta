@@ -58,7 +58,8 @@ flowchart LR
 | 서비스 | 책임 |
 | --- | --- |
 | `provider-doctor` | KIS 실전·모의 인증, 계좌, REST, WebSocket, TR·호출한도 진단 |
-| 일별 수집기 | 일봉·종목·수급·공시와 품질 검사 |
+| 시장데이터 수집기 | 종목·수급·공시·일봉 보조자료와 정규장 1분봉 원본의 증분 수집·품질 검사 |
+| 봉 집계기 | 1분봉 원본에서 재현 가능한 5·10·30·60분봉 OHLCV 생성 |
 | 후보·AI 엔진 | 정량 30개 전체 AI 등급·설명·위험·버전 저장 |
 | 운영 오케스트레이터 | 종목별 상태머신 생성·복구·중지, 진입/보호 작업 분리 |
 | 실시간 모니터 | 지정 1~3개 체결·호가·1분/5분 상태를 비동기 태스크로 계산 |
@@ -97,11 +98,12 @@ domain <- application <- adapters <- entrypoints
 
 | 테이블 | 역할 |
 | --- | --- |
-| `instruments`, `daily_bars`, `intraday_bars` | 종목·일봉·1분/5분봉 |
+| `instruments`, `daily_bars`, `intraday_bars` | 종목·일봉 보조자료·정규장 1분봉 원본과 파생 5/10/30/60분봉 |
 | `ticks`, `orderbooks` | 체결·호가 원본 또는 보존본 |
 | `investor_flows`, `disclosures` | 수급·공시 |
 | `box_features` | 박스·왕복·유지성 버전형 특징 |
 | `candidate_runs`, `candidates` | 정량·AI 후보와 근거 |
+| `universe_memberships`, `intraday_coverage` | 사전필터 편입·이탈 이력, 공통 수집 시작일, 종목별 목표·완료·누락 거래일과 체크포인트 |
 | `candidate_window_metrics` | 후보별 7·14·21일 박스·진폭·위치·수급·차트 입력 |
 | `candidate_publications` | 정제된 공개 DTO 해시·생성시각·배포상태·Pages URL |
 | `user_comments`, `remote_directives`, `watch_selections` | 대시보드 코멘트, Codex 지시 ID, 사용자 지정 1~3개 |
@@ -122,6 +124,8 @@ domain <- application <- adapters <- entrypoints
 ```text
 DAILY_DATA_READY, QUANT_CANDIDATES_CREATED, AI_REVIEW_COMPLETED,
 DASHBOARD_PUBLISHED, USER_COMMENTED, CODEX_USER_DIRECTIVE_RECEIVED,
+UNIVERSE_MEMBER_ADDED, INTRADAY_CATCHUP_REQUESTED,
+INTRADAY_CATCHUP_COMPLETED, INTRADAY_CATCHUP_FAILED,
 COMMAND_NORMALIZED, WATCHLIST_SELECTED,
 ENTRY_MANDATE_APPROVED, LOWER_BOUND_APPROACHED, REVERSAL_CONFIRMED,
 ENTRY_SIGNAL_CONFIRMED, BUY_ORDER_SUBMITTED,
@@ -147,6 +151,11 @@ STRATEGY_VERSION_APPROVED, STRATEGY_VERSION_ROLLED_BACK
 - 가격·금액은 정수 원 또는 `Decimal`을 사용한다.
 - 거래소 시각과 수신 시각을 모두 보존한다.
 - 모든 피처에 `as_of`, `data_version`, `calculation_version`을 둔다.
+- 구조 피처에는 `source_bar_interval`, `analysis_bar_interval`, 원본 해시, 집계 버전, 세션 완성도와 결측 수를 추가한다.
+- 후보 실행에는 `prefilter_version`, 종목별 `available_trading_days`, 활성 기간 목록과 백필 체크포인트를 기록한다.
+- 기간 버튼 가용성과 구조 필드 가용성을 분리한다. 일별 참고 지표는 표시할 수 있어도 분봉 구조 지표의 `WARMING_UP` 상태는 해제하지 않는다.
+- 파생봉은 별도 공급자의 서로 다른 원본으로 섞지 않고 같은 1분봉에서 재생성할 수 있어야 한다.
+- 구조 피처의 기본 `analysis_bar_interval`은 60분이며 30분·10분은 별도 실험 버전으로 격리한다.
 
 ## 8. 공개와 보존
 

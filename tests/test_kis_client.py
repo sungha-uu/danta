@@ -51,10 +51,32 @@ async def test_paper_client_uses_vts_and_maps_quote(credentials: KisCredentials)
 async def test_invalid_symbol_never_calls_network(credentials: KisCredentials) -> None:
     client = KisClient(credentials, transport=httpx.MockTransport(lambda _: None))
     try:
-        with pytest.raises(ValueError, match="six digits"):
+        with pytest.raises(ValueError, match="six uppercase alphanumeric"):
             await client.current_price("5930")
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_kospi_alphanumeric_short_code_is_supported(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.url.params["FID_INPUT_ISCD"] == "0126Z0"
+        return httpx.Response(
+            200,
+            json={"rt_cd": "0", "output": {"stck_prpr": "388500", "prdy_ctrt": "0"}},
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        quote = await client.current_price("0126Z0")
+    finally:
+        await client.close()
+
+    assert quote.price == 388_500
 
 
 @pytest.mark.asyncio
@@ -93,6 +115,60 @@ async def test_daily_chart_uses_official_contract(credentials: KisCredentials) -
 
     assert bars[0].trading_date == "20260724"
     assert bars[0].close == 249_500
+
+
+@pytest.mark.asyncio
+async def test_minute_chart_pages_and_deduplicates(credentials: KisCredentials) -> None:
+    page_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal page_calls
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        page_calls += 1
+        assert request.url.path.endswith("/inquire-time-dailychartprice")
+        assert request.headers["tr_id"] == "FHKST03010230"
+        assert request.url.params["FID_INPUT_DATE_1"] == "20260724"
+        if page_calls == 1:
+            rows = [
+                {
+                    "stck_bsop_date": "20260724",
+                    "stck_cntg_hour": f"13{minute:02d}00",
+                    "stck_oprc": "100",
+                    "stck_hgpr": "103",
+                    "stck_lwpr": "99",
+                    "stck_prpr": "102",
+                    "cntg_vol": "10",
+                    "acml_tr_pbmn": "1000",
+                }
+                for minute in range(60)
+            ] * 2
+        else:
+            rows = [
+                {
+                    "stck_bsop_date": "20260724",
+                    "stck_cntg_hour": "090000",
+                    "stck_oprc": "98",
+                    "stck_hgpr": "101",
+                    "stck_lwpr": "97",
+                    "stck_prpr": "100",
+                    "cntg_vol": "20",
+                    "acml_tr_pbmn": "200",
+                }
+            ]
+        return httpx.Response(200, json={"rt_cd": "0", "output2": rows})
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    client._minimum_rest_interval = 0  # noqa: SLF001 - deterministic transport test
+    try:
+        bars = await client.minute_bars_for_day("005930", trading_date="20260724")
+    finally:
+        await client.close()
+
+    assert page_calls == 2
+    assert bars[0].trading_time == "090000"
+    assert bars[-1].trading_time == "135900"
+    assert len(bars) == 61
 
 
 @pytest.mark.asyncio

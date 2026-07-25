@@ -3,8 +3,11 @@
 
   const report = JSON.parse(document.getElementById("reportData").textContent);
   const candidates = [...report.candidates];
-  const quantBaseline = report.model_id === "quant-baseline-no-llm";
-  const state = { window: "14" };
+  const quantBaseline = report.model_id.includes("no-llm");
+  const actionable = report.strategy_status === "ACTIVE"
+    && report.source_bar_interval_minutes === 1
+    && [10, 30, 60].includes(report.analysis_bar_interval_minutes);
+  const state = { window: "7" };
   const selectionKey = `danta-watch-draft:v3:${report.data_as_of}`;
   const selection = new Map();
   let copyBusy = false;
@@ -26,7 +29,9 @@
   })[char]);
   const n = (value) => Number(value);
   const metric = (candidate) => candidate.windows[state.window];
-  const ranked = () => [...candidates].sort((a, b) => metric(a).rank - metric(b).rank);
+  const ranked = () => [...candidates].sort(
+    (a, b) => (metric(a).rank ?? 999) - (metric(b).rank ?? 999),
+  );
   const gradeLabel = (grade) => ({
     STRONG_RECOMMEND: "적극 추천", RECOMMEND: "추천",
     NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
@@ -53,6 +58,7 @@
   }).format(new Date(value));
 
   try {
+    if (!actionable) throw new Error("research report");
     const saved = JSON.parse(localStorage.getItem(selectionKey) || "{}");
     Object.entries(saved).slice(0, 3).forEach(([code, draft]) => {
       const candidateExists = candidates.some((candidate) => candidate.code === code);
@@ -107,12 +113,14 @@
   function filtered() {
     return ranked().filter((candidate) => {
       const item = metric(candidate);
+      if (item.structure_status === "WARMING_UP") return true;
       return (!$("#recommendedOnly").checked || recommended(item.ai_grade))
         && (!$("#lowerOnly").checked || n(item.position_pct) <= 35);
     });
   }
 
   function grade(item) {
+    if (item.structure_status === "WARMING_UP") return structureCell(item, "");
     return `<span class="grade ${gradeClass(item.ai_grade)}">${h(reviewGradeLabel(item.ai_grade))}</span>`;
   }
 
@@ -121,6 +129,7 @@
   }
 
   function sparkline(item, name) {
+    if (item.structure_status === "WARMING_UP" || !item.closes.length) return "";
     const values = item.closes.map(n);
     const width = 132;
     const height = 34;
@@ -141,6 +150,12 @@
     </svg>`;
   }
 
+  function structureCell(item, content) {
+    if (item.structure_status !== "WARMING_UP") return content;
+    const completed = Math.max(0, n(item.structure_completed_days));
+    return `<span class="structure-warming">분봉 수집 중<br>${completed}/${item.days}거래일</span>`;
+  }
+
   function newsHtml(candidate) {
     if (!candidate.news.length) return "수집된 뉴스 없음";
     return candidate.news.slice(0, 2).map((news) => `
@@ -154,26 +169,29 @@
     $("#rankingBody").innerHTML = rows.map((candidate) => {
       const item = metric(candidate);
       const flows = item.flows;
+      const selectable = actionable && item.structure_status !== "WARMING_UP";
       return `<tr>
-        <td class="sticky-select"><input class="candidate-check" data-select-code="${h(candidate.code)}" type="checkbox" aria-label="${h(candidate.name)} 선택" ${selection.has(candidate.code) ? "checked" : ""}></td>
-        <td class="sticky-rank">${item.rank}</td>
+        <td class="sticky-select"><input class="candidate-check" data-select-code="${h(candidate.code)}" type="checkbox" aria-label="${h(candidate.name)} 선택" ${selection.has(candidate.code) ? "checked" : ""} ${selectable ? "" : "disabled"}></td>
+        <td class="sticky-rank">${structureCell(item, item.rank)}</td>
         ${stockCell(candidate)}
         <td>${grade(item)}</td>
         <td>${won.format(n(candidate.current_price))}</td>
         <td class="${tone(item.return_pct)}"><b>${percent(item.return_pct)}</b></td>
-        <td>${sparkline(item, candidate.name)}</td>
-        <td>${won.format(n(item.box_low))}</td><td>${won.format(n(item.box_high))}</td>
-        <td><b>${one.format(n(item.amplitude_pct))}%</b></td>
-        <td class="position">${one.format(n(item.position_pct))}%<div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div></td>
-        <td>${item.traversal_count}회</td>
+        <td>${structureCell(item, sparkline(item, candidate.name))}</td>
+        <td>${structureCell(item, won.format(n(item.box_low)))}</td>
+        <td>${structureCell(item, won.format(n(item.box_high)))}</td>
+        <td>${structureCell(item, `<b>${one.format(n(item.amplitude_pct))}%</b>`)}</td>
+        <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
+        <td>${structureCell(item, `${item.traversal_count}회`)}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
         <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>
         <td class="${tone(flows.institution)}">${signed(flows.institution)}</td>
         <td class="${tone(flows.financial_investment)}">${signed(flows.financial_investment)}</td>
         <td class="${tone(flows.pension)}">${signed(flows.pension)}</td>
         <td class="${tone(flows.strength_pct)}"><b>${percent(flows.strength_pct)}</b></td>
-        <td>${one.format(n(item.quant_score))}</td><td>${one.format(n(item.ai_score))}</td>
-        <td class="wrap">${h(item.ai_comment)}</td>
+        <td>${structureCell(item, one.format(n(item.quant_score)))}</td>
+        <td>${structureCell(item, one.format(n(item.ai_score)))}</td>
+        <td class="wrap">${structureCell(item, h(item.ai_comment))}</td>
         <td class="news-cell">${newsHtml(candidate)}</td>
         <td class="discussion">${h(candidate.discussion_summary)}</td>
         <td><a class="chart-link" href="${h(candidate.naver_url)}" target="_blank" rel="noopener noreferrer">차트보기</a></td>
@@ -237,10 +255,11 @@
     }, 0);
     const invalidEntry = items.some((candidate) => {
       const draft = selection.get(candidate.code);
-      return !draft || !draft.entryTargetPrice || n(draft.allocationPct) <= 0;
+      return !draft || !draft.entryTargetPrice || n(draft.allocationPct) <= 0
+        || metric(candidate).structure_status === "WARMING_UP";
     });
     $("#copySelection").disabled = copyBusy
-      || items.length === 0 || invalidEntry || allocationTotal > 100;
+      || !actionable || items.length === 0 || invalidEntry || allocationTotal > 100;
     const cashPct = Math.max(0, 100 - allocationTotal);
     const summary = $("#allocationSummary");
     summary.textContent = allocationTotal > 100
@@ -345,6 +364,10 @@
     $(selector).addEventListener("change", renderAll);
   });
   $("#toggleSelection").addEventListener("click", () => {
+    if (!actionable) {
+      showCopyToast("연구용 보고서는 자동매수 승인에 사용할 수 없습니다", true);
+      return;
+    }
     const willShow = $("#selectionTray").hidden;
     $("#selectionTray").hidden = !willShow;
     const label = willShow ? "선택창 숨김" : "선택창 표시";
@@ -394,9 +417,24 @@
   $("#marketRegime").textContent = report.market_regime;
   $("#dataAsOf").textContent = `기준 ${formatDate(report.data_as_of)}`;
   $("#demoBadge").hidden = !report.is_demo;
+  const strategyBadge = $("#strategyBadge");
+  strategyBadge.textContent = actionable
+    ? `${report.analysis_bar_interval_minutes}분봉 운영 후보`
+    : "연구용 · 주문 불가";
+  strategyBadge.classList.toggle("active", actionable);
   $("#versions").textContent = `${report.calculation_version} · ${report.model_id} · ${report.prompt_version}`;
+  if (!actionable) {
+    $("#toggleSelection").setAttribute("aria-disabled", "true");
+    $("#toggleSelection").setAttribute("title", "60분봉 운영 후보 전환 전에는 선택할 수 없습니다");
+    $("#analysisDescription").textContent = report.source_bar_interval_minutes === 1
+      && report.analysis_bar_interval_minutes
+      ? `실제 1분봉을 ${report.analysis_bar_interval_minutes}분봉으로 집계한 연구 기준선입니다. 뉴스·공시 AI 전수 검토와 주문 연결은 아직 비활성화되어 있습니다.`
+      : "기존 일봉 연구 기준선이며 주문에 사용할 수 없습니다.";
+  }
   if (quantBaseline) {
-    $("#analysisDescription").textContent = "박스·수익률·차트·수급·정량 기준선을 한 행에서 비교합니다. AI 정성 검토는 아직 미연결입니다.";
+    if (actionable) {
+      $("#analysisDescription").textContent = "박스·수익률·차트·수급·정량 기준선을 한 행에서 비교합니다. AI 정성 검토는 아직 미연결입니다.";
+    }
     $("#recommendFilterLabel").textContent = "정량 추천 이상";
     $("#reviewGradeHeader").textContent = "정량 등급";
     $("#reviewScoreHeader").textContent = "검토점수";

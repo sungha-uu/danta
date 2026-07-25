@@ -18,6 +18,9 @@ TOKEN_PATH = "/oauth2/tokenP"
 WS_APPROVAL_PATH = "/oauth2/Approval"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 DAILY_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+MINUTE_DAILY_CHART_PATH = (
+    "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+)
 BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 ORDERABLE_PATH = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
 CASH_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
@@ -41,6 +44,18 @@ class KisDailyBar:
     close: int
     volume: int
     trading_value: int
+
+
+@dataclass(frozen=True, slots=True)
+class KisMinuteBar:
+    trading_date: str
+    trading_time: str
+    open: int
+    high: int
+    low: int
+    close: int
+    volume: int
+    accumulated_trading_value: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +218,79 @@ class KisClient:
             )
         if not result:
             raise KisApiError("KIS daily chart response contained no price bars")
+        return result
+
+    async def minute_bars_for_day(
+        self,
+        symbol: str,
+        *,
+        trading_date: str,
+    ) -> list[KisMinuteBar]:
+        """Fetch one regular KRX session, paging backward in 120-row chunks."""
+        self._validate_symbol(symbol)
+        self._validate_date(trading_date)
+        current_time = "153000"
+        unique: dict[str, KisMinuteBar] = {}
+        for _ in range(10):
+            body = await self._authorized_request(
+                "GET",
+                MINUTE_DAILY_CHART_PATH,
+                tr_id="FHKST03010230",
+                params={
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": symbol,
+                    "FID_INPUT_HOUR_1": current_time,
+                    "FID_INPUT_DATE_1": trading_date,
+                    "FID_PW_DATA_INCU_YN": "Y",
+                    "FID_FAKE_TICK_INCU_YN": "",
+                },
+            )
+            rows = body.get("output2")
+            if not isinstance(rows, list):
+                raise KisApiError("KIS minute chart response did not include output2")
+            page: list[KisMinuteBar] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise KisApiError("KIS minute chart response contains an invalid row")
+                row_date = str(row.get("stck_bsop_date", ""))
+                row_time = str(row.get("stck_cntg_hour", ""))
+                if row_date != trading_date or not ("090000" <= row_time <= "153000"):
+                    continue
+                try:
+                    bar = KisMinuteBar(
+                        trading_date=row_date,
+                        trading_time=row_time,
+                        open=int(row.get("stck_oprc", "0") or "0"),
+                        high=int(row.get("stck_hgpr", "0") or "0"),
+                        low=int(row.get("stck_lwpr", "0") or "0"),
+                        close=int(row.get("stck_prpr", "0") or "0"),
+                        volume=int(row.get("cntg_vol", "0") or "0"),
+                        accumulated_trading_value=int(
+                            row.get("acml_tr_pbmn", "0") or "0"
+                        ),
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise KisApiError("KIS minute chart response has invalid numbers") from exc
+                if min(bar.open, bar.high, bar.low, bar.close) <= 0:
+                    continue
+                page.append(bar)
+                unique[row_time] = bar
+            if not page:
+                break
+            earliest = min(item.trading_time for item in page)
+            if earliest <= "090000" or len(rows) < 120:
+                break
+            if earliest >= current_time:
+                # A final historical page can repeat one row for this date and
+                # fill the remainder with the prior session. The store's regular
+                # session coverage gate decides whether the day is complete.
+                break
+            current_time = earliest
+        result = sorted(unique.values(), key=lambda item: item.trading_time)
+        if not result:
+            raise KisApiError(
+                f"KIS minute chart response contained no bars for {symbol} {trading_date}"
+            )
         return result
 
     async def positions(self) -> list[AccountPosition]:
@@ -413,8 +501,12 @@ class KisClient:
 
     @staticmethod
     def _validate_symbol(symbol: str) -> None:
-        if len(symbol) != 6 or not symbol.isdigit():
-            raise ValueError("domestic stock symbol must be exactly six digits")
+        if len(symbol) != 6 or not symbol.isascii() or not symbol.isalnum():
+            raise ValueError(
+                "domestic stock symbol must be exactly six uppercase alphanumeric characters"
+            )
+        if symbol != symbol.upper():
+            raise ValueError("domestic stock symbol must use uppercase characters")
 
     @staticmethod
     def _validate_date(value: str) -> None:

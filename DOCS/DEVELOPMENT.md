@@ -34,8 +34,8 @@ Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성
 
 ### Phase 1: 일별 데이터와 후보 30개
 
-- KOSPI 종목·일봉·거래대금·수급·공시
-- 품질·수정주가, 7일·14일 박스·왕복·유동성·붕괴
+- KOSPI 종목·거래대금·수급·공시와 정규장 1분봉 원본
+- 1분봉 품질·수정주가와 재현 가능한 60분봉, 7·14·21일 박스·왕복·유동성·붕괴
 - 미래 데이터 누수 방지와 재현성
 
 ### Phase 2: 후보 30개 전체 AI 등급과 Pages
@@ -187,6 +187,7 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 .\.venv\Scripts\danta.exe dashboard --demo --output dashboard\dist
 .\.venv\Scripts\danta.exe dashboard --input data\candidate_public_report.json --output dashboard\dist
 .\.venv\Scripts\danta.exe daily-report
+.\.venv\Scripts\danta.exe intraday-report
 ```
 
 - 첫 번째 doctor는 자격증명 형식과 안전정책만 검사한다.
@@ -196,18 +197,21 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 - 실전 주문은 `real_order_execution_enabled=false`와 Phase 0 정책 검증으로 차단되어 있다.
 - 대시보드 `--demo`와 `--input`은 동시에 사용할 수 없으며, 입력 JSON은 후보 30개 전부의 기간별 AI 4단계 등급과 코멘트를 반드시 가져야 한다.
 - `daily-report`는 KRX 자격정보를 Git 제외 파일에서 읽고 KOSPI 실제 후보 JSON과 정적 대시보드를 함께 원자적으로 생성한다. 기본 동작으로 후보 30개의 KIS 현재가를 교차검증하며 2% 초과 불일치, 수급 그룹 누락, 일별 전 종목 스냅샷 불완전 시 이전 보고서를 덮어쓰지 않는다. 데이터 공급자 장애 조사 때만 `--skip-kis-validation`으로 명시적인 미검증 오프라인 보고서를 만들 수 있다.
+- `intraday-report`는 `prefilter-balanced-v1`을 적용하고 최근 7거래일 KIS 1분봉을 종목·거래일 파일로 원자 저장한다. 재실행 시 정규장 커버리지 검증을 통과한 파일을 건너뛰고 미완료 구간부터 재개하며, 완료 후 60분봉 연구용 후보 30 JSON과 정적 대시보드를 생성한다. 14일·21일 구조는 실제 누적 전까지 `WARMING_UP`이다.
 
 기본 로컬 DB는 빠른 테스트를 위해 SQLite를 사용한다. PostgreSQL 통합 검증은 `docker compose up -d postgres` 후 `DANTA_DATABASE_URL`을 주입해서 수행한다.
 
 ## 8. 실제 데이터 구현 순서
 
-1. KRX 일괄 일봉 어댑터와 `box-quant-v1` 후보 엔진
-2. 실제 KOSPI 후보 30개 공개 JSON·정적 대시보드 생성
-3. 후보 30개 KIS 현재가·일봉 교차검증
-4. 뉴스·공시·AI 30개 전수 리뷰
-5. 사용자 선택 1~3개 집중 감시
-6. 모의계좌 승인 매수·재시작 복구·-7% 강제 손절
-7. 적응형 익절 실험과 모의 성과 비교
+1. KRX 일괄 자료와 `box-quant-v1` 데이터 연결 기준선 완료 — `RESEARCH_ONLY`
+2. 버전된 KOSPI 사전필터, 거래일 기반 커버리지 계획과 통과 종목 7거래일 1분봉 백필
+3. KIS 1분봉 일일 증분 수집·캐시·재시작 복구와 60분봉 집계기
+4. `box-intraday-v2-60m` 후보 엔진과 데이터 누적에 따른 7·14·21일 순차 활성화
+5. 실제 KOSPI 후보 30개 공개 JSON·정적 대시보드 생성
+6. 뉴스·공시·AI 30개 전수 리뷰
+7. 사용자 선택 1~3개 집중 감시
+8. 모의계좌 승인 매수·재시작 복구·-7% 강제 손절
+9. 적응형 익절과 60·30·10분봉·사전필터 개선 실험
 
 단계가 뒤로 진행되어도 앞 단계의 데이터 품질 검사를 생략하지 않는다. 실제 데이터가 일부만 채워진 보고서는 데모가 아니더라도 해당 공급자 미연결 상태를 명시한다.
 

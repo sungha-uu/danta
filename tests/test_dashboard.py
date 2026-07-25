@@ -15,6 +15,7 @@ from danta.dashboard.models import DashboardReport
 def test_demo_report_has_thirty_ranked_and_graded_candidates_for_every_window() -> None:
     report = demo_report()
 
+    assert report.strategy_status == "RESEARCH_ONLY"
     assert len(report.candidates) == 30
     for window in ("7", "14", "21"):
         metrics = [candidate.windows[window] for candidate in report.candidates]
@@ -45,6 +46,54 @@ def test_demo_report_has_thirty_ranked_and_graded_candidates_for_every_window() 
     )
 
 
+def test_active_report_requires_intraday_source_and_approved_analysis_bar() -> None:
+    payload = demo_report().model_dump(mode="json")
+    payload["strategy_status"] = "ACTIVE"
+
+    with pytest.raises(ValidationError, match="1-minute source"):
+        DashboardReport.model_validate(payload)
+
+    payload["source_bar_interval_minutes"] = 1
+    payload["analysis_bar_interval_minutes"] = 60
+    report = DashboardReport.model_validate(payload)
+
+    assert report.strategy_status == "ACTIVE"
+
+
+def test_warming_window_requires_incomplete_structure_days() -> None:
+    payload = demo_report().model_dump(mode="json")
+    for candidate in payload["candidates"]:
+        candidate["windows"]["14"]["structure_status"] = "WARMING_UP"
+        candidate["windows"]["14"]["structure_completed_days"] = 10
+        for field in (
+            "rank",
+            "box_low",
+            "box_high",
+            "amplitude_pct",
+            "position_pct",
+            "traversal_count",
+            "breakdown_risk_pct",
+            "quant_score",
+            "ai_score",
+            "final_score",
+            "ai_grade",
+            "ai_comment",
+            "invalidation",
+        ):
+            candidate["windows"]["14"][field] = None
+        candidate["windows"]["14"]["reasons"] = []
+        candidate["windows"]["14"]["risks"] = []
+        candidate["windows"]["14"]["closes"] = []
+
+    report = DashboardReport.model_validate(payload)
+
+    assert report.candidates[0].windows["14"].structure_completed_days == 10
+
+    payload["candidates"][0]["windows"]["14"]["structure_completed_days"] = 14
+    with pytest.raises(ValidationError, match="WARMING_UP"):
+        DashboardReport.model_validate(payload)
+
+
 def test_traversal_count_requires_return_to_starting_zone() -> None:
     low = Decimal("0")
     high = Decimal("100")
@@ -73,7 +122,11 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert 'number > 0 ? "+"' not in html
     assert "minimumFractionDigits: 1" in html
     assert "기간수익률" in html
-    assert "선택 기간 첫 거래일 종가 대비 현재가 변화율" in html
+    assert "선택 기간 첫 거래일 수정종가 대비 현재가 변화율" in html
+    assert "연구용 · 주문 불가" in html
+    assert "strategy_status" in html
+    assert "분봉 수집 중" in html
+    assert "structure_status" in html
     assert '"average_trading_value_billion"' in html
     assert "item.flows" in html
     assert "후보 30 종합" in html

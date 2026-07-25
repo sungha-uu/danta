@@ -23,7 +23,7 @@ async def health() -> dict[str, str]:
 @router.get("/provider/kis/doctor")
 async def kis_doctor(
     live: bool = Query(default=False),
-    symbol: str = Query(default="005930", pattern=r"^\d{6}$"),
+    symbol: str = Query(default="005930", pattern=r"^[0-9A-Z]{6}$"),
 ) -> dict[str, object]:
     try:
         settings = load_settings()
@@ -32,4 +32,3 @@ async def kis_doctor(
         return report.as_public_dict()
     except (ValueError, KisApiError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-

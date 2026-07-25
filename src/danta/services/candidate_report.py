@@ -87,6 +87,18 @@ def _grade(score: Decimal) -> AiGrade:
     return "STRONG_NOT_RECOMMEND"
 
 
+def _ready_score(metrics: WindowMetrics) -> Decimal:
+    if metrics.quant_score is None:
+        raise CandidateReportError("READY metrics are missing quant_score")
+    return metrics.quant_score
+
+
+def _ready_rank(metrics: WindowMetrics) -> int:
+    if metrics.rank is None:
+        raise CandidateReportError("READY metrics are missing rank")
+    return metrics.rank
+
+
 def _metrics(
     dataset: MarketDataset,
     symbol: str,
@@ -197,11 +209,11 @@ def build_quant_report(dataset: MarketDataset) -> DashboardReport:
         if (
             bars[-1].close < Decimal("1000")
             or metrics.average_trading_value_billion < Decimal("5")
-            or metrics.amplitude_pct < Decimal("3")
+            or (metrics.amplitude_pct or Decimal("0")) < Decimal("3")
         ):
             continue
         provisional.append((symbol, metrics))
-    provisional.sort(key=lambda item: item[1].quant_score, reverse=True)
+    provisional.sort(key=lambda item: _ready_score(item[1]), reverse=True)
     selected_symbols = [symbol for symbol, _ in provisional[:30]]
     if len(selected_symbols) != 30:
         raise CandidateReportError(
@@ -214,14 +226,14 @@ def build_quant_report(dataset: MarketDataset) -> DashboardReport:
             (symbol, _metrics(dataset, symbol, dataset.bars[symbol], days, rank=1))
             for symbol in selected_symbols
         ]
-        window_values.sort(key=lambda item: item[1].quant_score, reverse=True)
+        window_values.sort(key=lambda item: _ready_score(item[1]), reverse=True)
         ranked: dict[str, WindowMetrics] = {}
         for rank, (symbol, metrics) in enumerate(window_values, start=1):
             ranked[symbol] = metrics.model_copy(update={"rank": rank})
         metrics_by_window[days] = ranked
 
     candidates: list[CandidateView] = []
-    selected_symbols.sort(key=lambda symbol: metrics_by_window[14][symbol].rank)
+    selected_symbols.sort(key=lambda symbol: _ready_rank(metrics_by_window[14][symbol]))
     data_date = dataset.trading_dates[-1]
     published_at = datetime.combine(data_date, time(15, 30), tzinfo=KST)
     for symbol in selected_symbols:
