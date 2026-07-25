@@ -17,6 +17,7 @@ from danta.ports.broker import AccountPosition, Quote
 TOKEN_PATH = "/oauth2/tokenP"
 WS_APPROVAL_PATH = "/oauth2/Approval"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
+DAILY_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
 BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 
 
@@ -30,6 +31,14 @@ class KisApiError(RuntimeError):
 class _Token:
     value: str
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class KisDailyBar:
+    trading_date: str
+    close: int
+    volume: int
+    trading_value: int
 
 
 class KisClient:
@@ -133,6 +142,52 @@ class KisClient:
             ),
             raw_timestamp=output.get("stck_cntg_hour"),
         )
+
+    async def daily_bars(
+        self,
+        symbol: str,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> list[KisDailyBar]:
+        self._validate_symbol(symbol)
+        self._validate_date(start_date)
+        self._validate_date(end_date)
+        if start_date > end_date:
+            raise ValueError("start_date must not be after end_date")
+        body = await self._authorized_request(
+            "GET",
+            DAILY_CHART_PATH,
+            tr_id="FHKST03010100",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": start_date,
+                "FID_INPUT_DATE_2": end_date,
+                "FID_PERIOD_DIV_CODE": "D",
+                "FID_ORG_ADJ_PRC": "0",
+            },
+        )
+        rows = body.get("output2")
+        if not isinstance(rows, list):
+            raise KisApiError("KIS daily chart response did not include output2")
+        result: list[KisDailyBar] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise KisApiError("KIS daily chart response contains an invalid row")
+            if not row.get("stck_bsop_date") or not row.get("stck_clpr"):
+                continue
+            result.append(
+                KisDailyBar(
+                    trading_date=str(row["stck_bsop_date"]),
+                    close=int(row["stck_clpr"]),
+                    volume=int(row.get("acml_vol", "0") or "0"),
+                    trading_value=int(row.get("acml_tr_pbmn", "0") or "0"),
+                )
+            )
+        if not result:
+            raise KisApiError("KIS daily chart response contained no price bars")
+        return result
 
     async def positions(self) -> list[AccountPosition]:
         tr_id = (
@@ -266,3 +321,8 @@ class KisClient:
     def _validate_symbol(symbol: str) -> None:
         if len(symbol) != 6 or not symbol.isdigit():
             raise ValueError("domestic stock symbol must be exactly six digits")
+
+    @staticmethod
+    def _validate_date(value: str) -> None:
+        if len(value) != 8 or not value.isdigit():
+            raise ValueError("KIS date must use YYYYMMDD")

@@ -195,7 +195,7 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 - API 문서는 `http://127.0.0.1:8000/docs`에서 확인한다.
 - 실전 주문은 `real_order_execution_enabled=false`와 Phase 0 정책 검증으로 차단되어 있다.
 - 대시보드 `--demo`와 `--input`은 동시에 사용할 수 없으며, 입력 JSON은 후보 30개 전부의 기간별 AI 4단계 등급과 코멘트를 반드시 가져야 한다.
-- `daily-report`는 KRX 자격정보를 Git 제외 파일에서 읽고 KOSPI 실제 후보 JSON과 정적 대시보드를 함께 원자적으로 생성한다. 수급 그룹이나 일별 전 종목 스냅샷이 불완전하면 이전 보고서를 덮어쓰지 않는다.
+- `daily-report`는 KRX 자격정보를 Git 제외 파일에서 읽고 KOSPI 실제 후보 JSON과 정적 대시보드를 함께 원자적으로 생성한다. 기본 동작으로 후보 30개의 KIS 현재가를 교차검증하며 2% 초과 불일치, 수급 그룹 누락, 일별 전 종목 스냅샷 불완전 시 이전 보고서를 덮어쓰지 않는다. 데이터 공급자 장애 조사 때만 `--skip-kis-validation`으로 명시적인 미검증 오프라인 보고서를 만들 수 있다.
 
 기본 로컬 DB는 빠른 테스트를 위해 SQLite를 사용한다. PostgreSQL 통합 검증은 `docker compose up -d postgres` 후 `DANTA_DATABASE_URL`을 주입해서 수행한다.
 

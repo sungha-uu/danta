@@ -57,6 +57,44 @@ async def test_invalid_symbol_never_calls_network(credentials: KisCredentials) -
 
 
 @pytest.mark.asyncio
+async def test_daily_chart_uses_official_contract(credentials: KisCredentials) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.url.path.endswith("/inquire-daily-itemchartprice")
+        assert request.headers["tr_id"] == "FHKST03010100"
+        assert request.url.params["FID_INPUT_ISCD"] == "005930"
+        assert request.url.params["FID_PERIOD_DIV_CODE"] == "D"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output2": [
+                    {
+                        "stck_bsop_date": "20260724",
+                        "stck_clpr": "249500",
+                        "acml_vol": "26175580",
+                        "acml_tr_pbmn": "6628392525500",
+                    }
+                ],
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        bars = await client.daily_bars(
+            "005930",
+            start_date="20260701",
+            end_date="20260724",
+        )
+    finally:
+        await client.close()
+
+    assert bars[0].trading_date == "20260724"
+    assert bars[0].close == 249_500
+
+
+@pytest.mark.asyncio
 async def test_access_token_is_persisted_and_reused(
     credentials: KisCredentials, tmp_path: Path
 ) -> None:

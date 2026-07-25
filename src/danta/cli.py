@@ -9,7 +9,7 @@ from pathlib import Path
 import uvicorn
 from pydantic import ValidationError
 
-from danta.adapters.kis.client import KisApiError
+from danta.adapters.kis.client import KisApiError, KisClient
 from danta.adapters.krx.client import KrxDataError, PykrxMarketDataClient
 from danta.config import (
     load_kis_credentials,
@@ -19,7 +19,12 @@ from danta.config import (
 )
 from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
+from danta.dashboard.models import DashboardReport
 from danta.services.candidate_report import CandidateReportError, build_quant_report
+from danta.services.candidate_validation import (
+    CandidateValidationError,
+    validate_candidate_quotes,
+)
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.provider_doctor import KisProviderDoctor
 
@@ -58,6 +63,11 @@ def _parser() -> argparse.ArgumentParser:
         "--dashboard-output",
         type=Path,
         default=Path("dashboard/dist"),
+    )
+    daily.add_argument(
+        "--skip-kis-validation",
+        action="store_true",
+        help="build an explicitly unverified offline report",
     )
     return parser
 
@@ -121,6 +131,17 @@ def main() -> None:
             load_krx_environment(settings)
             dataset = PykrxMarketDataClient().collect()
             report = build_quant_report(dataset)
+            if not args.skip_kis_validation:
+                credentials = load_kis_credentials(settings)
+
+                async def validate() -> DashboardReport:
+                    async with KisClient(
+                        credentials,
+                        token_cache_path=Path("data/kis-token-cache.json"),
+                    ) as client:
+                        return await validate_candidate_quotes(report, client)
+
+                report = asyncio.run(validate())
             args.json_output.parent.mkdir(parents=True, exist_ok=True)
             temporary = args.json_output.with_suffix(".tmp")
             temporary.write_text(
@@ -133,7 +154,13 @@ def main() -> None:
             )
             temporary.replace(args.json_output)
             target = build_dashboard(report, args.dashboard_output)
-        except (ValueError, KrxDataError, CandidateReportError) as exc:
+        except (
+            ValueError,
+            KrxDataError,
+            KisApiError,
+            CandidateReportError,
+            CandidateValidationError,
+        ) as exc:
             print(f"daily report failed: {exc}", file=sys.stderr)
             raise SystemExit(5) from None
         print(
