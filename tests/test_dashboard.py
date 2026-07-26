@@ -150,6 +150,10 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "hour-bar-cell" in html
     assert "modal-price-tick" in html
     assert "modal-date-tick" in html
+    assert "modal-current-line" in html
+    assert "현재가+10%" in html
+    assert "현재가 ${won.format(current)}원" in html
+    assert "target15" not in html
     assert "현재가 ${won.format(" in html
     assert 'id="chartModalSummary"' in html
     assert "<small>량 ${won.format(n(bar.volume))} · 시 ${won.format(n(bar.open))}</small>" in html

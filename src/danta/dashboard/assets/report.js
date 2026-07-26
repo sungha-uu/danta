@@ -245,9 +245,10 @@
     const padBottom = 30;
     const plotBottom = height - padBottom;
     const low = Math.min(n(item.box_low), ...bars.map((bar) => n(bar.low)));
-    const target15 = n(currentPrice) * 1.15;
+    const current = n(currentPrice);
+    const target10 = current * 1.10;
     const high = Math.max(
-      target15,
+      target10,
       ...bars.map((bar) => n(bar.high)),
     );
     const spread = Math.max(1, high - low);
@@ -255,7 +256,8 @@
     const y = (value) => padTop + (high - value) / spread * (plotBottom - padTop);
     const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
     const lowerY = y(n(item.box_low));
-    const targetY = y(target15);
+    const currentY = y(current);
+    const targetY = y(target10);
     const priceTicks = Array.from({ length: 5 }, (_, index) => high - (spread * index / 4));
     const dateGroups = [];
     bars.forEach((bar, index) => {
@@ -278,8 +280,10 @@
       }).join("")}
       <line class="modal-target-line" x1="${padLeft}" y1="${targetY}" x2="${width - padRight}" y2="${targetY}"></line>
       <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${width - padRight}" y2="${lowerY}"></line>
-      <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.max(12, targetY - 4)}">현재+15%</text>
+      <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${width - padRight}" y2="${currentY}"></line>
+      <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.max(12, targetY - 4)}">현재가+10%</text>
       <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.min(plotBottom - 3, lowerY + 13)}">하단</text>
+      <text class="modal-current-label" x="${width - padRight - 5}" y="${Math.max(12, currentY - 4)}" text-anchor="end">현재가 ${won.format(current)}원</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }
