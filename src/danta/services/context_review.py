@@ -406,6 +406,13 @@ def build_context_review(
                 score = min(score, Decimal("59"))
             if active_reaches < 1:
                 score = min(score, Decimal("69"))
+            if active is not None and active.confidence == "LOW":
+                score = min(score, Decimal("74"))
+            if (
+                active is not None
+                and candidate.current_price < active.structural_invalidation_price
+            ):
+                score = min(score, Decimal("44"))
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
                 "외국인·기관 순유입"
@@ -423,7 +430,8 @@ def build_context_review(
                 (
                     f"활성 하단→상단 재도달 {active.upper_reaches}회, "
                     f"손절 선행 {active.stop_first}회, "
-                    f"관측 재도달률 {active.success_rate_pct.quantize(Decimal('0.1'))}% "
+                    f"후향 관측 재도달률 "
+                    f"{active.success_rate_pct.quantize(Decimal('0.1'))}% "
                     f"(신뢰 {active.confidence})"
                 )
                 if active is not None

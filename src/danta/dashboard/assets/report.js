@@ -181,7 +181,7 @@
   function activeOutcomeCell(item) {
     const active = item.active_box;
     if (!active) return '<span class="structure-warming">활성 박스 미적용</span>';
-    return `<b>재도달 ${one.format(n(active.success_rate_pct))}%</b>
+    return `<b>관측 재도달 ${one.format(n(active.success_rate_pct))}%</b>
       <small class="target-detail">손절 선행 ${one.format(n(active.stop_first_rate_pct))}%</small>
       <small class="target-detail">성공/손절/만료/진행 ${active.upper_reaches}/${active.stop_first}/${active.timeouts}/${active.pending}</small>`;
   }

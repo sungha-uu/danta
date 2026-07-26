@@ -11,6 +11,7 @@ from danta.services.intraday_report import (
     PrefilterCandidate,
     _active_episode_stats,
     _active_regime_start,
+    _ActiveBox,
     _Analyzed,
     _daily_dynamics,
     _entry_location_factor,
@@ -277,6 +278,36 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     ) == (
         "현재 위치가 활성 박스 하단 35% 밖",
         "활성 하단권 접촉 후 5거래일 내 활성 상단권 재도달 이력 없음",
+    )
+
+    invalid_active = _ActiveBox(
+        start_date="20260720",
+        trading_days=5,
+        lower_zone_low=Decimal("110"),
+        lower_zone_high=Decimal("112"),
+        upper_zone_low=Decimal("120"),
+        upper_zone_high=Decimal("122"),
+        position=Decimal("-20"),
+        amplitude=Decimal("10"),
+        upside_to_upper=Decimal("11"),
+        inclusion=Decimal("80"),
+        lower_contacts=1,
+        upper_reaches=1,
+        stop_first=0,
+        timeouts=0,
+        pending=0,
+        completed_cycles=0,
+        success_rate=Decimal("100"),
+        stop_first_rate=Decimal("0"),
+        median_time_to_target_hours=Decimal("2"),
+        rebound_trend="표본 부족",
+        confidence="LOW",
+        structural_invalidation_price=Decimal("109"),
+    )
+    invalidated = replace(analysis, active=invalid_active)
+    assert not _setup_eligible(invalidated)
+    assert "현재가가 활성 구조 무효화선 아래" in _setup_rejection_reasons(
+        invalidated
     )
 
 

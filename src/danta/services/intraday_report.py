@@ -719,9 +719,14 @@ def _setup_grade(
 def _setup_eligible(item: _Analyzed) -> bool:
     position = item.active.position if item.active else item.position
     reaches = item.active.upper_reaches if item.active else item.target_reaches
+    active_valid = (
+        item.active is None
+        or item.hourly_closes[-1] >= item.active.structural_invalidation_price
+    )
     return (
         position <= Decimal("35")
         and reaches >= 1
+        and active_valid
     )
 
 
@@ -733,6 +738,11 @@ def _setup_rejection_reasons(item: _Analyzed) -> tuple[str, ...]:
         reasons.append("현재 위치가 활성 박스 하단 35% 밖")
     if reaches < 1:
         reasons.append("활성 하단권 접촉 후 5거래일 내 활성 상단권 재도달 이력 없음")
+    if (
+        item.active is not None
+        and item.hourly_closes[-1] < item.active.structural_invalidation_price
+    ):
+        reasons.append("현재가가 활성 구조 무효화선 아래")
     return tuple(reasons)
 
 
@@ -862,7 +872,20 @@ def _score_all(
             + rebound_score * Decimal("0.08")
             + daily_range_score * Decimal("0.05")
         )
-        score = raw_score * _entry_location_factor(active_position)
+        validity_factor = (
+            Decimal("0.20")
+            if (
+                item.active is not None
+                and item.hourly_closes[-1]
+                < item.active.structural_invalidation_price
+            )
+            else Decimal("1")
+        )
+        score = (
+            raw_score
+            * _entry_location_factor(active_position)
+            * validity_factor
+        )
         result.append(
             replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
         )
@@ -1009,6 +1032,14 @@ def _ready_window_metrics(
         analysis.lower_trend,
         analysis.active.upper_reaches,
     )
+    if current_price < analysis.active.structural_invalidation_price:
+        grade = (
+            "NOT_RECOMMEND"
+            if score >= Decimal("45")
+            else "STRONG_NOT_RECOMMEND"
+        )
+    elif analysis.active.confidence == "LOW" and grade == "STRONG_RECOMMEND":
+        grade = "RECOMMEND"
     flow_confirmation: Literal["순유입", "중립", "순유출"] = (
         "순유입"
         if flows.foreign + flows.institution > 0
