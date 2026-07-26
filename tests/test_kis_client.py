@@ -294,3 +294,48 @@ async def test_access_token_is_persisted_and_reused(
     finally:
         await second.close()
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_token_refreshes_once_for_safe_get(
+    credentials: KisCredentials,
+) -> None:
+    token_calls = 0
+    quote_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal token_calls, quote_calls
+        if request.url.path == "/oauth2/tokenP":
+            token_calls += 1
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": f"token-{token_calls}",
+                    "expires_in": 3600,
+                },
+            )
+        quote_calls += 1
+        if quote_calls == 1:
+            return httpx.Response(
+                401,
+                json={"msg_cd": "EGW00123", "msg1": "기간이 만료된 token 입니다."},
+            )
+        assert request.headers["Authorization"] == "Bearer token-2"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": {"stck_prpr": "250000", "prdy_ctrt": "1.2"},
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    client._minimum_rest_interval = 0
+    try:
+        quote = await client.current_price("005930")
+    finally:
+        await client.close()
+
+    assert quote.price == 250000
+    assert token_calls == 2
+    assert quote_calls == 2

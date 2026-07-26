@@ -422,35 +422,55 @@ class KisClient:
         params: dict[str, str] | None = None,
         json_body: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        token = await self.access_token()
-        async with self._rest_lock:
-            elapsed = time.monotonic() - self._last_rest_request_at
-            wait_seconds = self._minimum_rest_interval - elapsed
-            if wait_seconds > 0:
-                await asyncio.sleep(wait_seconds)
-            response = await self._client.request(
-                method,
-                path,
-                params=params,
-                json=json_body,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "appkey": self.credentials.app_key.get_secret_value(),
-                    "appsecret": self.credentials.app_secret.get_secret_value(),
-                    "tr_id": tr_id,
-                    "custtype": "P",
-                    "Content-Type": "application/json",
-                },
+        for attempt in range(2):
+            token = await self.access_token()
+            async with self._rest_lock:
+                elapsed = time.monotonic() - self._last_rest_request_at
+                wait_seconds = self._minimum_rest_interval - elapsed
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+                response = await self._client.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json_body,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "appkey": self.credentials.app_key.get_secret_value(),
+                        "appsecret": self.credentials.app_secret.get_secret_value(),
+                        "tr_id": tr_id,
+                        "custtype": "P",
+                        "Content-Type": "application/json",
+                    },
+                )
+                self._last_rest_request_at = time.monotonic()
+            try:
+                raw_body = response.json()
+            except ValueError:
+                raw_body = None
+            error_code = (
+                str(raw_body.get("msg_cd", raw_body.get("error_code", "")))
+                if isinstance(raw_body, dict)
+                else ""
             )
-            self._last_rest_request_at = time.monotonic()
-        body = self._json_or_error(response, f"KIS request failed: {path}")
-        if str(body.get("rt_cd", "0")) != "0":
-            raise KisApiError(
-                f"KIS rejected request: {body.get('msg_cd', 'UNKNOWN')} "
-                f"{body.get('msg1', '')}".strip(),
-                status_code=response.status_code,
-            )
-        return body
+            if (
+                attempt == 0
+                and method == "GET"
+                and error_code == "EGW00123"
+            ):
+                # A broker-side token can expire before its local expiry timestamp.
+                # GET market-data calls are safe to repeat after one forced refresh.
+                self._token = None
+                continue
+            body = self._json_or_error(response, f"KIS request failed: {path}")
+            if str(body.get("rt_cd", "0")) != "0":
+                raise KisApiError(
+                    f"KIS rejected request: {body.get('msg_cd', 'UNKNOWN')} "
+                    f"{body.get('msg1', '')}".strip(),
+                    status_code=response.status_code,
+                )
+            return body
+        raise KisApiError(f"KIS request failed after token refresh: {path}")
 
     @staticmethod
     def _json_or_error(response: httpx.Response, message: str) -> dict[str, Any]:
