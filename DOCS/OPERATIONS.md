@@ -320,5 +320,14 @@ AI 사용량과 관계없이 로컬 Python이 계속 수행하는 것:
 
 - 보고서 커밋: `ed0fe25`
 - 검증 URL: `https://sungha-uu.github.io/danta_report/?verify=ed0fe25`
+
+### 2026-07-26 활성 박스 v1 배포 검증
+
+- 계산판: `intraday-elasticity-v7-active-box-v1-public-review-50-prefilter-balanced-v1`
+- 코드 커밋: `c97f15f`
+- Pages 커밋: `ff61f90`
+- 검증 URL: `https://sungha-uu.github.io/danta_report/?verify=ff61f90-2`
+- 실제 브라우저 확인: 후보 50개, 활성 하단권·상단권·후향 관측 재도달/손절·활성 신뢰 열, 7·14·21일 각 50행, 21일 워밍업 표시, 60분봉 팝업을 확인했다.
+- 산출물 검사: 활성 구조 무효화선 아래 추천 0개, `LOW` 신뢰 적극 추천 0개.
 - 실제 브라우저에서 후보 50개, 에이전트 등급, 뉴스 링크 99개, 토론 링크 50개를 확인했다.
 - 케이씨텍 21일 팝업에서 21개 거래일을 확인하고 마지막 07.24·15시까지 가로·세로 스크롤한 상태에서 날짜 열의 `left`가 스크롤 컨테이너의 `left`와 같고 `visibility=visible`, `z-index=2`인 것을 확인했다.
