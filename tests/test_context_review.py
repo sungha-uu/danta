@@ -65,10 +65,15 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
     validated = DashboardReport.model_validate(reviewed_report.model_dump())
 
     assert len(review.candidates) == 50
-    assert review.model_id == "agent-context-review-v6-top200-pullback-dart"
+    assert review.model_id == "agent-context-review-v7-top50-repeat-rise-flow-news-dart"
     assert all(set(candidate.windows) == {"7", "14", "21"} for candidate in review.candidates)
     assert all(candidate.context_status == "READY" for candidate in review.candidates)
-    assert all(len(candidate.news) == 1 for candidate in validated.candidates)
+    assert all(len(candidate.news) == 1 for candidate in validated.candidates[:50])
+    assert all(not candidate.news for candidate in validated.candidates[50:])
+    assert all(
+        candidate.windows["14"].ai_grade is None
+        for candidate in validated.candidates[50:]
+    )
     assert all(
         candidate.discussion_titles == ["반등 기대", "매수 의견"]
         for candidate in validated.candidates

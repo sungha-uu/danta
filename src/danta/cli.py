@@ -107,7 +107,7 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         choices=(7, 14, 21),
         default=7,
-        help="minute coverage target; 14/21 use the 50-symbol audit pool",
+        help="minute coverage target for the 200-symbol public ranking",
     )
     intraday.add_argument(
         "--skip-backfill",
@@ -149,7 +149,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     context_review = subparsers.add_parser(
         "context-review",
-        help="collect public news/discussion context and review all 50 candidates",
+        help="collect public context and review the fixed 14-day top 50",
     )
     context_review.add_argument("--input", type=Path, required=True)
     context_review.add_argument("--output", type=Path, required=True)
@@ -291,7 +291,15 @@ def main() -> None:
                     args.cache_root,
                     dart_api_key=load_dart_api_key(load_settings()),
                 ).collect(
-                    [(item.code, item.name) for item in report.candidates],
+                    [
+                        (item.code, item.name)
+                        for item in sorted(
+                            report.candidates,
+                            key=lambda candidate: (
+                                candidate.windows["14"].rank or 999
+                            ),
+                        )[:50]
+                    ],
                     refresh=args.refresh,
                 )
             )

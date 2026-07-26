@@ -263,7 +263,8 @@ def build_quant_report(dataset: MarketDataset) -> DashboardReport:
             continue
         provisional.append((symbol, metrics))
     provisional.sort(key=lambda item: _ready_score(item[1]), reverse=True)
-    published_count = CANDIDATE_COUNT + EXTENDED_WATCHLIST_COUNT
+    # Legacy daily-close research report remains a 50-name compatibility view.
+    published_count = min(50, CANDIDATE_COUNT + EXTENDED_WATCHLIST_COUNT)
     selected_symbols = [symbol for symbol, _ in provisional[:published_count]]
     if len(selected_symbols) != published_count:
         raise CandidateReportError(

@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 WindowKey = Literal["7", "14", "21"]
-CANDIDATE_COUNT = 50
+CANDIDATE_COUNT = 200
 EXTENDED_WATCHLIST_COUNT = 0
 Sentiment = Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]
 AiGrade = Literal[
@@ -100,6 +100,9 @@ class WindowMetrics(BaseModel):
     box_high: Decimal | None = Field(default=None, gt=0)
     amplitude_pct: Decimal | None = Field(default=None, ge=0)
     position_pct: Decimal | None = None
+    average_up_swing_pct: Decimal | None = Field(default=Decimal("0"), ge=0)
+    up_swing_count: int | None = Field(default=0, ge=0)
+    average_time_to_6pct_hours: Decimal | None = Field(default=None, ge=0)
     median_daily_range_pct: Decimal | None = Field(default=None, ge=0)
     max_daily_range_pct: Decimal | None = Field(default=None, ge=0)
     median_daily_rebound_pct: Decimal | None = Field(default=None, ge=0)
@@ -157,6 +160,8 @@ class WindowMetrics(BaseModel):
             self.box_high,
             self.amplitude_pct,
             self.position_pct,
+            self.average_up_swing_pct,
+            self.up_swing_count,
             self.median_daily_range_pct,
             self.max_daily_range_pct,
             self.median_daily_rebound_pct,
@@ -174,10 +179,6 @@ class WindowMetrics(BaseModel):
             self.target_expired_count,
             self.breakdown_risk_pct,
             self.quant_score,
-            self.ai_score,
-            self.final_score,
-            self.ai_grade,
-            self.ai_comment,
             self.invalidation,
         )
         if self.structure_status == "READY":
@@ -187,6 +188,12 @@ class WindowMetrics(BaseModel):
                 raise ValueError("READY structure must include reasons and risks")
             if self.box_high is None or self.box_low is None or self.box_high <= self.box_low:
                 raise ValueError("box_high must be greater than box_low")
+            if self.up_swing_count is None or self.average_up_swing_pct is None:
+                raise ValueError("READY structure must include repeated rise metrics")
+            if self.up_swing_count > 0 and self.average_time_to_6pct_hours is None:
+                raise ValueError("repeated rises require an average time to 6 percent")
+            if self.up_swing_count == 0 and self.average_time_to_6pct_hours is not None:
+                raise ValueError("zero repeated rises must not fabricate a reach time")
             if (
                 self.lower_contact_count is None
                 or self.target_reach_count is None
@@ -262,7 +269,7 @@ class DashboardReport(BaseModel):
     prompt_version: str
     is_demo: bool = False
     candidates: list[CandidateView] = Field(
-        min_length=CANDIDATE_COUNT,
+        min_length=1,
         max_length=CANDIDATE_COUNT,
     )
     extended_watchlist: list[CandidateView] = Field(
@@ -272,6 +279,11 @@ class DashboardReport(BaseModel):
 
     @model_validator(mode="after")
     def validate_candidate_set(self) -> DashboardReport:
+        if (
+            self.calculation_version.startswith("intraday-repeat-rise-v11")
+            and len(self.candidates) != CANDIDATE_COUNT
+        ):
+            raise ValueError("repeat-rise v11 reports require exactly 200 candidates")
         if self.strategy_status == "ACTIVE" and (
             self.source_bar_interval_minutes != 1
             or self.analysis_bar_interval_minutes not in {10, 30, 60}

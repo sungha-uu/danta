@@ -18,6 +18,7 @@ from danta.services.intraday_report import (
     _decline_shape,
     _entry_location_factor,
     _intraday_period_return,
+    _repeated_up_swings,
     _score_all,
     _setup_eligible,
     _setup_grade,
@@ -27,6 +28,31 @@ from danta.services.intraday_report import (
     balanced_prefilter,
     market_cap_top_universe,
 )
+
+
+def test_repeated_up_swings_count_non_overlapping_six_percent_legs() -> None:
+    closes = [100, 107, 110, 103, 96, 102, 108, 101]
+    rows = [
+        KisMinuteBar(
+            trading_date="20260724",
+            trading_time=f"09{index:02d}00",
+            open=close,
+            high=close,
+            low=close,
+            close=close,
+            volume=10,
+            accumulated_trading_value=1000,
+        )
+        for index, close in enumerate(closes)
+    ]
+
+    swings = _repeated_up_swings(rows)
+
+    assert len(swings) == 2
+    assert [item.status for item in swings] == ["CONFIRMED", "CONFIRMED"]
+    assert swings[0].amplitude_pct == Decimal("10.0")
+    assert swings[1].amplitude_pct == Decimal("12.500")
+    assert [item.minutes_to_6pct for item in swings] == [1, 1]
 
 
 def test_balanced_prefilter_applies_all_three_thresholds() -> None:
@@ -367,6 +393,26 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
         "현재 위치가 선택 기간 박스 하단 35% 밖",
         "박스 하단 접촉 후 3거래일 내 실제 +10% 도달 이력 없음",
     )
+
+    more_repeats = replace(
+        analysis,
+        symbol="000002",
+        up_swing_count=3,
+        average_up_swing=Decimal("7"),
+        average_time_to_6pct_hours=Decimal("5"),
+    )
+    larger_but_fewer = replace(
+        analysis,
+        up_swing_count=2,
+        average_up_swing=Decimal("20"),
+        average_time_to_6pct_hours=Decimal("1"),
+    )
+    second_candidate = replace(candidate, symbol="000002")
+    repeat_ranked = _score_all(
+        [larger_but_fewer, more_repeats],
+        {"000001": candidate, "000002": second_candidate},
+    )
+    assert [item.symbol for item in repeat_ranked] == ["000002", "000001"]
 
     active_reached_but_no_ten_pct = replace(
         analysis,

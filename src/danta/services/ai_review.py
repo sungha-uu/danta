@@ -67,13 +67,43 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
     if review.report_data_as_of != report.data_as_of:
         raise ValueError("AI review data timestamp does not match report")
     review_map = {item.code: item for item in review.candidates}
-    report_codes = {item.code for item in report.candidates}
-    if set(review_map) != report_codes:
-        raise ValueError("AI review must cover every official candidate exactly once")
+    review_target_codes = {
+        candidate.code
+        for candidate in report.candidates
+        if candidate.windows["14"].rank is not None
+        and candidate.windows["14"].rank <= 50
+    }
+    if set(review_map) != review_target_codes:
+        raise ValueError("AI review must cover the fixed 14-day top 50 exactly once")
 
     candidates = []
     for candidate in report.candidates:
-        candidate_review = review_map[candidate.code]
+        candidate_review = review_map.get(candidate.code)
+        if candidate_review is None:
+            candidates.append(
+                candidate.model_copy(
+                    update={
+                        "windows": {
+                            key: metrics.model_copy(
+                                update={
+                                    "ai_grade": None,
+                                    "ai_score": None,
+                                    "final_score": None,
+                                    "ai_comment": None,
+                                }
+                            )
+                            for key, metrics in candidate.windows.items()
+                        },
+                        "news": [],
+                        "discussion_summary": "AI 심층검토 대상 외",
+                        "discussion_titles": [],
+                        "discussion_url": None,
+                        "context_status": "NOT_COLLECTED",
+                        "context_fetched_at": None,
+                    }
+                )
+            )
+            continue
         windows = {}
         for key, metrics in candidate.windows.items():
             if metrics.structure_status == "WARMING_UP":
@@ -111,39 +141,6 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                 }
             )
         )
-    for key in ("7", "14", "21"):
-        ready = [
-            candidate
-            for candidate in candidates
-            if candidate.windows[key].structure_status == "READY"
-        ]
-        if not ready or not all(
-            candidate.windows[key].active_box is not None
-            for candidate in ready
-        ):
-            continue
-        ranked = sorted(
-            ready,
-            key=lambda candidate: _active_discovery_rank_key(candidate, key),
-            reverse=True,
-        )
-        rank_map = {
-            candidate.code: rank
-            for rank, candidate in enumerate(ranked, start=1)
-        }
-        candidates = [
-            candidate.model_copy(
-                update={
-                    "windows": {
-                        **candidate.windows,
-                        key: candidate.windows[key].model_copy(
-                            update={"rank": rank_map.get(candidate.code)}
-                        ),
-                    }
-                }
-            )
-            for candidate in candidates
-        ]
     return report.model_copy(
         update={
             "generated_at": review.reviewed_at,

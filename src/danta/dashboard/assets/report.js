@@ -6,7 +6,7 @@
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const officialCodes = new Set(report.candidates.map((candidate) => candidate.code));
   const candidates = [...report.candidates, ...(report.extended_watchlist ?? [])];
-  $("#candidateCountTitle").textContent = `📊 검토 후보 ${candidates.length}`;
+  $("#candidateCountTitle").textContent = `📊 정량 순위 ${candidates.length}`;
   const quantBaseline = report.model_id.includes("no-llm");
   const agentContextReview = report.model_id.startsWith("agent-context-review");
   const actionable = report.strategy_status === "ACTIVE"
@@ -14,6 +14,7 @@
     && [10, 30, 60].includes(report.analysis_bar_interval_minutes);
   const state = {
     window: $(".window-picker button.active")?.dataset.window || "14",
+    query: "",
   };
   const selectionKey = `danta-watch-draft:v3:${report.data_as_of}`;
   const selection = new Map();
@@ -42,7 +43,9 @@
     NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
   })[grade] || grade;
   const reviewGradeLabel = (grade) => (
-    quantBaseline
+    !grade
+      ? "AI 심층검토 대상 외"
+      : quantBaseline
       ? `정량 ${gradeLabel(grade)}`
       : agentContextReview
       ? `에이전트 ${gradeLabel(grade)}`
@@ -122,6 +125,10 @@
   function filtered() {
     return ranked().filter((candidate) => {
       const item = metric(candidate);
+      const query = state.query.trim().toLocaleLowerCase("ko-KR");
+      if (query && !`${candidate.name} ${candidate.code}`.toLocaleLowerCase("ko-KR").includes(query)) {
+        return false;
+      }
       if (item.structure_status === "WARMING_UP") return true;
       return (!$("#recommendedOnly").checked || recommended(item.ai_grade))
         && (!$("#lowerOnly").checked || n(item.position_pct) <= 35);
@@ -130,6 +137,7 @@
 
   function grade(item) {
     if (item.structure_status === "WARMING_UP") return structureCell(item, "");
+    if (!item.ai_grade) return '<span class="structure-warming">AI 심층검토 대상 외</span>';
     return `<span class="grade ${gradeClass(item.ai_grade)}">${h(reviewGradeLabel(item.ai_grade))}</span>`;
   }
 
@@ -159,14 +167,18 @@
     </svg></button>`;
   }
 
-  function metricPair(medianValue, maxValue) {
-    return `<b>${one.format(n(medianValue))}%</b><small class="target-detail">최대 ${one.format(
-      n(maxValue),
-    )}%</small>`;
+  function repeatedRiseCell(item) {
+    return `<b>${one.format(n(item.average_up_swing_pct))}%</b>`;
   }
 
-  function targetDaysCell(item) {
-    return `<b>${item.reach_days_5pct}/${item.reach_days_10pct}/${item.reach_days_15pct}일</b>`;
+  function repeatedCountCell(item) {
+    return `<b>${item.up_swing_count}회</b><small class="target-detail">6% 이상</small>`;
+  }
+
+  function reachTimeCell(item) {
+    return item.average_time_to_6pct_hours == null
+      ? '<span class="structure-warming">표본 없음</span>'
+      : `<b>${one.format(n(item.average_time_to_6pct_hours))}시간</b><small class="target-detail">평균 +6%</small>`;
   }
 
   function activeZoneCell(item, side) {
@@ -223,6 +235,7 @@
 
   function newsHtml(candidate) {
     if (!candidate.news.length) {
+      if (n(metric(candidate).rank) > 50) return "AI 심층검토 대상 외";
       return candidate.context_status === "FAILED"
         ? '<span class="context-failed">뉴스 수집 실패</span>'
         : "최근 뉴스 결과 없음";
@@ -246,6 +259,7 @@
 
   function discussionHtml(candidate) {
     if (!candidate.discussion_titles?.length) {
+      if (n(metric(candidate).rank) > 50) return "AI 심층검토 대상 외";
       return candidate.context_status === "FAILED"
         ? '<span class="context-failed">토론 수집 실패</span>'
         : "최근 토론 제목 없음";
@@ -281,9 +295,9 @@
         <td>${structureCell(item, won.format(n(item.box_high)))}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
         <td>${structureCell(item, lowerTrendCell(item))}</td>
-        <td>${structureCell(item, metricPair(item.median_daily_range_pct, item.max_daily_range_pct))}</td>
-        <td>${structureCell(item, metricPair(item.median_daily_rebound_pct, item.max_daily_rebound_pct))}</td>
-        <td>${structureCell(item, targetDaysCell(item))}</td>
+        <td>${structureCell(item, repeatedRiseCell(item))}</td>
+        <td>${structureCell(item, repeatedCountCell(item))}</td>
+        <td>${structureCell(item, reachTimeCell(item))}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
         <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>
         <td class="${tone(flows.institution)}">${signed(flows.institution)}</td>
@@ -291,8 +305,8 @@
         <td class="${tone(flows.pension)}">${signed(flows.pension)}</td>
         <td class="${tone(flows.strength_pct)}"><b>${percent(flows.strength_pct)}</b></td>
         <td>${structureCell(item, one.format(n(item.quant_score)))}</td>
-        <td>${structureCell(item, one.format(n(item.ai_score)))}</td>
-        <td class="wrap">${structureCell(item, h(item.ai_comment))}</td>
+        <td>${structureCell(item, item.ai_score == null ? "-" : one.format(n(item.ai_score)))}</td>
+        <td class="wrap">${structureCell(item, item.ai_comment ? h(item.ai_comment) : "AI 심층검토 대상 외")}</td>
         <td class="news-cell">${newsHtml(candidate)}</td>
         <td class="discussion">${discussionHtml(candidate)}</td>
         <td><a class="chart-link" href="${h(candidate.naver_url)}" target="_blank" rel="noopener noreferrer">차트보기</a></td>
@@ -371,11 +385,13 @@
     $("#chartModalTitle").textContent = `${candidate.name} · 현재가 ${won.format(
       n(candidate.current_price),
     )}원 · ${state.window}일 60분봉`;
-    $("#chartModalSummary").textContent = `일중 진폭 ${one.format(n(item.median_daily_range_pct))}% / 최대 ${one.format(
-      n(item.max_daily_range_pct),
-    )}% · 저점 반등 ${one.format(n(item.median_daily_rebound_pct))}% / 최대 ${one.format(
-      n(item.max_daily_rebound_pct),
-    )}% · +5/+10/+15% ${item.reach_days_5pct}/${item.reach_days_10pct}/${item.reach_days_15pct}일 · 하단 ${item.lower_trend}`;
+    $("#chartModalSummary").textContent = `평균 반복 상승폭 ${one.format(
+      n(item.average_up_swing_pct),
+    )}% · 6% 이상 반복 ${item.up_swing_count}회 · 평균 6% 도달 ${
+      item.average_time_to_6pct_hours == null
+        ? "표본 없음"
+        : `${one.format(n(item.average_time_to_6pct_hours))}시간`
+    } · 하단 ${item.lower_trend}`;
     $("#chartModalPlot").innerHTML = expandedPlot(item, candidate.name, candidate.current_price);
     const buckets = [...new Set(item.chart_bars.map((bar) => bar.bucket))].sort();
     const dates = [...new Set(item.chart_bars.map((bar) => bar.trading_date))].sort();
@@ -577,6 +593,15 @@
   ["#recommendedOnly", "#lowerOnly"].forEach((selector) => {
     $(selector).addEventListener("change", renderAll);
   });
+  $("#candidateSearch").addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.query = $("#candidateSearchInput").value;
+    renderAll();
+  });
+  $("#candidateSearchInput").addEventListener("search", () => {
+    state.query = $("#candidateSearchInput").value;
+    renderAll();
+  });
   $("#toggleSelection").addEventListener("click", () => {
     if (!actionable) {
       showCopyToast("연구용 보고서는 자동매수 승인에 사용할 수 없습니다", true);
@@ -659,7 +684,7 @@
     $("#reviewCommentHeader").textContent = "정량 코멘트";
   }
   if (agentContextReview) {
-    $("#analysisDescription").textContent = "50개 전체의 분봉 구조·수급·최신 뉴스·종목토론 참고 신호를 결합한 에이전트 1차 검토입니다.";
+    $("#analysisDescription").textContent = "200개 정량 순위와 상위 50개의 수급·뉴스·공시·종목토론 AI 심층검토입니다.";
     $("#recommendFilterLabel").textContent = "에이전트 추천 이상";
     $("#reviewGradeHeader").textContent = "에이전트 등급";
     $("#reviewScoreHeader").textContent = "에이전트 점수";

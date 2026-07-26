@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="KOSPI 단기 변동성 검토 후보 50개 리포트">
+  <meta name="description" content="KOSPI 단기 변동성 정량 순위 200개 리포트">
   <title>Danta 단기 변동성 후보 리포트</title>
   <style>/*__DANTA_CSS__*/</style>
 </head>
@@ -54,9 +54,14 @@
             <p id="analysisDescription">박스·수익률·차트·수급·AI 분석을 한 행에서 비교합니다.</p>
           </div>
           <div class="filters">
+            <form id="candidateSearch" class="candidate-search" role="search">
+              <label class="sr-only" for="candidateSearchInput">종목명 또는 종목코드 검색</label>
+              <input id="candidateSearchInput" type="search" placeholder="종목명·코드 검색" autocomplete="off">
+              <button type="submit">검색</button>
+            </form>
             <label><input id="recommendedOnly" type="checkbox"> <span id="recommendFilterLabel">추천 이상</span></label>
             <label><input id="lowerOnly" type="checkbox"> 현재 위치 35%↓</label>
-            <span><b id="visibleCount">50</b> / <b id="totalCount">50</b></span>
+            <span><b id="visibleCount">200</b> / <b id="totalCount">200</b></span>
           </div>
         </div>
         <div class="table-wrap">
@@ -67,7 +72,7 @@
                 <th id="reviewGradeHeader">AI 등급</th><th>현재가</th><th title="분봉 준비 시 첫 60분봉 종가, 준비 중에는 첫 거래일 종가 대비 현재가 변화율">기간수익률</th><th title="선택 기간 실제 최고가 대비 현재가의 등락률">기간고점 대비</th><th>가격 흐름</th>
                 <th title="선택 기간의 박스 하단 가격">기간 최저가</th><th title="기간 최저가에서 10% 상승한 목표 가격">+10% 목표가</th><th title="선택 기간의 박스 상단 가격">기간 최고가</th>
                 <th>현재 위치</th><th title="첫 거래일 저가 대비 마지막 거래일 저가의 방향">하단 방향</th>
-                <th title="날짜별 고가/저가 변동폭의 중앙값과 최대값">일중 진폭<br>중앙/최대</th><th title="당일 저점 이후 고가까지 실제 반등폭의 중앙값과 최대값">저점 반등<br>중앙/최대</th><th title="당일 저점 이후 각각 5%, 10%, 15% 이상 반등한 거래일 수">도달일수<br>5%/10%/15%</th>
+                <th title="1분봉 비중복 상승 구간의 평균 저점 대비 고점 상승률">반복 상승폭</th><th title="저점에서 6% 이상 상승한 비중복 구간 수">반복 횟수</th><th title="각 저점에서 최초 6% 상승까지 걸린 평균 거래시간">도달시간</th>
                 <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
                 <th>정량점수</th><th id="reviewScoreHeader">AI점수</th><th id="reviewCommentHeader">AI 코멘트</th>
                 <th>최신 뉴스</th><th>종목토론</th><th>차트보기</th>

@@ -52,6 +52,9 @@ main { flex: 1 1 auto; min-height: 0; padding: 8px 8px 0; overflow: hidden; }
 .filters label { color: #3c4860; cursor: pointer; }
 .filters input { accent-color: var(--blue); vertical-align: -2px; }
 .filters span { padding-left: 10px; border-left: 1px solid var(--line); color: var(--muted); }
+.candidate-search { display: flex; align-items: stretch; gap: 4px; }
+.candidate-search input { width: 150px; min-height: 30px; padding: 4px 8px; border: 1px solid #aeb9ca; border-radius: 5px; background: #fff; color: var(--ink); cursor: text; caret-color: auto; }
+.candidate-search button { min-height: 30px; padding: 4px 10px; border: 1px solid var(--blue); border-radius: 5px; background: var(--blue); color: #fff; font-weight: 700; cursor: pointer; }
 
 .table-wrap { flex: 1 1 0; height: 0; min-height: 0; max-width: 100%; overflow: auto; border: 1px solid var(--line); background: white; }
 .report-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; }

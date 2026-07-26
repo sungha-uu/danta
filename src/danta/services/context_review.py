@@ -523,7 +523,11 @@ def build_context_review(
     reviewed_at: datetime,
 ) -> AiReviewBatch:
     reviews: list[AiCandidateReview] = []
-    for candidate in report.candidates:
+    review_targets = sorted(
+        report.candidates,
+        key=lambda candidate: candidate.windows["14"].rank or 999,
+    )[:50]
+    for candidate in review_targets:
         snapshot = snapshots[candidate.code]
         expired_spike_reversion = _is_expired_spike_reversion(
             candidate.windows["21"]
@@ -560,34 +564,7 @@ def build_context_review(
                 if flow_strength < 0
                 else Decimal("0")
             )
-            decline_opportunity = (
-                metrics.decline_shape == "GOOD_PULLBACK"
-                and flow_strength > 0
-            )
             score = metrics.quant_score + flow_adjustment + news_adjustment
-            if decline_opportunity:
-                score += Decimal("5")
-            actual_10pct_reaches = metrics.target_reach_count or 0
-            current_10pct_was_reached = (
-                metrics.current_vs_window_high_pct is not None
-                and metrics.current_vs_window_high_pct
-                <= (Decimal("1") / Decimal("1.10") - Decimal("1")) * Decimal("100")
-            )
-            if (metrics.position_pct or Decimal("100")) > Decimal("50"):
-                score = min(score, Decimal("44"))
-            elif (metrics.position_pct or Decimal("100")) > Decimal("35"):
-                score = min(score, Decimal("59"))
-            if actual_10pct_reaches < 1 or not current_10pct_was_reached:
-                score = min(score, Decimal("59"))
-            if (
-                metrics.target_price_10pct is None
-                or metrics.target_price_10pct <= candidate.current_price
-            ):
-                score = min(score, Decimal("59"))
-            if expired_spike_reversion:
-                score = min(score, Decimal("44"))
-            if metrics.decline_shape == "STRUCTURAL_DECLINE":
-                score = min(score, Decimal("44"))
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
                 "외국인·기관 순유입"
@@ -596,39 +573,21 @@ def build_context_review(
                 if flow_strength < 0
                 else "외국인·기관 중립"
             )
-            opportunity_text = (
-                "하락 자체보다 하단 할인과 수급 유입을 기회 요인으로 평가했습니다."
-                if decline_opportunity
-                else "하락 추세는 단독 감점하지 않았습니다."
-            )
+            opportunity_text = "하락 모양과 현재 위치는 1차 반복 상승 순위에 섞지 않았습니다."
             if expired_spike_reversion:
                 opportunity_text = (
                     "21일 급등 뒤 상단 가격대가 낮아지고 시작 가격대로 "
-                    "복귀해 추천 자격을 제한했습니다."
-                )
-            elif metrics.decline_shape == "STRUCTURAL_DECLINE":
-                opportunity_text = (
-                    "상·하단 동반 하락과 최근 반등폭 축소로 구조적 붕괴로 "
-                    "분류해 추천 자격을 제한했습니다."
+                    "복귀한 위험 이력은 별도 참고합니다."
                 )
             gate_text = (
-                f"박스 하단 접촉 후 3거래일 내 실제 +10% "
-                f"{actual_10pct_reaches}회, 현재가+10% 과거 도달 확인, "
-                "진입 목표가가 현재가 위"
-                if (
-                    actual_10pct_reaches > 0
-                    and current_10pct_was_reached
-                    and metrics.target_price_10pct is not None
-                    and metrics.target_price_10pct > candidate.current_price
-                )
-                else (
-                    "박스 하단 접촉 후 실제 +10% 도달 이력 없음"
-                    if actual_10pct_reaches < 1
-                    else (
-                        "기간 실제 최고가가 현재가+10%에 미달"
-                        if not current_10pct_was_reached
-                        else "하단 기준 +10% 목표가를 현재가가 이미 통과"
-                    )
+                f"6% 이상 비중복 상승 {metrics.up_swing_count or 0}회, "
+                "평균 상승폭 "
+                f"{(metrics.average_up_swing_pct or Decimal('0')).quantize(Decimal('0.1'))}%, "
+                "평균 6% 도달 "
+                + (
+                    f"{metrics.average_time_to_6pct_hours.quantize(Decimal('0.1'))}시간"
+                    if metrics.average_time_to_6pct_hours is not None
+                    else "표본 없음"
                 )
             )
             news_text = (
@@ -641,9 +600,7 @@ def build_context_review(
                 ai_grade=_grade(score),  # type: ignore[arg-type]
                 ai_score=int(score.quantize(Decimal("1"))),
                 ai_comment=(
-                    f"{metrics.days}일 기준 현재 위치 "
-                    f"{(metrics.position_pct or Decimal('0')).quantize(Decimal('0.1'))}%, "
-                    f"{gate_text}, {flow_text} 강도 "
+                    f"{metrics.days}일 기준 {gate_text}, {flow_text} 강도 "
                     f"{flow_strength.quantize(Decimal('0.1'))}%, {news_text}. "
                     f"{opportunity_text}"
                 ),
@@ -655,11 +612,6 @@ def build_context_review(
                 risks=[
                     "토론은 비신뢰 참고 신호",
                     "뉴스 제목 감성은 사건 사실·가격 반영 여부 추가 확인 필요",
-                    *(
-                        ["바닥 안정 확인 전 진입 보류"]
-                        if (metrics.lower_trend_pct or Decimal("0")) < Decimal("-2")
-                        else []
-                    ),
                     *([EXPIRED_SPIKE_RISK] if expired_spike_reversion else []),
                 ],
             )
@@ -684,8 +636,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v6-top200-pullback-dart",
-        prompt_version="good-pullback-structural-decline-flow-news-dart-v6-20260726",
+        model_id="agent-context-review-v7-top50-repeat-rise-flow-news-dart",
+        prompt_version="repeat-rise-top50-flow-news-dart-v7-20260727",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

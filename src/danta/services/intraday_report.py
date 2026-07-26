@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
@@ -116,7 +115,17 @@ class _Analyzed:
     hour_bars: list[HourBar]
     hourly_closes: list[Decimal]
     score: Decimal
+    average_up_swing: Decimal = Decimal("0")
+    up_swing_count: int = 0
+    average_time_to_6pct_hours: Decimal | None = None
     active: _ActiveBox | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _UpSwing:
+    amplitude_pct: Decimal
+    minutes_to_6pct: int
+    status: Literal["CONFIRMED", "OPEN"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,6 +472,103 @@ def _daily_dynamics(
         range_retention,
         rebound_retention,
     )
+
+
+def _repeated_up_swings(
+    minute_bars: list[KisMinuteBar],
+    *,
+    threshold_pct: Decimal = Decimal("6"),
+) -> list[_UpSwing]:
+    """Return non-overlapping close-to-close upward ZigZag legs."""
+    ordered = sorted(
+        minute_bars,
+        key=lambda item: (item.trading_date, item.trading_time),
+    )
+    if len(ordered) < 2:
+        return []
+    threshold = threshold_pct / HUNDRED
+    trading_days = sorted({bar.trading_date for bar in ordered})
+    day_index = {value: index for index, value in enumerate(trading_days)}
+
+    def trading_minute(bar: KisMinuteBar) -> int:
+        hour = int(bar.trading_time[:2])
+        minute = int(bar.trading_time[2:4])
+        return day_index[bar.trading_date] * 390 + max(
+            0,
+            hour * 60 + minute - 9 * 60,
+        )
+
+    mode: Literal["SEEK", "UP", "DOWN"] = "SEEK"
+    first_price = Decimal(ordered[0].close)
+    low_price = first_price
+    low_minute = trading_minute(ordered[0])
+    high_price = first_price
+    pivot_price = first_price
+    first_reach_minute: int | None = None
+    swings: list[_UpSwing] = []
+
+    for bar in ordered[1:]:
+        price = Decimal(bar.close)
+        minute_marker = trading_minute(bar)
+        if mode == "SEEK":
+            if price < low_price:
+                low_price = price
+                low_minute = minute_marker
+            if price > high_price:
+                high_price = price
+            if price >= low_price * (Decimal("1") + threshold):
+                mode = "UP"
+                pivot_price = low_price
+                high_price = price
+                first_reach_minute = minute_marker
+            elif price <= high_price * (Decimal("1") - threshold):
+                mode = "DOWN"
+                low_price = price
+                low_minute = minute_marker
+            continue
+        if mode == "UP":
+            if price > high_price:
+                high_price = price
+            elif price <= high_price * (Decimal("1") - threshold):
+                if first_reach_minute is None:
+                    raise CandidateReportError("up swing threshold timestamp missing")
+                swings.append(
+                    _UpSwing(
+                        amplitude_pct=(
+                            high_price / pivot_price - Decimal("1")
+                        )
+                        * HUNDRED,
+                        minutes_to_6pct=max(
+                            0,
+                            first_reach_minute - low_minute,
+                        ),
+                        status="CONFIRMED",
+                    )
+                )
+                mode = "DOWN"
+                low_price = price
+                low_minute = minute_marker
+            continue
+        if price < low_price:
+            low_price = price
+            low_minute = minute_marker
+        elif price >= low_price * (Decimal("1") + threshold):
+            mode = "UP"
+            pivot_price = low_price
+            high_price = price
+            first_reach_minute = minute_marker
+
+    if mode == "UP":
+        if first_reach_minute is None:
+            raise CandidateReportError("open up swing threshold timestamp missing")
+        swings.append(
+            _UpSwing(
+                amplitude_pct=(high_price / pivot_price - Decimal("1")) * HUNDRED,
+                minutes_to_6pct=max(0, first_reach_minute - low_minute),
+                status="OPEN",
+            )
+        )
+    return swings
 
 
 def _decline_shape(
@@ -892,6 +998,20 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
     lower_contacts, target_reaches, target_pending = _target_reach_episodes(
         minute_bars, low
     )
+    up_swings = _repeated_up_swings(minute_bars)
+    average_up_swing = (
+        sum((item.amplitude_pct for item in up_swings), Decimal("0"))
+        / Decimal(len(up_swings))
+        if up_swings
+        else Decimal("0")
+    )
+    average_time_to_6pct_hours = (
+        sum((Decimal(item.minutes_to_6pct) for item in up_swings), Decimal("0"))
+        / Decimal(len(up_swings))
+        / Decimal("60")
+        if up_swings
+        else None
+    )
     (
         median_daily_range,
         max_daily_range,
@@ -923,6 +1043,9 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
         lower_contacts=lower_contacts,
         target_reaches=target_reaches,
         target_pending=target_pending,
+        average_up_swing=average_up_swing,
+        up_swing_count=len(up_swings),
+        average_time_to_6pct_hours=average_time_to_6pct_hours,
         median_daily_range=median_daily_range,
         max_daily_range=max_daily_range,
         median_daily_rebound=median_daily_rebound,
@@ -948,90 +1071,26 @@ def _score_all(
     analyses: list[_Analyzed],
     candidates: dict[str, PrefilterCandidate],
 ) -> list[_Analyzed]:
-    max_liquidity_log = max(
-        math.log10(float(item.average_trading_value))
-        for item in candidates.values()
-    )
-    result: list[_Analyzed] = []
-    for item in analyses:
-        period_position = item.position
-        day_count = Decimal(
-            len({bar.trading_date for bar in item.hour_bars})
-        )
-        target_frequency_score = min(
-            HUNDRED,
-            Decimal(item.reach_days_5) / day_count * Decimal("20")
-            + Decimal(item.reach_days_10) / day_count * Decimal("30")
-            + Decimal(item.reach_days_15) / day_count * Decimal("50"),
-        )
-        rebound_strength_score = min(
-            HUNDRED,
-            min(HUNDRED, item.median_daily_rebound / Decimal("10") * HUNDRED)
-            * Decimal("0.70")
-            + min(HUNDRED, item.max_daily_rebound / Decimal("15") * HUNDRED)
-            * Decimal("0.30"),
-        )
-        rebound_score = (
-            rebound_strength_score * Decimal("0.70")
-            + min(HUNDRED, item.rebound_retention) * Decimal("0.30")
-        )
-        range_strength_score = min(
-            HUNDRED,
-            min(HUNDRED, item.median_daily_range / Decimal("8") * HUNDRED)
-            * Decimal("0.70")
-            + min(HUNDRED, item.max_daily_range / Decimal("15") * HUNDRED)
-            * Decimal("0.30"),
-        )
-        repeated_range_score = (
-            range_strength_score * Decimal("0.70")
-            + min(HUNDRED, item.range_retention) * Decimal("0.30")
-        )
-        liquidity_log = Decimal(
-            str(math.log10(float(candidates[item.symbol].average_trading_value)))
-        )
-        liquidity_score = liquidity_log / Decimal(str(max_liquidity_log)) * HUNDRED
-        lower_score = max(
-            Decimal("0"),
-            HUNDRED - max(Decimal("0"), period_position),
-        )
-        resolved_targets = item.target_reaches + (
-            item.lower_contacts - item.target_reaches - item.target_pending
-        )
-        target_quality_score = (
-            Decimal(item.target_reaches) / Decimal(resolved_targets) * HUNDRED
-            if resolved_targets > 0
-            else Decimal("0")
-        )
-        target_score = (
-            target_quality_score * Decimal("0.70")
-            + target_frequency_score * Decimal("0.30")
-        )
-        decline_health_score = {
-            "GOOD_PULLBACK": Decimal("100"),
-            "STABLE_BOX": Decimal("80"),
-            "OTHER": Decimal("50"),
-            "STRUCTURAL_DECLINE": Decimal("0"),
-        }[item.decline_shape]
-        score = (
-            lower_score * Decimal("0.25")
-            + repeated_range_score * Decimal("0.20")
-            + rebound_score * Decimal("0.20")
-            + decline_health_score * Decimal("0.15")
-            + target_score * Decimal("0.10")
-            + liquidity_score * Decimal("0.10")
-        )
-        result.append(
-            replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
-        )
-    return sorted(
-        result,
+    del candidates  # Liquidity is an eligibility gate, not a ranking weight.
+    ordered = sorted(
+        analyses,
         key=lambda item: (
-            item.decline_shape != "STRUCTURAL_DECLINE",
-            _setup_eligible(item),
-            item.score,
+            -item.up_swing_count,
+            -item.average_up_swing,
+            item.average_time_to_6pct_hours
+            if item.average_time_to_6pct_hours is not None
+            else Decimal("Infinity"),
+            item.symbol,
         ),
-        reverse=True,
     )
+    total = Decimal(len(ordered))
+    return [
+        replace(
+            item,
+            score=(total - Decimal(rank) + Decimal("1")) / total * HUNDRED,
+        )
+        for rank, item in enumerate(ordered, start=1)
+    ]
 
 
 def screening_pool(
@@ -1164,7 +1223,6 @@ def _ready_window_metrics(
         + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
     )
     score = analysis.score.quantize(Decimal("0.01"))
-    rejection_reasons = _setup_rejection_reasons(analysis)
     grade = _setup_grade(
         score,
         analysis.position,
@@ -1203,6 +1261,13 @@ def _ready_window_metrics(
         box_high=analysis.high.quantize(Decimal("0.01")),
         amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
         position_pct=analysis.position.quantize(Decimal("0.01")),
+        average_up_swing_pct=analysis.average_up_swing.quantize(Decimal("0.01")),
+        up_swing_count=analysis.up_swing_count,
+        average_time_to_6pct_hours=(
+            analysis.average_time_to_6pct_hours.quantize(Decimal("0.01"))
+            if analysis.average_time_to_6pct_hours is not None
+            else None
+        ),
         median_daily_range_pct=analysis.median_daily_range.quantize(
             Decimal("0.01")
         ),
@@ -1247,37 +1312,27 @@ def _ready_window_metrics(
         final_score=score,
         ai_grade=grade,
         ai_comment=(
-            f"실제 {days}거래일 1분봉을 60분봉으로 집계했고 "
-            f"박스 하단 접촉 후 3거래일 내 실제 +10% "
-            f"{analysis.target_reaches}회입니다. "
-            f"일중 진폭 중앙값 "
-            f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%, "
-            f"저점 반등 중앙값 "
-            f"{analysis.median_daily_rebound.quantize(Decimal('0.1'))}%, "
-            f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
-            f"{analysis.reach_days_10}/{analysis.reach_days_15}일, "
-            f"하락 구조 {analysis.decline_shape}, "
-            f"진폭 유지율 {analysis.range_retention.quantize(Decimal('0.1'))}%, "
-            f"반등 유지율 {analysis.rebound_retention.quantize(Decimal('0.1'))}%. "
+            f"{days}거래일 1분봉에서 6% 이상 비중복 상승 "
+            f"{analysis.up_swing_count}회, 평균 상승폭 "
+            f"{analysis.average_up_swing.quantize(Decimal('0.1'))}%, 평균 6% "
+            f"도달시간 "
             + (
-                "자격 게이트를 통과했습니다. "
-                if not rejection_reasons
-                else f"현재 비추천 사유: {', '.join(rejection_reasons)}. "
+                f"{analysis.average_time_to_6pct_hours.quantize(Decimal('0.1'))}시간"
+                if analysis.average_time_to_6pct_hours is not None
+                else "표본 없음"
             )
-            + "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
+            + "입니다. 뉴스·공시 AI 심층검토 전 정량 기준선입니다."
         ),
         reasons=[
+            f"6% 이상 비중복 상승 {analysis.up_swing_count}회",
+            f"평균 반복 상승폭 "
+            f"{analysis.average_up_swing.quantize(Decimal('0.1'))}%",
             (
-                "반복 진폭과 반등력이 유지된 하단 눌림"
-                if analysis.decline_shape == "GOOD_PULLBACK"
-                else "상·하단 동반 하락과 반등폭 축소"
-                if analysis.decline_shape == "STRUCTURAL_DECLINE"
-                else f"하락 구조 {analysis.decline_shape}"
+                "평균 6% 도달 "
+                f"{analysis.average_time_to_6pct_hours.quantize(Decimal('0.1'))}시간"
+                if analysis.average_time_to_6pct_hours is not None
+                else "6% 도달 표본 없음"
             ),
-            f"박스 하단 접촉 후 실제 +10% 도달 {analysis.target_reaches}회",
-            f"일중 진폭 중앙값 "
-            f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%",
-            *rejection_reasons,
         ][:5],
         risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
         invalidation=(
@@ -1382,42 +1437,27 @@ def build_intraday_report(
             symbol for symbol in candidate_map if symbol not in complete_symbols
         ]
         raise CandidateReportError(
-            f"top-200 composite ranking requires all 7/14/21-day windows; "
+            f"top-200 fixed 14-day ranking requires all 7/14/21-day windows; "
             f"{len(complete_symbols)}/{len(candidates)} complete. "
             f"missing: {', '.join(missing[:10])}"
         )
-    composite_scores = {
-        symbol: (
-            analyses_by_window[7][symbol].score * Decimal("0.50")
-            + analyses_by_window[14][symbol].score * Decimal("0.30")
-            + analyses_by_window[21][symbol].score * Decimal("0.20")
+    selected_symbols = [
+        item.symbol
+        for item in _score_all(
+            [analyses_by_window[14][symbol] for symbol in complete_symbols],
+            candidate_map,
         )
-        for symbol in complete_symbols
-    }
-    selected_symbols = sorted(
-        complete_symbols,
-        key=lambda symbol: (
-            analyses_by_window[7][symbol].decline_shape
-            != "STRUCTURAL_DECLINE",
-            composite_scores[symbol],
-        ),
-        reverse=True,
-    )[:50]
-    if len(selected_symbols) < 50:
+    ]
+    if len(selected_symbols) < 200:
         raise CandidateReportError(
             f"only {len(selected_symbols)} symbols were available for "
-            "the 50-name review cohort"
+            "the 200-name public ranking"
         )
+    fixed_ranks = {
+        symbol: rank for rank, symbol in enumerate(selected_symbols, start=1)
+    }
     for days in WINDOW_DAYS:
-        selected_for_window = sorted(
-            selected_symbols,
-            key=lambda symbol: analyses_by_window[days][symbol].score,
-            reverse=True,
-        )
-        ranks_by_window[days] = {
-            symbol: rank
-            for rank, symbol in enumerate(selected_for_window, start=1)
-        }
+        ranks_by_window[days] = fixed_ranks
     views: list[CandidateView] = []
     for symbol in selected_symbols:
         windows: dict[str, WindowMetrics] = {}
@@ -1471,11 +1511,11 @@ def build_intraday_report(
         generated_at=datetime.now(KST),
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime=(
-            f"실제 {'·'.join(ready_windows)}거래일 분봉 · "
-            "하단 접촉 후 실제 +10% 도달 연구 기준선"
+            f"실제 {'·'.join(ready_windows)}거래일 1분봉 · "
+            "6% 이상 비중복 반복 상승 연구 기준선"
         ),
         calculation_version=(
-            "intraday-elasticity-v10-top200-good-pullback-v1-public-review-50-"
+            "intraday-repeat-rise-v11-top200-fixed14-public-200-ai-review-50-"
             "kospi-market-cap-top200-v1"
         ),
         strategy_status="RESEARCH_ONLY",

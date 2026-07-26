@@ -106,6 +106,9 @@ def test_warming_window_requires_incomplete_structure_days() -> None:
             "box_high",
             "amplitude_pct",
             "position_pct",
+            "average_up_swing_pct",
+            "up_swing_count",
+            "average_time_to_6pct_hours",
             "median_daily_range_pct",
             "max_daily_range_pct",
             "median_daily_rebound_pct",
@@ -163,7 +166,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert html.index("const $ =") < html.index('$("#candidateCountTitle")')
     assert (tmp_path / ".nojekyll").exists()
     assert "AI 분석 30" not in html
-    assert 'id="searchInput"' not in html
+    assert 'id="candidateSearchInput"' in html
     assert 'class="tabs"' not in html
     assert 'data-window="7"' in html
     assert 'data-window="14"' in html
@@ -183,18 +186,18 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
         "기간 최고가",
         "현재 위치",
         "하단 방향",
-        "일중 진폭",
-        "저점 반등",
-        "도달일수",
+        "반복 상승폭",
+        "반복 횟수",
+        "도달시간",
     ]
     assert [header_html.index(value) for value in expected_headers] == sorted(
         header_html.index(value) for value in expected_headers
     )
     assert "진입 기준가" not in header_html
     assert "+10% 이력" not in header_html
-    assert "일중 진폭" in html
-    assert "저점 반등" in html
-    assert "도달일수" in html
+    assert "일중 진폭<br>" not in html
+    assert "저점 반등<br>" not in html
+    assert "도달일수<br>" not in html
     assert ">기간고점 대비<" in html
     assert "하단 방향" in html
     assert "하단 진입권" in html
@@ -238,7 +241,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "structure_status" in html
     assert '"average_trading_value_billion"' in html
     assert "item.flows" in html
-    assert "검토 후보 ${candidates.length}" in html
+    assert "정량 순위 ${candidates.length}" in html
     assert "extended_watchlist" in html
     assert "extended-watch-row" in html
     assert "extended-badge" in html
@@ -316,6 +319,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
 
 def test_report_rejects_missing_candidate() -> None:
     payload = demo_report().model_dump(mode="json")
+    payload["calculation_version"] = "intraday-repeat-rise-v11-test"
     payload["candidates"].pop()
 
     with pytest.raises(ValidationError):
