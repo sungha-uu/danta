@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -81,6 +83,7 @@ class ContextSnapshot:
     name: str
     fetched_at: str
     news_status: str
+    disclosure_status: str
     discussion_status: str
     news: tuple[CollectedNews, ...]
     discussion_titles: tuple[str, ...]
@@ -153,10 +156,12 @@ class PublicContextCollector:
         self,
         cache_root: Path,
         *,
+        dart_api_key: str | None = None,
         concurrency: int = 5,
         timeout_seconds: float = 12,
     ) -> None:
         self.cache_root = cache_root
+        self.dart_api_key = dart_api_key
         self.concurrency = concurrency
         self.timeout_seconds = timeout_seconds
 
@@ -180,6 +185,7 @@ class PublicContextCollector:
             follow_redirects=True,
             timeout=self.timeout_seconds,
         ) as client:
+            corp_codes = await self._load_dart_corp_codes(client)
             results = await asyncio.gather(
                 *(
                     self._collect_one(
@@ -187,6 +193,7 @@ class PublicContextCollector:
                         semaphore,
                         code,
                         name,
+                        corp_codes.get(code),
                         refresh=refresh,
                     )
                     for code, name in candidates
@@ -200,6 +207,7 @@ class PublicContextCollector:
         semaphore: asyncio.Semaphore,
         code: str,
         name: str,
+        corp_code: str | None,
         *,
         refresh: bool,
     ) -> ContextSnapshot:
@@ -212,13 +220,18 @@ class PublicContextCollector:
                         **body,
                         "news": tuple(CollectedNews(**item) for item in body["news"]),
                         "discussion_titles": tuple(body["discussion_titles"]),
+                        "disclosure_status": body.get(
+                            "disclosure_status",
+                            "NOT_CONFIGURED",
+                        ),
                     }
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 pass
         async with semaphore:
-            news_result, discussion_result = await asyncio.gather(
+            news_result, disclosure_result, discussion_result = await asyncio.gather(
                 self._fetch_news(client, name),
+                self._fetch_disclosures(client, corp_code),
                 self._fetch_discussion(client, code),
                 return_exceptions=True,
             )
@@ -228,6 +241,21 @@ class PublicContextCollector:
         else:
             news_status = "READY"
             news = news_result
+        if isinstance(disclosure_result, BaseException):
+            disclosure_status = "FAILED"
+            disclosures: tuple[CollectedNews, ...] = ()
+        else:
+            disclosure_status = (
+                "READY" if self.dart_api_key and corp_code else "NOT_CONFIGURED"
+            )
+            disclosures = disclosure_result
+        combined_news = tuple(
+            sorted(
+                [*news, *disclosures],
+                key=lambda item: item.published_at,
+                reverse=True,
+            )[:5]
+        )
         if isinstance(discussion_result, BaseException):
             discussion_status = "FAILED"
             titles: tuple[str, ...] = ()
@@ -239,8 +267,9 @@ class PublicContextCollector:
             name=name,
             fetched_at=datetime.now(UTC).isoformat(),
             news_status=news_status,
+            disclosure_status=disclosure_status,
             discussion_status=discussion_status,
-            news=news,
+            news=combined_news,
             discussion_titles=titles,
             discussion_url=f"https://finance.naver.com/item/board.naver?code={code}",
         )
@@ -251,6 +280,99 @@ class PublicContextCollector:
         )
         temporary.replace(cache_path)
         return snapshot
+
+    async def _load_dart_corp_codes(
+        self,
+        client: httpx.AsyncClient,
+    ) -> dict[str, str]:
+        if not self.dart_api_key:
+            return {}
+        cache_path = self.cache_root / "dart-corp-codes.json"
+        if cache_path.exists():
+            try:
+                body = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(body, dict) and body:
+                    return {str(key): str(value) for key, value in body.items()}
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+        response = await client.get(
+            "https://opendart.fss.or.kr/api/corpCode.xml",
+            params={"crtfc_key": self.dart_api_key},
+        )
+        response.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            xml_name = next(
+                name for name in archive.namelist() if name.lower().endswith(".xml")
+            )
+            root = ET.fromstring(archive.read(xml_name))
+        mapping = {
+            (item.findtext("stock_code") or "").strip(): (
+                item.findtext("corp_code") or ""
+            ).strip()
+            for item in root.findall("list")
+            if (item.findtext("stock_code") or "").strip()
+        }
+        temporary = cache_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(mapping, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(cache_path)
+        return mapping
+
+    async def _fetch_disclosures(
+        self,
+        client: httpx.AsyncClient,
+        corp_code: str | None,
+    ) -> tuple[CollectedNews, ...]:
+        if not self.dart_api_key or not corp_code:
+            return ()
+        end = datetime.now(UTC).date()
+        start = end - timedelta(days=30)
+        response = await client.get(
+            "https://opendart.fss.or.kr/api/list.json",
+            params={
+                "crtfc_key": self.dart_api_key,
+                "corp_code": corp_code,
+                "bgn_de": start.strftime("%Y%m%d"),
+                "end_de": end.strftime("%Y%m%d"),
+                "sort": "date",
+                "sort_mth": "desc",
+                "page_count": "5",
+            },
+        )
+        response.raise_for_status()
+        body = response.json()
+        if body.get("status") == "013":
+            return ()
+        if body.get("status") != "000":
+            raise ValueError(
+                f"DART disclosure request failed: {body.get('status')} "
+                f"{body.get('message')}"
+            )
+        result: list[CollectedNews] = []
+        for item in body.get("list", [])[:5]:
+            receipt = str(item.get("rcept_no", "")).strip()
+            title = _clean_text(str(item.get("report_nm", "")))
+            filed = str(item.get("rcept_dt", "")).strip()
+            if not receipt or not title:
+                continue
+            published = datetime.strptime(filed, "%Y%m%d").replace(
+                tzinfo=UTC
+            ).isoformat()
+            result.append(
+                CollectedNews(
+                    title=f"[공시] {title}"[:240],
+                    source="Open DART",
+                    published_at=published,
+                    url=(
+                        "https://dart.fss.or.kr/dsaf001/main.do"
+                        f"?rcpNo={receipt}"
+                    ),
+                    sentiment=_sentiment(title),
+                )
+            )
+        return tuple(result)
 
     async def _fetch_news(
         self,
@@ -327,7 +449,12 @@ def _discussion_summary(snapshot: ContextSnapshot) -> str:
 def _context_status(
     snapshot: ContextSnapshot,
 ) -> Literal["READY", "PARTIAL", "FAILED"]:
-    statuses = {snapshot.news_status, snapshot.discussion_status}
+    statuses = {
+        snapshot.news_status,
+        snapshot.disclosure_status,
+        snapshot.discussion_status,
+    }
+    statuses.discard("NOT_CONFIGURED")
     if statuses == {"READY"}:
         return "READY"
     if statuses == {"FAILED"}:
@@ -434,8 +561,7 @@ def build_context_review(
                 else Decimal("0")
             )
             decline_opportunity = (
-                (metrics.lower_trend_pct or Decimal("0")) < Decimal("-2")
-                and (metrics.position_pct or Decimal("100")) <= Decimal("35")
+                metrics.decline_shape == "GOOD_PULLBACK"
                 and flow_strength > 0
             )
             score = metrics.quant_score + flow_adjustment + news_adjustment
@@ -460,6 +586,8 @@ def build_context_review(
                 score = min(score, Decimal("59"))
             if expired_spike_reversion:
                 score = min(score, Decimal("44"))
+            if metrics.decline_shape == "STRUCTURAL_DECLINE":
+                score = min(score, Decimal("44"))
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
                 "외국인·기관 순유입"
@@ -477,6 +605,11 @@ def build_context_review(
                 opportunity_text = (
                     "21일 급등 뒤 상단 가격대가 낮아지고 시작 가격대로 "
                     "복귀해 추천 자격을 제한했습니다."
+                )
+            elif metrics.decline_shape == "STRUCTURAL_DECLINE":
+                opportunity_text = (
+                    "상·하단 동반 하락과 최근 반등폭 축소로 구조적 붕괴로 "
+                    "분류해 추천 자격을 제한했습니다."
                 )
             gate_text = (
                 f"박스 하단 접촉 후 3거래일 내 실제 +10% "
@@ -551,8 +684,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v5-expired-spike-gate",
-        prompt_version="expired-spike-reversion-flow-news-v5-20260726",
+        model_id="agent-context-review-v6-top200-pullback-dart",
+        prompt_version="good-pullback-structural-decline-flow-news-dart-v6-20260726",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

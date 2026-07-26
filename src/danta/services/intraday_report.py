@@ -1220,6 +1220,10 @@ def _ready_window_metrics(
             if analysis.lower_trend < Decimal("-2")
             else "횡보"
         ),
+        upper_trend_pct=analysis.upper_trend.quantize(Decimal("0.01")),
+        range_retention_pct=analysis.range_retention.quantize(Decimal("0.01")),
+        rebound_retention_pct=analysis.rebound_retention.quantize(Decimal("0.01")),
+        decline_shape=analysis.decline_shape,
         return_pct=period_return,
         average_trading_value_billion=average_value,
         volume_ratio=volume_ratio,

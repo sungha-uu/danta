@@ -173,5 +173,24 @@ def load_krx_environment(settings: AppSettings) -> None:
     os.environ["KRX_PW"] = krx_password
 
 
+def load_dart_api_key(settings: AppSettings) -> str:
+    try:
+        lines = settings.krx_credentials_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"provider credential file not found: {settings.krx_credentials_path}"
+        ) from exc
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() in {"DART_KEY", "DART_API_KEY"}:
+            secret = value.strip().strip("\"'")
+            if secret:
+                return secret
+    raise ValueError("DART_KEY must be configured")
+
+
 def clear_settings_cache() -> None:
     load_settings.cache_clear()

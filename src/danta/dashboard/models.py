@@ -110,6 +110,15 @@ class WindowMetrics(BaseModel):
     current_vs_window_high_pct: Decimal | None = Field(default=None, le=0)
     lower_trend_pct: Decimal | None = None
     lower_trend: Literal["상승", "횡보", "하락"] | None = None
+    upper_trend_pct: Decimal | None = None
+    range_retention_pct: Decimal | None = Field(default=None, ge=0, le=200)
+    rebound_retention_pct: Decimal | None = Field(default=None, ge=0, le=200)
+    decline_shape: Literal[
+        "GOOD_PULLBACK",
+        "STABLE_BOX",
+        "STRUCTURAL_DECLINE",
+        "OTHER",
+    ] | None = None
     return_pct: Decimal
     average_trading_value_billion: Decimal = Field(ge=0)
     volume_ratio: Decimal = Field(ge=0)

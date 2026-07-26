@@ -212,6 +212,8 @@ AI는 정량 상위 50개 밖의 종목을 추가하거나 원시 숫자를 수�
 
 - [Open DART 소개](https://opendart.fss.or.kr/intro/main.do)
 - [Open DART 개발가이드](https://opendart.fss.or.kr/guide/main.do?apiGrpCd=DS001)
+
+정량 상위 50개 심층 검토에서는 Open DART 고유번호 ZIP을 로컬 캐시해 종목코드와 기업 고유번호를 연결하고, 공식 공시검색 API의 최근 30일 공시를 최대 5건까지 수집한다. 공시 접수번호·제목·접수일·공식 원문 링크를 보존하며 Google 뉴스 제목과 합쳐 최신 5건을 대시보드에 표시한다. DART 실패를 뉴스 성공으로 숨기지 않고 별도 공급자 상태로 기록한다.
 - [KRX Data Marketplace](https://data.krx.co.kr/contents/MDC/MAIN/main/index.cmd)
 - [KRX 정보 이용정책](https://data.krx.co.kr/inc/datasale/Market%20Data%20Usage%20Polices_ko.pdf)
 

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from danta.adapters.kis.client import KisApiError, KisClient
 from danta.adapters.krx.client import KrxDataError, PykrxMarketDataClient
 from danta.config import (
+    load_dart_api_key,
     load_kis_credentials,
     load_krx_environment,
     load_settings,
@@ -286,7 +287,10 @@ def main() -> None:
         try:
             report = load_dashboard_report(args.input)
             snapshots = asyncio.run(
-                PublicContextCollector(args.cache_root).collect(
+                PublicContextCollector(
+                    args.cache_root,
+                    dart_api_key=load_dart_api_key(load_settings()),
+                ).collect(
                     [(item.code, item.name) for item in report.candidates],
                     refresh=args.refresh,
                 )

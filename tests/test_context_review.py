@@ -40,6 +40,7 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
             name=candidate.name,
             fetched_at=now.isoformat(),
             news_status="READY",
+            disclosure_status="READY",
             discussion_status="READY",
             news=(
                 CollectedNews(
@@ -64,7 +65,7 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
     validated = DashboardReport.model_validate(reviewed_report.model_dump())
 
     assert len(review.candidates) == 50
-    assert review.model_id == "agent-context-review-v5-expired-spike-gate"
+    assert review.model_id == "agent-context-review-v6-top200-pullback-dart"
     assert all(set(candidate.windows) == {"7", "14", "21"} for candidate in review.candidates)
     assert all(candidate.context_status == "READY" for candidate in review.candidates)
     assert all(len(candidate.news) == 1 for candidate in validated.candidates)
