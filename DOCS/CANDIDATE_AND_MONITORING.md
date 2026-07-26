@@ -9,9 +9,9 @@
 ```text
 priority = eligibility
            → lower_contact_then_actual_10pct_reach
-           → current_in_lower_entry_zone
+           → current_in_selected_window_lower_zone
+           → entry_target_above_current_price
            → foreign_institution_flow
-           → active_box_valid
            → event_risk
 ```
 
@@ -36,7 +36,7 @@ priority = eligibility
 
 기간 박스는 선택한 7·14·21거래일 전체를 요약하는 비교 기준이고, `활성 박스(active box)`는 가격 수준이 이동한 뒤 현재까지 실제로 작동하는 최근 구간이다. 급락 전 높은 박스와 급락 후 낮은 박스를 하나로 섞지 않는다.
 
-현재 계산 버전은 `intraday-elasticity-v8-actual-10pct-gate-v1`이다.
+현재 계산 버전은 `intraday-elasticity-v9-period-lower-entry-gate-v1`이다.
 
 - 일별 60분봉 대표가격의 최근 수준이 직전 최대 3거래일 중앙값에서 `6%` 이상 이동하고, 이동 뒤 최소 4거래일이 남아 있으면 가장 최근의 유효 이동일을 활성 박스 시작일 후보로 삼는다.
 - 이동 직후 최대 2거래일 대표가격 중앙값도 직전 수준과 같은 방향으로 임계값의 75% 이상 떨어져 있어야 일시적 꼬리가 아닌 레짐 이동으로 인정한다.
@@ -70,6 +70,8 @@ active_upside_pct = (active_upper_zone_low / current_price - 1) × 100
 - 현재 위치, 일중 진폭, 저점 반등, 수급과 에이전트 판단
 
 `+10%` 이력이 0회인 종목은 공개 비교군 50개에는 검증용 비추천 사례로 남길 수 있지만 추천 등급을 받을 수 없고, 한 번 이상 도달한 종목보다 앞에 배치할 수 없다.
+
+후보의 `현재 위치`와 진입 자격은 활성 박스 위치가 아니라 사용자가 선택한 7·14·21일 전체의 기간 박스 하단·상단으로 계산한다. 활성 박스가 새 가격 레짐을 발견하더라도 기간 하단에서 멀어진 현재가를 하단 후보로 재분류할 수 없다. `진입 기준가 × 1.10`이 현재가 이하인 종목은 목표 가격을 이미 지나온 것이므로 추천할 수 없다.
 
 ### 3.1 불변 데이터·봉 정책
 

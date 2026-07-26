@@ -394,7 +394,6 @@ def build_context_review(
             score = metrics.quant_score + flow_adjustment + news_adjustment
             if decline_opportunity:
                 score += Decimal("5")
-            active = metrics.active_box
             actual_10pct_reaches = metrics.target_reach_count or 0
             current_10pct_was_reached = (
                 metrics.current_vs_window_high_pct is not None
@@ -407,13 +406,11 @@ def build_context_review(
                 score = min(score, Decimal("59"))
             if actual_10pct_reaches < 1 or not current_10pct_was_reached:
                 score = min(score, Decimal("59"))
-            if active is not None and active.confidence == "LOW":
-                score = min(score, Decimal("74"))
             if (
-                active is not None
-                and candidate.current_price < active.structural_invalidation_price
+                metrics.target_price_10pct is None
+                or metrics.target_price_10pct <= candidate.current_price
             ):
-                score = min(score, Decimal("44"))
+                score = min(score, Decimal("59"))
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
                 "외국인·기관 순유입"
@@ -429,12 +426,22 @@ def build_context_review(
             )
             gate_text = (
                 f"박스 하단 접촉 후 3거래일 내 실제 +10% "
-                f"{actual_10pct_reaches}회, 현재가+10% 과거 도달 확인"
-                if actual_10pct_reaches > 0 and current_10pct_was_reached
+                f"{actual_10pct_reaches}회, 현재가+10% 과거 도달 확인, "
+                "진입 목표가가 현재가 위"
+                if (
+                    actual_10pct_reaches > 0
+                    and current_10pct_was_reached
+                    and metrics.target_price_10pct is not None
+                    and metrics.target_price_10pct > candidate.current_price
+                )
                 else (
                     "박스 하단 접촉 후 실제 +10% 도달 이력 없음"
                     if actual_10pct_reaches < 1
-                    else "기간 실제 최고가가 현재가+10%에 미달"
+                    else (
+                        "기간 실제 최고가가 현재가+10%에 미달"
+                        if not current_10pct_was_reached
+                        else "하단 기준 +10% 목표가를 현재가가 이미 통과"
+                    )
                 )
             )
             news_text = (
@@ -489,8 +496,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v3-actual-10pct-priority",
-        prompt_version="actual-10pct-lower-flow-news-discussion-v3-20260726",
+        model_id="agent-context-review-v4-period-lower-entry-priority",
+        prompt_version="period-lower-entry-10pct-flow-news-v4-20260726",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

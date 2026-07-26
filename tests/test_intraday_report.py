@@ -276,7 +276,7 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     assert _setup_rejection_reasons(
         replace(analysis, position=Decimal("68"), target_reaches=0)
     ) == (
-        "현재 위치가 활성 박스 하단 35% 밖",
+        "현재 위치가 선택 기간 박스 하단 35% 밖",
         "박스 하단 접촉 후 3거래일 내 실제 +10% 도달 이력 없음",
     )
 
@@ -335,9 +335,13 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
         structural_invalidation_price=Decimal("109"),
     )
     invalidated = replace(analysis, active=invalid_active)
-    assert not _setup_eligible(invalidated)
-    assert "현재가가 활성 구조 무효화선 아래" in _setup_rejection_reasons(
-        invalidated
+    assert _setup_eligible(invalidated)
+    assert _setup_rejection_reasons(invalidated) == ()
+
+    target_already_passed = replace(analysis, target_price=Decimal("107"))
+    assert not _setup_eligible(target_already_passed)
+    assert "하단 기준 +10% 목표가를 현재가가 이미 통과" in (
+        _setup_rejection_reasons(target_already_passed)
     )
 
 

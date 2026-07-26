@@ -717,33 +717,24 @@ def _setup_grade(
 
 
 def _setup_eligible(item: _Analyzed) -> bool:
-    position = item.active.position if item.active else item.position
-    active_valid = (
-        item.active is None
-        or item.hourly_closes[-1] >= item.active.structural_invalidation_price
-    )
     return (
-        position <= Decimal("35")
+        item.position <= Decimal("35")
         and item.target_reaches >= 1
         and item.current_to_window_high >= Decimal("10")
-        and active_valid
+        and item.target_price > item.hourly_closes[-1]
     )
 
 
 def _setup_rejection_reasons(item: _Analyzed) -> tuple[str, ...]:
     reasons: list[str] = []
-    position = item.active.position if item.active else item.position
-    if position > Decimal("35"):
-        reasons.append("현재 위치가 활성 박스 하단 35% 밖")
+    if item.position > Decimal("35"):
+        reasons.append("현재 위치가 선택 기간 박스 하단 35% 밖")
     if item.target_reaches < 1:
         reasons.append("박스 하단 접촉 후 3거래일 내 실제 +10% 도달 이력 없음")
     if item.current_to_window_high < Decimal("10"):
         reasons.append("기간 실제 최고가가 현재가 +10%에 미달")
-    if (
-        item.active is not None
-        and item.hourly_closes[-1] < item.active.structural_invalidation_price
-    ):
-        reasons.append("현재가가 활성 구조 무효화선 아래")
+    if item.target_price <= item.hourly_closes[-1]:
+        reasons.append("하단 기준 +10% 목표가를 현재가가 이미 통과")
     return tuple(reasons)
 
 
@@ -813,12 +804,8 @@ def _score_all(
     )
     result: list[_Analyzed] = []
     for item in analyses:
-        active_position = item.active.position if item.active else item.position
-        active_upside = (
-            item.active.upside_to_upper
-            if item.active
-            else item.current_to_window_high
-        )
+        period_position = item.position
+        period_upside = item.current_to_window_high
         day_count = Decimal("7")
         target_frequency_score = min(
             HUNDRED,
@@ -846,11 +833,11 @@ def _score_all(
         liquidity_score = liquidity_log / Decimal(str(max_liquidity_log)) * HUNDRED
         lower_score = max(
             Decimal("0"),
-            HUNDRED - max(Decimal("0"), active_position),
+            HUNDRED - max(Decimal("0"), period_position),
         )
         upside_room_score = min(
             HUNDRED,
-            max(Decimal("0"), active_upside)
+            max(Decimal("0"), period_upside)
             / Decimal("15")
             * HUNDRED,
         )
@@ -871,19 +858,9 @@ def _score_all(
             + rebound_score * Decimal("0.08")
             + daily_range_score * Decimal("0.05")
         )
-        validity_factor = (
-            Decimal("0.20")
-            if (
-                item.active is not None
-                and item.hourly_closes[-1]
-                < item.active.structural_invalidation_price
-            )
-            else Decimal("1")
-        )
         score = (
             raw_score
-            * _entry_location_factor(active_position)
-            * validity_factor
+            * _entry_location_factor(period_position)
         )
         result.append(
             replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
@@ -955,7 +932,7 @@ def screening_pool_audit(
                 eligible=not reasons,
                 rejection_reasons=reasons,
                 position_pct=(
-                    item.active.position if item.active else item.position
+                    item.position
                 ).quantize(Decimal("0.01")),
                 lower_trend_pct=item.lower_trend.quantize(Decimal("0.01")),
                 target_reach_count=(
@@ -1028,7 +1005,7 @@ def _ready_window_metrics(
     rejection_reasons = _setup_rejection_reasons(analysis)
     grade = _setup_grade(
         score,
-        analysis.active.position,
+        analysis.position,
         analysis.lower_trend,
         (
             analysis.target_reaches
@@ -1036,14 +1013,12 @@ def _ready_window_metrics(
             else 0
         ),
     )
-    if current_price < analysis.active.structural_invalidation_price:
+    if analysis.target_price <= current_price:
         grade = (
             "NOT_RECOMMEND"
             if score >= Decimal("45")
             else "STRONG_NOT_RECOMMEND"
         )
-    elif analysis.active.confidence == "LOW" and grade == "STRONG_RECOMMEND":
-        grade = "RECOMMEND"
     flow_confirmation: Literal["순유입", "중립", "순유출"] = (
         "순유입"
         if flows.foreign + flows.institution > 0
@@ -1059,7 +1034,7 @@ def _ready_window_metrics(
         box_low=analysis.low.quantize(Decimal("0.01")),
         box_high=analysis.high.quantize(Decimal("0.01")),
         amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
-        position_pct=analysis.active.position.quantize(Decimal("0.01")),
+        position_pct=analysis.position.quantize(Decimal("0.01")),
         median_daily_range_pct=analysis.median_daily_range.quantize(
             Decimal("0.01")
         ),
@@ -1101,8 +1076,6 @@ def _ready_window_metrics(
         ai_grade=grade,
         ai_comment=(
             f"실제 {days}거래일 1분봉을 60분봉으로 집계했고 "
-            f"{analysis.active.start_date[4:6]}.{analysis.active.start_date[6:8]}부터 "
-            f"{analysis.active.trading_days}거래일을 활성 박스로 판정했습니다. "
             f"박스 하단 접촉 후 3거래일 내 실제 +10% "
             f"{analysis.target_reaches}회입니다. "
             f"일중 진폭 중앙값 "
@@ -1294,7 +1267,7 @@ def build_intraday_report(
             "하단 접촉 후 실제 +10% 도달 연구 기준선"
         ),
         calculation_version=(
-            "intraday-elasticity-v8-actual-10pct-gate-v1-public-review-50-"
+            "intraday-elasticity-v9-period-lower-entry-gate-v1-public-review-50-"
             "prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",

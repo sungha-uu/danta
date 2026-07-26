@@ -41,7 +41,7 @@ def test_demo_report_has_fifty_ranked_and_graded_candidates_for_every_window() -
 def test_actual_ten_pct_dashboard_blocks_false_recommendations() -> None:
     report = demo_report().model_copy(
         update={
-            "calculation_version": "intraday-elasticity-v8-actual-10pct-gate-v1"
+            "calculation_version": "intraday-elasticity-v9-period-lower-entry-gate-v1"
         }
     )
     candidate = report.candidates[0]

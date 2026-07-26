@@ -13,7 +13,10 @@ RECOMMENDED_GRADES = {"STRONG_RECOMMEND", "RECOMMEND"}
 
 
 def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
-    if "actual-10pct-gate" not in report.calculation_version:
+    if not any(
+        version in report.calculation_version
+        for version in ("actual-10pct-gate", "period-lower-entry-gate")
+    ):
         return
     errors: list[str] = []
     for window in ("7", "14", "21"):
@@ -25,6 +28,8 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
                 continue
             if (
                 metrics.box_low is None
+                or metrics.box_high is None
+                or metrics.position_pct is None
                 or metrics.target_price_10pct is None
                 or metrics.target_reach_count is None
                 or metrics.current_vs_window_high_pct is None
@@ -40,16 +45,14 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
                 and actual_high >= current_target
                 and target_consistent
             )
-            active_valid = (
-                metrics.active_box is None
-                or candidate.current_price
-                >= metrics.active_box.structural_invalidation_price
+            current_in_lower_zone = (
+                metrics.position_pct is not None
+                and metrics.position_pct <= Decimal("35")
             )
             qualifies = (
                 ten_pct_evidence
-                and metrics.position_pct is not None
-                and metrics.position_pct <= Decimal("35")
-                and active_valid
+                and current_in_lower_zone
+                and metrics.target_price_10pct > candidate.current_price
             )
             if metrics.rank is not None:
                 (eligible_ranks if qualifies else ineligible_ranks).append(metrics.rank)
@@ -71,6 +74,15 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
             if not target_consistent:
                 errors.append(
                     f"{window}d {candidate.code} +10% target price mismatch"
+                )
+            expected_position = (
+                (candidate.current_price - metrics.box_low)
+                / (metrics.box_high - metrics.box_low)
+                * Decimal("100")
+            )
+            if abs(metrics.position_pct - expected_position) > Decimal("0.02"):
+                errors.append(
+                    f"{window}d {candidate.code} period-box position mismatch"
                 )
         if (
             eligible_ranks
