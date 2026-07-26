@@ -275,6 +275,7 @@
         <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
         <td>${structureCell(item, sparkline(item, candidate.name, candidate.code))}</td>
         <td>${structureCell(item, won.format(n(item.box_low)))}</td>
+        <td>${structureCell(item, won.format(n(item.target_price_10pct)))}</td>
         <td>${structureCell(item, won.format(n(item.box_high)))}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
         <td>${structureCell(item, lowerTrendCell(item))}</td>
