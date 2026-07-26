@@ -1,11 +1,85 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from danta.dashboard.models import DashboardReport
+
+TEN_PCT = Decimal("1.10")
+RECOMMENDED_GRADES = {"STRONG_RECOMMEND", "RECOMMEND"}
+
+
+def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
+    if "actual-10pct-gate" not in report.calculation_version:
+        return
+    errors: list[str] = []
+    for window in ("7", "14", "21"):
+        eligible_ranks: list[int] = []
+        ineligible_ranks: list[int] = []
+        for candidate in report.candidates:
+            metrics = candidate.windows[window]
+            if metrics.structure_status != "READY":
+                continue
+            if (
+                metrics.box_low is None
+                or metrics.target_price_10pct is None
+                or metrics.target_reach_count is None
+                or metrics.current_vs_window_high_pct is None
+            ):
+                errors.append(f"{window}d {candidate.code} missing +10% audit fields")
+                continue
+            actual_high = max(bar.high for bar in metrics.chart_bars)
+            current_target = candidate.current_price * TEN_PCT
+            entry_target = metrics.box_low * TEN_PCT
+            target_consistent = abs(metrics.target_price_10pct - entry_target) <= Decimal("0.02")
+            ten_pct_evidence = (
+                metrics.target_reach_count >= 1
+                and actual_high >= current_target
+                and target_consistent
+            )
+            active_valid = (
+                metrics.active_box is None
+                or candidate.current_price
+                >= metrics.active_box.structural_invalidation_price
+            )
+            qualifies = (
+                ten_pct_evidence
+                and metrics.position_pct is not None
+                and metrics.position_pct <= Decimal("35")
+                and active_valid
+            )
+            if metrics.rank is not None:
+                (eligible_ranks if qualifies else ineligible_ranks).append(metrics.rank)
+            if metrics.ai_grade in RECOMMENDED_GRADES and not qualifies:
+                errors.append(
+                    f"{window}d {candidate.code} recommended without actual +10% evidence"
+                )
+            expected_vs_high = min(
+                Decimal("0"),
+                (candidate.current_price / actual_high - Decimal("1")) * Decimal("100"),
+            )
+            if (
+                abs(metrics.current_vs_window_high_pct - expected_vs_high)
+                > Decimal("0.02")
+            ):
+                errors.append(
+                    f"{window}d {candidate.code} window-high percentage mismatch"
+                )
+            if not target_consistent:
+                errors.append(
+                    f"{window}d {candidate.code} +10% target price mismatch"
+                )
+        if (
+            eligible_ranks
+            and ineligible_ranks
+            and max(eligible_ranks) > min(ineligible_ranks)
+        ):
+            errors.append(f"{window}d ineligible candidate ranked ahead of eligible candidate")
+    if errors:
+        raise ValueError("dashboard +10% invariant failed: " + "; ".join(errors[:10]))
 
 
 def load_dashboard_report(path: Path) -> DashboardReport:
@@ -33,6 +107,7 @@ def _safe_json(report: DashboardReport) -> str:
 
 
 def build_dashboard(report: DashboardReport, output_dir: Path) -> Path:
+    _validate_actual_ten_pct_dashboard(report)
     template = _asset("template.html")
     html = (
         template.replace("/*__DANTA_CSS__*/", _asset("report.css"))

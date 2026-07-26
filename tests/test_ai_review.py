@@ -105,3 +105,35 @@ def test_active_discovery_rank_prioritizes_valid_lower_zone_and_inflow() -> None
         outflow,
         "7",
     )
+
+    no_actual_ten_pct = inflow.model_copy(
+        update={
+            "windows": {
+                **inflow.windows,
+                "7": inflow_metrics.model_copy(
+                    update={
+                        "target_reach_count": 0,
+                        "final_score": Decimal("100"),
+                    }
+                ),
+            }
+        }
+    )
+    actual_ten_pct = outflow.model_copy(
+        update={
+            "windows": {
+                **outflow.windows,
+                "7": outflow_metrics.model_copy(
+                        update={
+                            "target_reach_count": 1,
+                            "current_vs_window_high_pct": Decimal("-12"),
+                            "final_score": Decimal("1"),
+                        }
+                ),
+            }
+        }
+    )
+
+    assert _active_discovery_rank_key(
+        actual_ten_pct, "7"
+    ) > _active_discovery_rank_key(no_actual_ten_pct, "7")

@@ -718,14 +718,14 @@ def _setup_grade(
 
 def _setup_eligible(item: _Analyzed) -> bool:
     position = item.active.position if item.active else item.position
-    reaches = item.active.upper_reaches if item.active else item.target_reaches
     active_valid = (
         item.active is None
         or item.hourly_closes[-1] >= item.active.structural_invalidation_price
     )
     return (
         position <= Decimal("35")
-        and reaches >= 1
+        and item.target_reaches >= 1
+        and item.current_to_window_high >= Decimal("10")
         and active_valid
     )
 
@@ -733,11 +733,12 @@ def _setup_eligible(item: _Analyzed) -> bool:
 def _setup_rejection_reasons(item: _Analyzed) -> tuple[str, ...]:
     reasons: list[str] = []
     position = item.active.position if item.active else item.position
-    reaches = item.active.upper_reaches if item.active else item.target_reaches
     if position > Decimal("35"):
         reasons.append("현재 위치가 활성 박스 하단 35% 밖")
-    if reaches < 1:
-        reasons.append("활성 하단권 접촉 후 5거래일 내 활성 상단권 재도달 이력 없음")
+    if item.target_reaches < 1:
+        reasons.append("박스 하단 접촉 후 3거래일 내 실제 +10% 도달 이력 없음")
+    if item.current_to_window_high < Decimal("10"):
+        reasons.append("기간 실제 최고가가 현재가 +10%에 미달")
     if (
         item.active is not None
         and item.hourly_closes[-1] < item.active.structural_invalidation_price
@@ -853,20 +854,18 @@ def _score_all(
             / Decimal("15")
             * HUNDRED,
         )
-        resolved_active = (
-            item.active.upper_reaches + item.active.stop_first + item.active.timeouts
-            if item.active
-            else item.target_reaches
+        resolved_targets = item.target_reaches + (
+            item.lower_contacts - item.target_reaches - item.target_pending
         )
-        active_quality_score = (
-            item.active.success_rate
-            if item.active and resolved_active
-            else min(HUNDRED, Decimal(item.target_reaches) * Decimal("50"))
+        target_quality_score = (
+            Decimal(item.target_reaches) / Decimal(resolved_targets) * HUNDRED
+            if resolved_targets > 0
+            else Decimal("0")
         )
         raw_score = (
             upside_room_score * Decimal("0.22")
             + lower_score * Decimal("0.22")
-            + active_quality_score * Decimal("0.18")
+            + target_quality_score * Decimal("0.18")
             + target_frequency_score * Decimal("0.10")
             + liquidity_score * Decimal("0.15")
             + rebound_score * Decimal("0.08")
@@ -1005,9 +1004,10 @@ def _ready_window_metrics(
     if analysis.active is None:
         raise CandidateReportError("intraday READY metrics require active box analysis")
     current_price = analysis.hourly_closes[-1]
+    actual_window_high = max(bar.high for bar in analysis.hour_bars)
     current_vs_high = min(
         Decimal("0"),
-        (current_price / analysis.high - Decimal("1")) * HUNDRED,
+        (current_price / actual_window_high - Decimal("1")) * HUNDRED,
     )
     _, average_value, volume_ratio, flows = _reference_values(
         dataset,
@@ -1030,7 +1030,11 @@ def _ready_window_metrics(
         score,
         analysis.active.position,
         analysis.lower_trend,
-        analysis.active.upper_reaches,
+        (
+            analysis.target_reaches
+            if analysis.current_to_window_high >= Decimal("10")
+            else 0
+        ),
     )
     if current_price < analysis.active.structural_invalidation_price:
         grade = (
@@ -1099,18 +1103,14 @@ def _ready_window_metrics(
             f"실제 {days}거래일 1분봉을 60분봉으로 집계했고 "
             f"{analysis.active.start_date[4:6]}.{analysis.active.start_date[6:8]}부터 "
             f"{analysis.active.trading_days}거래일을 활성 박스로 판정했습니다. "
-            f"활성 하단권→상단권 재도달 {analysis.active.upper_reaches}회, "
-            f"손절 선행 {analysis.active.stop_first}회, "
-            f"관측 재도달률 {analysis.active.success_rate.quantize(Decimal('0.1'))}% "
-            f"(신뢰 {analysis.active.confidence})입니다. "
+            f"박스 하단 접촉 후 3거래일 내 실제 +10% "
+            f"{analysis.target_reaches}회입니다. "
             f"일중 진폭 중앙값 "
             f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%, "
             f"저점 반등 중앙값 "
             f"{analysis.median_daily_rebound.quantize(Decimal('0.1'))}%, "
             f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
             f"{analysis.reach_days_10}/{analysis.reach_days_15}일, "
-            f"하단 접촉 후 3거래일 이내 +10% "
-            f"{analysis.target_reaches}회입니다. "
             + (
                 "자격 게이트를 통과했습니다. "
                 if not rejection_reasons
@@ -1119,10 +1119,7 @@ def _ready_window_metrics(
             + "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
         ),
         reasons=[
-            f"활성 상단 재도달 {analysis.active.upper_reaches}회 / "
-            f"손절 선행 {analysis.active.stop_first}회",
-            f"활성 박스 신뢰 {analysis.active.confidence}, "
-            f"반등 {analysis.active.rebound_trend}",
+            f"박스 하단 접촉 후 실제 +10% 도달 {analysis.target_reaches}회",
             f"일중 진폭 중앙값 "
             f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%",
             *rejection_reasons,
@@ -1294,10 +1291,10 @@ def build_intraday_report(
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime=(
             f"실제 {'·'.join(ready_windows)}거래일 분봉 · "
-            "활성 박스 재도달 연구 기준선"
+            "하단 접촉 후 실제 +10% 도달 연구 기준선"
         ),
         calculation_version=(
-            "intraday-elasticity-v7-active-box-v1-public-review-50-"
+            "intraday-elasticity-v8-actual-10pct-gate-v1-public-review-50-"
             "prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",

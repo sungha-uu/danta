@@ -395,17 +395,18 @@ def build_context_review(
             if decline_opportunity:
                 score += Decimal("5")
             active = metrics.active_box
-            active_reaches = (
-                active.upper_reaches
-                if active is not None
-                else (metrics.target_reach_count or 0)
+            actual_10pct_reaches = metrics.target_reach_count or 0
+            current_10pct_was_reached = (
+                metrics.current_vs_window_high_pct is not None
+                and metrics.current_vs_window_high_pct
+                <= (Decimal("1") / Decimal("1.10") - Decimal("1")) * Decimal("100")
             )
             if (metrics.position_pct or Decimal("100")) > Decimal("50"):
                 score = min(score, Decimal("44"))
             elif (metrics.position_pct or Decimal("100")) > Decimal("35"):
                 score = min(score, Decimal("59"))
-            if active_reaches < 1:
-                score = min(score, Decimal("69"))
+            if actual_10pct_reaches < 1 or not current_10pct_was_reached:
+                score = min(score, Decimal("59"))
             if active is not None and active.confidence == "LOW":
                 score = min(score, Decimal("74"))
             if (
@@ -427,18 +428,13 @@ def build_context_review(
                 else "하락 추세는 단독 감점하지 않았습니다."
             )
             gate_text = (
-                (
-                    f"활성 하단→상단 재도달 {active.upper_reaches}회, "
-                    f"손절 선행 {active.stop_first}회, "
-                    f"후향 관측 재도달률 "
-                    f"{active.success_rate_pct.quantize(Decimal('0.1'))}% "
-                    f"(신뢰 {active.confidence})"
-                )
-                if active is not None
+                f"박스 하단 접촉 후 3거래일 내 실제 +10% "
+                f"{actual_10pct_reaches}회, 현재가+10% 과거 도달 확인"
+                if actual_10pct_reaches > 0 and current_10pct_was_reached
                 else (
-                    f"하단 후 +10% 도달 {metrics.target_reach_count}회"
-                    if (metrics.target_reach_count or 0) > 0
-                    else "하단 후 +10% 도달 이력 없음"
+                    "박스 하단 접촉 후 실제 +10% 도달 이력 없음"
+                    if actual_10pct_reaches < 1
+                    else "기간 실제 최고가가 현재가+10%에 미달"
                 )
             )
             news_text = (
@@ -493,8 +489,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v2-active-box-flow-priority",
-        prompt_version="active-box-lower-flow-news-discussion-v2-20260726",
+        model_id="agent-context-review-v3-actual-10pct-priority",
+        prompt_version="actual-10pct-lower-flow-news-discussion-v3-20260726",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

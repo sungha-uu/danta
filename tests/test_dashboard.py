@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from danta.dashboard.builder import build_dashboard
+from danta.dashboard.builder import (
+    _validate_actual_ten_pct_dashboard,
+    build_dashboard,
+)
 from danta.dashboard.demo import _target_reach_episodes, demo_report
 from danta.dashboard.models import DashboardReport
 
@@ -33,6 +36,39 @@ def test_demo_report_has_fifty_ranked_and_graded_candidates_for_every_window() -
             for item in metrics
         )
         assert all(item.target_reach_count >= 0 for item in metrics)
+
+
+def test_actual_ten_pct_dashboard_blocks_false_recommendations() -> None:
+    report = demo_report().model_copy(
+        update={
+            "calculation_version": "intraday-elasticity-v8-actual-10pct-gate-v1"
+        }
+    )
+    candidate = report.candidates[0]
+    metrics = candidate.windows["7"].model_copy(
+        update={
+            "ai_grade": "RECOMMEND",
+            "target_reach_count": 0,
+        }
+    )
+    report = report.model_copy(
+        update={
+            "candidates": [
+                candidate.model_copy(
+                    update={
+                        "windows": {
+                            **candidate.windows,
+                            "7": metrics,
+                        }
+                    }
+                ),
+                *report.candidates[1:],
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="recommended without actual \\+10% evidence"):
+        _validate_actual_ten_pct_dashboard(report)
         assert all(item.median_daily_range_pct >= 0 for item in metrics)
         assert all(item.max_daily_rebound_pct >= item.median_daily_rebound_pct for item in metrics)
         assert all(len(item.chart_bars) == len(item.closes) for item in metrics)
@@ -142,13 +178,11 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
         "기간수익률",
         ">기간고점 대비<",
         "가격 흐름",
-        "활성 하단권",
-        "활성 상단권",
-        "재도달/손절",
-        "활성 신뢰",
-        "기간 하단",
-        "기간 상단",
-        "활성 위치",
+        "진입 기준가",
+        "+10% 목표가",
+        "기간 최고가",
+        "+10% 이력",
+        "현재 위치",
         "하단 방향",
         "일중 진폭",
         "저점 반등",

@@ -7,7 +7,7 @@
 - 활성 증권사: 한국투자증권 Open API(KIS)
 - 기본 환경: 모의투자
 - KRX 실제 데이터 후보 30개 산출과 KIS 현재가 교차검증 구현
-- 기존 일봉 종가 `box-quant-v1`은 연구용·주문 불가, 실제 1분봉·60분봉 기반 `intraday-elasticity-v7-active-box-v1` 연구판과 `PI-014-WF-V1` 워크포워드 구현
+- 기존 일봉 종가 `box-quant-v1`은 연구용·주문 불가, 실제 1분봉·60분봉 기반 `intraday-elasticity-v8-actual-10pct-gate-v1` 연구판과 `PI-014-WF-V1` 워크포워드 구현
 - GitHub Pages 실제 정적 대시보드·SMTP 배포 알림 구현
 - KIS 자격증명·현재가·일봉·잔고·주문가능현금·WebSocket 접속키 진단 구현
 - KIS 현금주문 계약 구현, 주문 제출 기본 잠금

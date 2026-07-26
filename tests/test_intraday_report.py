@@ -277,8 +277,38 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
         replace(analysis, position=Decimal("68"), target_reaches=0)
     ) == (
         "현재 위치가 활성 박스 하단 35% 밖",
-        "활성 하단권 접촉 후 5거래일 내 활성 상단권 재도달 이력 없음",
+        "박스 하단 접촉 후 3거래일 내 실제 +10% 도달 이력 없음",
     )
+
+    active_reached_but_no_ten_pct = replace(
+        analysis,
+        active=_ActiveBox(
+            start_date="20260720",
+            trading_days=5,
+            lower_zone_low=Decimal("100"),
+            lower_zone_high=Decimal("102"),
+            upper_zone_low=Decimal("106"),
+            upper_zone_high=Decimal("108"),
+            position=Decimal("20"),
+            amplitude=Decimal("8"),
+            upside_to_upper=Decimal("5"),
+            inclusion=Decimal("80"),
+            lower_contacts=1,
+            upper_reaches=1,
+            stop_first=0,
+            timeouts=0,
+            pending=0,
+            completed_cycles=0,
+            success_rate=Decimal("100"),
+            stop_first_rate=Decimal("0"),
+            median_time_to_target_hours=Decimal("2"),
+            rebound_trend="표본 부족",
+            confidence="LOW",
+            structural_invalidation_price=Decimal("98"),
+        ),
+        target_reaches=0,
+    )
+    assert not _setup_eligible(active_reached_but_no_ten_pct)
 
     invalid_active = _ActiveBox(
         start_date="20260720",
@@ -322,6 +352,9 @@ def test_entry_location_is_a_gate_not_a_small_bonus() -> None:
     assert _setup_grade(
         Decimal("90"), Decimal("20"), Decimal("-9")
     ) == "STRONG_RECOMMEND"
+    assert _setup_grade(
+        Decimal("90"), Decimal("20"), Decimal("-9"), target_reaches=0
+    ) == "NOT_RECOMMEND"
 
 
 def test_ready_period_return_matches_chart_endpoints() -> None:

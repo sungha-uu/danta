@@ -157,21 +157,29 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
 def _active_discovery_rank_key(
     candidate: CandidateView,
     key: WindowKey,
-) -> tuple[bool, bool, bool, bool, Decimal]:
+) -> tuple[bool, bool, bool, bool, bool, Decimal]:
     metrics = candidate.windows[key]
     active = metrics.active_box
     if active is None or metrics.structure_status != "READY":
-        return (False, False, False, False, Decimal("-1"))
+        return (False, False, False, False, False, Decimal("-1"))
+    current_10pct_threshold = (
+        Decimal("1") / Decimal("1.10") - Decimal("1")
+    ) * Decimal("100")
+    actual_10pct_reached = (
+        (metrics.target_reach_count or 0) >= 1
+        and metrics.current_vs_window_high_pct is not None
+        and metrics.current_vs_window_high_pct <= current_10pct_threshold
+    )
     active_valid = candidate.current_price >= active.structural_invalidation_price
     lower_zone = (
         active_valid
-        and active.lower_zone_low
-        <= candidate.current_price
-        <= active.lower_zone_high
+        and metrics.position_pct is not None
+        and metrics.position_pct <= Decimal("35")
     )
     smart_money_inflow = metrics.flows.foreign + metrics.flows.institution > 0
     recommended = metrics.ai_grade in {"STRONG_RECOMMEND", "RECOMMEND"}
     return (
+        actual_10pct_reached,
         active_valid,
         lower_zone,
         smart_money_inflow,
