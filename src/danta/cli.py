@@ -21,6 +21,7 @@ from danta.config import (
 from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
 from danta.dashboard.models import DashboardReport
+from danta.services.ai_review import apply_ai_review, load_ai_review
 from danta.services.candidate_report import CandidateReportError, build_quant_report
 from danta.services.candidate_validation import (
     CandidateValidationError,
@@ -106,6 +107,18 @@ def _parser() -> argparse.ArgumentParser:
         default=7,
         help="minute coverage target; 14/21 use the 50-symbol audit pool",
     )
+    ai_review = subparsers.add_parser(
+        "apply-ai-review",
+        help="apply a complete versioned AI review to a public report",
+    )
+    ai_review.add_argument("--input", type=Path, required=True)
+    ai_review.add_argument("--review", type=Path, required=True)
+    ai_review.add_argument("--output", type=Path, required=True)
+    ai_review.add_argument(
+        "--dashboard-output",
+        type=Path,
+        default=Path("dashboard/dist"),
+    )
     return parser
 
 
@@ -168,6 +181,27 @@ def main() -> None:
             print(f"report notification failed: {exc}", file=sys.stderr)
             raise SystemExit(4) from None
         print(f"report notification sent to {receipt.recipient_count} configured recipient(s)")
+        return
+    if args.command == "apply-ai-review":
+        try:
+            report = load_dashboard_report(args.input)
+            reviewed = apply_ai_review(report, load_ai_review(args.review))
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.output.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    reviewed.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(args.output)
+            target = build_dashboard(reviewed, args.dashboard_output)
+        except (ValueError, ValidationError) as exc:
+            print(f"AI review failed: {exc}", file=sys.stderr)
+            raise SystemExit(7) from None
+        print(f"AI-reviewed report built: {target}")
         return
     if args.command == "daily-report":
         try:

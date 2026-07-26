@@ -16,6 +16,7 @@
 - 적격 후보 최대 30개 공개 DTO 검증과 GitHub Pages용 단일 HTML 대시보드 빌더
 - 7·14·21일 전역 전환: 순위·AI 30개 코멘트·수익률·박스·차트·거래대금·수급 동기화
 - `SmtpNotifier`와 `notify-report`: 비밀 SMTP 설정을 사용한 Pages 배포 알림
+- `apply-ai-review`: 보고서 기준시각과 공식 후보 전체 커버리지를 검증한 버전형 AI 리뷰 적용
 - `sungha-uu/danta` 코드 저장소와 `sungha-uu/danta_report` 정적 Pages 배포
 
 Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성전자 현재가, 잔고, WebSocket 접속키를 확인했고 주문은 호출하지 않았다. 비민감 결과는 `data/provider_capability_snapshot.json`에 저장한다.
