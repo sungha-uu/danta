@@ -137,6 +137,8 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "도달일수" in html
     assert "현재→기간고점" in html
     assert "하단 방향" in html
+    assert "하단 진입권" in html
+    assert "상단권" in html
     assert "왕복</th>" not in html
     assert 'id="chartModal"' in html
     assert "60분봉 상세 보기" in html

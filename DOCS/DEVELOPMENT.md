@@ -206,7 +206,7 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 1. KRX 일괄 자료와 `box-quant-v1` 데이터 연결 기준선 완료 — `RESEARCH_ONLY`
 2. 버전된 KOSPI 사전필터, 거래일 기반 커버리지 계획과 통과 종목 7거래일 1분봉 백필
 3. KIS 1분봉 일일 증분 수집·캐시·재시작 복구와 60분봉 집계기
-4. `intraday-elasticity-v4-multitarget` 후보 엔진과 데이터 누적에 따른 7·14·21일 순차 활성화
+4. `intraday-elasticity-v4.1-entry-gated` 후보 엔진과 데이터 누적에 따른 7·14·21일 순차 활성화
 5. 실제 KOSPI 후보 30개 공개 JSON·정적 대시보드 생성
 6. 뉴스·공시·AI 30개 전수 리뷰
 7. 사용자 선택 1~3개 집중 감시

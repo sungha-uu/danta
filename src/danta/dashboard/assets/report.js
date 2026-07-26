@@ -167,6 +167,15 @@
     )}</small>`;
   }
 
+  function positionLabel(value) {
+    const position = n(value);
+    if (position <= 20) return "하단 핵심권";
+    if (position <= 35) return "하단 진입권";
+    if (position <= 50) return "중간 하단";
+    if (position <= 70) return "중간 상단";
+    return "상단권";
+  }
+
   function structureCell(item, content) {
     if (item.structure_status !== "WARMING_UP") return content;
     const completed = Math.max(0, n(item.structure_completed_days));
@@ -201,7 +210,7 @@
         <td>${structureCell(item, metricPair(item.median_daily_rebound_pct, item.max_daily_rebound_pct))}</td>
         <td>${structureCell(item, targetDaysCell(item))}</td>
         <td class="${tone(item.current_to_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_to_window_high_pct)}</b>`)}</td>
-        <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
+        <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
         <td>${structureCell(item, lowerTrendCell(item))}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
         <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>

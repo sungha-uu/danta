@@ -376,6 +376,32 @@ def _grade(score: Decimal) -> AiGrade:
     return "STRONG_NOT_RECOMMEND"
 
 
+def _entry_location_factor(position: Decimal) -> Decimal:
+    if position <= Decimal("20"):
+        return Decimal("1.00")
+    if position <= Decimal("35"):
+        return Decimal("0.90")
+    if position <= Decimal("50"):
+        return Decimal("0.60")
+    if position <= Decimal("70"):
+        return Decimal("0.30")
+    return Decimal("0.10")
+
+
+def _setup_grade(
+    score: Decimal,
+    position: Decimal,
+    lower_trend: Decimal,
+) -> AiGrade:
+    if position > Decimal("35") or lower_trend <= Decimal("-8"):
+        return "NOT_RECOMMEND" if score >= Decimal("45") else "STRONG_NOT_RECOMMEND"
+    return _grade(score)
+
+
+def _setup_eligible(item: _Analyzed) -> bool:
+    return item.position <= Decimal("35") and item.lower_trend > Decimal("-8")
+
+
 def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
     hour_bars = aggregate_hour_bars(minute_bars)
     if len(hour_bars) < 20:
@@ -472,19 +498,23 @@ def _score_all(
         trend_penalty = min(
             Decimal("15"), max(Decimal("0"), -item.lower_trend) * Decimal("1.5")
         )
-        score = (
+        raw_score = (
             upside_room_score * Decimal("0.25")
             + lower_score * Decimal("0.20")
             + target_frequency_score * Decimal("0.20")
             + liquidity_score * Decimal("0.15")
             + rebound_score * Decimal("0.12")
             + daily_range_score * Decimal("0.08")
-            - trend_penalty
         )
+        score = raw_score * _entry_location_factor(item.position) - trend_penalty
         result.append(
             replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
         )
-    return sorted(result, key=lambda item: item.score, reverse=True)
+    return sorted(
+        result,
+        key=lambda item: (_setup_eligible(item), item.score),
+        reverse=True,
+    )
 
 
 def build_intraday_report(
@@ -528,7 +558,7 @@ def build_intraday_report(
             + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
         )
         score = analysis.score.quantize(Decimal("0.01"))
-        grade = _grade(score)
+        grade = _setup_grade(score, analysis.position, analysis.lower_trend)
         ready = WindowMetrics(
             days=7,
             structure_status="READY",
@@ -574,7 +604,8 @@ def build_intraday_report(
                 f"저점 반등 중앙값 {analysis.median_daily_rebound.quantize(Decimal('0.1'))}%, "
                 f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
                 f"{analysis.reach_days_10}/{analysis.reach_days_15}일, 현재 위치 "
-                f"{analysis.position.quantize(Decimal('0.1'))}%입니다. "
+                f"{analysis.position.quantize(Decimal('0.1'))}% "
+                f"({'진입권' if analysis.position <= Decimal('35') else '진입권 밖'})입니다. "
                 "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
             ),
             reasons=[
@@ -636,7 +667,9 @@ def build_intraday_report(
         generated_at=datetime.now(KST),
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime="실제 7거래일 분봉 · 연구용 기준선",
-        calculation_version="intraday-elasticity-v4-multitarget-prefilter-balanced-v1",
+        calculation_version=(
+            "intraday-elasticity-v4.1-entry-gated-prefilter-balanced-v1"
+        ),
         strategy_status="RESEARCH_ONLY",
         source_bar_interval_minutes=1,
         analysis_bar_interval_minutes=60,

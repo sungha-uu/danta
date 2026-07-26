@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -10,7 +11,10 @@ from danta.services.intraday_report import (
     PrefilterCandidate,
     _Analyzed,
     _daily_dynamics,
+    _entry_location_factor,
     _score_all,
+    _setup_eligible,
+    _setup_grade,
     _target_reach_episodes,
     aggregate_hour_bars,
     balanced_prefilter,
@@ -183,3 +187,19 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
 
     assert scored[0].hour_bars == [hour_bar]
     assert isinstance(scored[0].hour_bars[0], HourBar)
+    assert _setup_eligible(analysis)
+    assert not _setup_eligible(replace(analysis, position=Decimal("68")))
+    assert not _setup_eligible(replace(analysis, lower_trend=Decimal("-9")))
+
+
+def test_entry_location_is_a_gate_not_a_small_bonus() -> None:
+    assert _entry_location_factor(Decimal("20")) == Decimal("1.00")
+    assert _entry_location_factor(Decimal("35")) == Decimal("0.90")
+    assert _entry_location_factor(Decimal("68")) == Decimal("0.30")
+    assert _entry_location_factor(Decimal("80")) == Decimal("0.10")
+    assert _setup_grade(
+        Decimal("90"), Decimal("68"), Decimal("5")
+    ) == "NOT_RECOMMEND"
+    assert _setup_grade(
+        Decimal("90"), Decimal("20"), Decimal("-9")
+    ) == "NOT_RECOMMEND"
