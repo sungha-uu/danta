@@ -208,6 +208,8 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "AI 정성 검토는 아직 미연결입니다." in html
     assert "reviewGradeLabel" in html
     assert "최신 뉴스" in html
+    assert ">종목토론</th>" in html
+    assert ">토론 요약</th>" not in html
     assert "sentiment-positive" in html
     assert "sentiment-negative" in html
     assert "sentiment-neutral" in html
