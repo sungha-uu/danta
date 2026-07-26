@@ -493,8 +493,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v1",
-        prompt_version="decline-opportunity-flow-news-discussion-v1-20260726",
+        model_id="agent-context-review-v2-active-box-flow-priority",
+        prompt_version="active-box-lower-flow-news-discussion-v2-20260726",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

@@ -6,6 +6,7 @@ import json
 import sys
 from dataclasses import asdict
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import uvicorn
@@ -22,6 +23,7 @@ from danta.config import (
 from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
 from danta.dashboard.models import DashboardReport
+from danta.services.active_box_walk_forward import run_active_box_walk_forward
 from danta.services.ai_review import apply_ai_review, load_ai_review
 from danta.services.candidate_report import CandidateReportError, build_quant_report
 from danta.services.candidate_validation import (
@@ -114,6 +116,27 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="rebuild from stored minute bars without calling the KIS minute API",
     )
+    walk_forward = subparsers.add_parser(
+        "active-box-walk-forward",
+        help="evaluate frozen active boxes on later stored minute bars",
+    )
+    walk_forward.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("data/intraday/1m"),
+    )
+    walk_forward.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/experiments/active-box-walk-forward-v1.json"),
+    )
+    walk_forward.add_argument("--training-days", type=int, default=7)
+    walk_forward.add_argument("--holding-days", type=int, default=5)
+    walk_forward.add_argument(
+        "--round-trip-cost-bps",
+        type=Decimal,
+        default=Decimal("35"),
+    )
     ai_review = subparsers.add_parser(
         "apply-ai-review",
         help="apply a complete versioned AI review to a public report",
@@ -193,6 +216,36 @@ def main() -> None:
         report = demo_report() if args.demo else load_dashboard_report(args.input)
         target = build_dashboard(report, args.output)
         print(f"dashboard built: {target}")
+        return
+    if args.command == "active-box-walk-forward":
+        try:
+            wf_report = run_active_box_walk_forward(
+                MinuteBarStore(args.data_root),
+                training_days=args.training_days,
+                holding_days=args.holding_days,
+                round_trip_cost_bps=args.round_trip_cost_bps,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.output.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    wf_report.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(args.output)
+        except (ValueError, CandidateReportError) as exc:
+            print(f"active box walk-forward failed: {exc}", file=sys.stderr)
+            raise SystemExit(9) from None
+        active, baseline = wf_report.summaries
+        print(
+            f"active box walk-forward built: {args.output} "
+            f"(active {active.trades} trades, baseline {baseline.trades}, "
+            f"status {wf_report.sample_status})",
+            flush=True,
+        )
         return
     if args.command == "notify-report":
         try:

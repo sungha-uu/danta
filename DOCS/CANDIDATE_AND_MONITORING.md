@@ -4,7 +4,16 @@
 
 ## 1. 목표
 
-하루 변동률만 큰 종목이 아니라 실제 주문이 가능한 유동성을 갖고, 현재 가격이 최근 구조의 하단에 가까우며 박스 하단 대비 `+10%` 가격에 다시 도달한 경험과 힘이 있는 KOSPI 종목을 찾는다.
+하루 변동률만 큰 종목이 아니라 1차 적격성 필터를 통과한 KOSPI 종목 중 현재 유효한 활성 박스를 가진 숨은 후보를 찾는다. 가장 우선하는 형태는 현재가가 활성 하단권 안에서 구조 무효화선을 지키고, 활성 상단 재도달 품질이 있으며, 외국인·기관 자금이 순유입되는 종목이다.
+
+```text
+priority = eligibility
+           → active_box_valid
+           → current_in_active_lower_zone
+           → historical_return_quality
+           → foreign_institution_flow
+           → event_risk
+```
 
 ## 2. 투자 가능 종목군
 

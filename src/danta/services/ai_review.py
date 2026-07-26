@@ -7,7 +7,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
-from danta.dashboard.models import AiGrade, DashboardReport, NewsItem, Sentiment, WindowKey
+from danta.dashboard.models import (
+    AiGrade,
+    CandidateView,
+    DashboardReport,
+    NewsItem,
+    Sentiment,
+    WindowKey,
+)
 
 
 class AiWindowReview(BaseModel):
@@ -104,6 +111,39 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                 }
             )
         )
+    for key in ("7", "14", "21"):
+        ready = [
+            candidate
+            for candidate in candidates
+            if candidate.windows[key].structure_status == "READY"
+        ]
+        if not ready or not all(
+            candidate.windows[key].active_box is not None
+            for candidate in ready
+        ):
+            continue
+        ranked = sorted(
+            ready,
+            key=lambda candidate: _active_discovery_rank_key(candidate, key),
+            reverse=True,
+        )
+        rank_map = {
+            candidate.code: rank
+            for rank, candidate in enumerate(ranked, start=1)
+        }
+        candidates = [
+            candidate.model_copy(
+                update={
+                    "windows": {
+                        **candidate.windows,
+                        key: candidate.windows[key].model_copy(
+                            update={"rank": rank_map.get(candidate.code)}
+                        ),
+                    }
+                }
+            )
+            for candidate in candidates
+        ]
     return report.model_copy(
         update={
             "generated_at": review.reviewed_at,
@@ -111,4 +151,30 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
             "prompt_version": review.prompt_version,
             "candidates": candidates,
         }
+    )
+
+
+def _active_discovery_rank_key(
+    candidate: CandidateView,
+    key: WindowKey,
+) -> tuple[bool, bool, bool, bool, Decimal]:
+    metrics = candidate.windows[key]
+    active = metrics.active_box
+    if active is None or metrics.structure_status != "READY":
+        return (False, False, False, False, Decimal("-1"))
+    active_valid = candidate.current_price >= active.structural_invalidation_price
+    lower_zone = (
+        active_valid
+        and active.lower_zone_low
+        <= candidate.current_price
+        <= active.lower_zone_high
+    )
+    smart_money_inflow = metrics.flows.foreign + metrics.flows.institution > 0
+    recommended = metrics.ai_grade in {"STRONG_RECOMMEND", "RECOMMEND"}
+    return (
+        active_valid,
+        lower_zone,
+        smart_money_inflow,
+        recommended,
+        metrics.final_score or Decimal("0"),
     )
