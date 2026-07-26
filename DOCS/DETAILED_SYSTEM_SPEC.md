@@ -1,6 +1,6 @@
 # KOSPI 왕복형 박스권 단타 모니터링 시스템
 
-> 2026-07-26 상위 전략 기준 변경: 사용자 화면과 활성 후보 점수의 완전 왕복 지표는 폐기하고, 정규장 1분봉 순서와 60분봉 박스에서 계산한 `박스 하단 접촉 후 하단 대비 +10% 목표 도달`로 교체한다. 이 문서 아래에 남아 있는 왕복·일봉 종가 기반 산식·예시는 과거 연구 기록이며 활성 구현에 사용하지 않는다. 30분봉·10분봉은 [`PROFITABILITY_IMPROVEMENT.md`](PROFITABILITY_IMPROVEMENT.md)의 `PI-009`, +10% 탄력성은 `PI-011`을 따른다. 충돌 시 [`CANDIDATE_AND_MONITORING.md`](CANDIDATE_AND_MONITORING.md)가 우선한다.
+> 2026-07-26 상위 전략 기준 변경: 사용자 화면과 활성 후보 점수의 완전 왕복 및 단일 하단+10% 지표는 폐기하고, 정규장 1분봉 순서로 계산한 날짜별 일중 진폭·저점 이후 반등·+5%·+10%·+15% 도달·현재 가격 공간·하단 방향으로 교체한다. 이 문서 아래에 남아 있는 왕복·일봉 종가 기반 산식·예시는 과거 연구 기록이며 활성 구현에 사용하지 않는다. 30분봉·10분봉은 [`PROFITABILITY_IMPROVEMENT.md`](PROFITABILITY_IMPROVEMENT.md)의 `PI-009`, 다중 목표 탄력성은 `PI-011`을 따른다. 충돌 시 [`CANDIDATE_AND_MONITORING.md`](CANDIDATE_AND_MONITORING.md)가 우선한다.
 
 ## AI 개발 에이전트용 제품·기술 설계 명세서
 

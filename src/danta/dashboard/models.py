@@ -52,6 +52,16 @@ class WindowMetrics(BaseModel):
     box_high: Decimal | None = Field(default=None, gt=0)
     amplitude_pct: Decimal | None = Field(default=None, ge=0)
     position_pct: Decimal | None = None
+    median_daily_range_pct: Decimal | None = Field(default=None, ge=0)
+    max_daily_range_pct: Decimal | None = Field(default=None, ge=0)
+    median_daily_rebound_pct: Decimal | None = Field(default=None, ge=0)
+    max_daily_rebound_pct: Decimal | None = Field(default=None, ge=0)
+    reach_days_5pct: int | None = Field(default=None, ge=0, le=21)
+    reach_days_10pct: int | None = Field(default=None, ge=0, le=21)
+    reach_days_15pct: int | None = Field(default=None, ge=0, le=21)
+    current_to_window_high_pct: Decimal | None = Field(default=None, ge=0)
+    lower_trend_pct: Decimal | None = None
+    lower_trend: Literal["상승", "횡보", "하락"] | None = None
     return_pct: Decimal
     average_trading_value_billion: Decimal = Field(ge=0)
     volume_ratio: Decimal = Field(ge=0)
@@ -88,6 +98,16 @@ class WindowMetrics(BaseModel):
             self.box_high,
             self.amplitude_pct,
             self.position_pct,
+            self.median_daily_range_pct,
+            self.max_daily_range_pct,
+            self.median_daily_rebound_pct,
+            self.max_daily_rebound_pct,
+            self.reach_days_5pct,
+            self.reach_days_10pct,
+            self.reach_days_15pct,
+            self.current_to_window_high_pct,
+            self.lower_trend_pct,
+            self.lower_trend,
             self.target_price_10pct,
             self.lower_contact_count,
             self.target_reach_count,

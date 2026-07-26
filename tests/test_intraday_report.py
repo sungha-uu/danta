@@ -9,6 +9,7 @@ from danta.services.intraday_report import (
     HourBar,
     PrefilterCandidate,
     _Analyzed,
+    _daily_dynamics,
     _score_all,
     _target_reach_episodes,
     aggregate_hour_bars,
@@ -108,6 +109,34 @@ def test_target_reach_requires_a_later_minute_after_lower_contact() -> None:
     assert _target_reach_episodes(rows, Decimal("100")) == (2, 1, 1)
 
 
+def test_daily_dynamics_only_counts_rebound_after_the_daily_low() -> None:
+    rows = [
+        KisMinuteBar(
+            trading_date=trading_date,
+            trading_time=trading_time,
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=10,
+            accumulated_trading_value=0,
+        )
+        for trading_date, trading_time, open_, high, low, close in [
+            ("20260723", "090000", 100, 115, 100, 114),
+            ("20260723", "100000", 114, 114, 95, 96),
+            ("20260723", "110000", 96, 100, 96, 99),
+            ("20260724", "090000", 100, 102, 90, 91),
+            ("20260724", "100000", 91, 104, 91, 103),
+        ]
+    ]
+
+    metrics = _daily_dynamics(rows, Decimal("103"))
+
+    assert metrics[4:7] == (2, 1, 1)
+    assert metrics[3] > Decimal("15")
+    assert metrics[8] < 0
+
+
 def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     hour_bar = HourBar(
         trading_date="20260724",
@@ -128,6 +157,15 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
         lower_contacts=1,
         target_reaches=1,
         target_pending=0,
+        median_daily_range=Decimal("6"),
+        max_daily_range=Decimal("12"),
+        median_daily_rebound=Decimal("5"),
+        max_daily_rebound=Decimal("10"),
+        reach_days_5=4,
+        reach_days_10=2,
+        reach_days_15=0,
+        current_to_window_high=Decimal("11"),
+        lower_trend=Decimal("-2"),
         box_inclusion=Decimal("80"),
         hour_bars=[hour_bar],
         hourly_closes=[Decimal("108")],

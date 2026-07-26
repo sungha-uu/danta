@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
+from statistics import median
 from typing import Literal
 
 from pydantic import HttpUrl
@@ -139,6 +140,14 @@ def _metrics(
     lower_contacts, target_reaches, target_pending = _target_reach_episodes(
         closes, low
     )
+    moves = [
+        abs((closes[index] / closes[index - 1] - ONE) * HUNDRED)
+        for index in range(1, len(closes))
+    ] or [Decimal("0")]
+    median_move = Decimal(median(moves))
+    max_move = max(moves)
+    current_to_high = max(Decimal("0"), (high / closes[-1] - ONE) * HUNDRED)
+    lower_trend = (closes[-1] / closes[0] - ONE) * HUNDRED
     downside_trend = max(Decimal("0"), -period_return)
     risk = min(
         HUNDRED,
@@ -181,6 +190,22 @@ def _metrics(
         box_high=high,
         amplitude_pct=_round(amplitude),
         position_pct=_round(position),
+        median_daily_range_pct=_round(median_move),
+        max_daily_range_pct=_round(max_move),
+        median_daily_rebound_pct=_round(median_move),
+        max_daily_rebound_pct=_round(max_move),
+        reach_days_5pct=sum(value >= 5 for value in moves),
+        reach_days_10pct=sum(value >= 10 for value in moves),
+        reach_days_15pct=sum(value >= 15 for value in moves),
+        current_to_window_high_pct=_round(current_to_high),
+        lower_trend_pct=_round(lower_trend),
+        lower_trend=(
+            "상승"
+            if lower_trend > 2
+            else "하락"
+            if lower_trend < -2
+            else "횡보"
+        ),
         return_pct=_round(period_return),
         average_trading_value_billion=_round(average_value_billion, "0.1"),
         volume_ratio=_round(volume_ratio),

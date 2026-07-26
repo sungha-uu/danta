@@ -150,11 +150,21 @@
     </svg></button>`;
   }
 
-  function targetReachCell(item) {
-    const pending = n(item.target_pending_count);
-    return `<b>${item.target_reach_count}회</b><small class="target-detail">목표 ${won.format(
-      n(item.target_price_10pct),
-    )}원 · 하단 접촉 ${item.lower_contact_count}회${pending ? " · 진행 중" : ""}</small>`;
+  function metricPair(medianValue, maxValue) {
+    return `<b>${one.format(n(medianValue))}%</b><small class="target-detail">최대 ${one.format(
+      n(maxValue),
+    )}%</small>`;
+  }
+
+  function targetDaysCell(item) {
+    return `<b>${item.reach_days_5pct}/${item.reach_days_10pct}/${item.reach_days_15pct}일</b>`;
+  }
+
+  function lowerTrendCell(item) {
+    const className = item.lower_trend === "상승" ? "pos" : item.lower_trend === "하락" ? "neg" : "";
+    return `<b class="${className}">${h(item.lower_trend)}</b><small class="target-detail">${percent(
+      item.lower_trend_pct,
+    )}</small>`;
   }
 
   function structureCell(item, content) {
@@ -187,9 +197,12 @@
         <td>${structureCell(item, sparkline(item, candidate.name, candidate.code))}</td>
         <td>${structureCell(item, won.format(n(item.box_low)))}</td>
         <td>${structureCell(item, won.format(n(item.box_high)))}</td>
-        <td>${structureCell(item, `<b>${one.format(n(item.amplitude_pct))}%</b>`)}</td>
+        <td>${structureCell(item, metricPair(item.median_daily_range_pct, item.max_daily_range_pct))}</td>
+        <td>${structureCell(item, metricPair(item.median_daily_rebound_pct, item.max_daily_rebound_pct))}</td>
+        <td>${structureCell(item, targetDaysCell(item))}</td>
+        <td class="${tone(item.current_to_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_to_window_high_pct)}</b>`)}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
-        <td>${structureCell(item, targetReachCell(item))}</td>
+        <td>${structureCell(item, lowerTrendCell(item))}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
         <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>
         <td class="${tone(flows.institution)}">${signed(flows.institution)}</td>
@@ -208,15 +221,16 @@
     bindChartButtons();
   }
 
-  function expandedPlot(item, name) {
+  function expandedPlot(item, name, currentPrice) {
     const values = item.chart_bars.map((bar) => n(bar.close));
     const width = 900;
     const height = 210;
     const padX = 42;
     const padY = 18;
     const low = Math.min(n(item.box_low), ...item.chart_bars.map((bar) => n(bar.low)));
+    const target15 = n(currentPrice) * 1.15;
     const high = Math.max(
-      n(item.target_price_10pct),
+      target15,
       ...item.chart_bars.map((bar) => n(bar.high)),
     );
     const spread = Math.max(1, high - low);
@@ -224,11 +238,11 @@
     const y = (value) => padY + (high - value) / spread * (height - padY * 2);
     const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
     const lowerY = y(n(item.box_low));
-    const targetY = y(n(item.target_price_10pct));
+    const targetY = y(target15);
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${h(name)} ${state.window}일 60분봉 종가 흐름">
       <line class="modal-target-line" x1="${padX}" y1="${targetY}" x2="${width - padX}" y2="${targetY}"></line>
       <line class="modal-lower-line" x1="${padX}" y1="${lowerY}" x2="${width - padX}" y2="${lowerY}"></line>
-      <text x="4" y="${Math.max(12, targetY - 4)}">+10%</text>
+      <text x="4" y="${Math.max(12, targetY - 4)}">현재+15%</text>
       <text x="4" y="${Math.min(height - 4, lowerY + 13)}">하단</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
@@ -240,19 +254,32 @@
     const item = metric(candidate);
     if (item.structure_status !== "READY" || !item.chart_bars.length) return;
     $("#chartModalTitle").textContent = `${candidate.name} · ${state.window}일 60분봉`;
-    $("#chartModalSummary").textContent = `박스 하단 ${won.format(n(item.box_low))}원 · +10% 목표 ${won.format(
-      n(item.target_price_10pct),
-    )}원 · 도달 ${item.target_reach_count}회 · 하단 접촉 ${item.lower_contact_count}회`;
-    $("#chartModalPlot").innerHTML = expandedPlot(item, candidate.name);
-    $("#chartModalBody").innerHTML = item.chart_bars.map((bar) => `
+    $("#chartModalSummary").textContent = `일중 진폭 ${one.format(n(item.median_daily_range_pct))}% / 최대 ${one.format(
+      n(item.max_daily_range_pct),
+    )}% · 저점 반등 ${one.format(n(item.median_daily_rebound_pct))}% / 최대 ${one.format(
+      n(item.max_daily_rebound_pct),
+    )}% · +5/+10/+15% ${item.reach_days_5pct}/${item.reach_days_10pct}/${item.reach_days_15pct}일 · 하단 ${item.lower_trend}`;
+    $("#chartModalPlot").innerHTML = expandedPlot(item, candidate.name, candidate.current_price);
+    const buckets = [...new Set(item.chart_bars.map((bar) => bar.bucket))].sort();
+    const dates = [...new Set(item.chart_bars.map((bar) => bar.trading_date))].sort();
+    const byDateBucket = new Map(
+      item.chart_bars.map((bar) => [`${bar.trading_date}:${bar.bucket}`, bar]),
+    );
+    $("#chartModalHead").innerHTML = `<tr><th>거래일</th>${buckets.map(
+      (bucket) => `<th>${h(bucket)}시</th>`,
+    ).join("")}</tr>`;
+    $("#chartModalBody").innerHTML = dates.map((date) => `
       <tr>
-        <td>${h(`${bar.trading_date.slice(4, 6)}.${bar.trading_date.slice(6, 8)}`)}</td>
-        <td>${h(bar.bucket)}시</td>
-        <td>${won.format(n(bar.open))}</td>
-        <td>${won.format(n(bar.high))}</td>
-        <td>${won.format(n(bar.low))}</td>
-        <td><b>${won.format(n(bar.close))}</b></td>
-        <td>${won.format(n(bar.volume))}</td>
+        <th>${h(`${date.slice(4, 6)}.${date.slice(6, 8)}`)}</th>
+        ${buckets.map((bucket) => {
+          const bar = byDateBucket.get(`${date}:${bucket}`);
+          if (!bar) return '<td class="empty-bar">-</td>';
+          return `<td class="hour-bar-cell">
+            <strong>${won.format(n(bar.close))}</strong>
+            <small>시 ${won.format(n(bar.open))} · 고 ${won.format(n(bar.high))}</small>
+            <small>저 ${won.format(n(bar.low))} · 량 ${won.format(n(bar.volume))}</small>
+          </td>`;
+        }).join("")}
       </tr>`).join("");
     $("#chartModal").hidden = false;
     document.body.classList.add("modal-open");

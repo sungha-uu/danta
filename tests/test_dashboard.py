@@ -32,6 +32,8 @@ def test_demo_report_has_thirty_ranked_and_graded_candidates_for_every_window() 
             for item in metrics
         )
         assert all(item.target_reach_count >= 0 for item in metrics)
+        assert all(item.median_daily_range_pct >= 0 for item in metrics)
+        assert all(item.max_daily_rebound_pct >= item.median_daily_rebound_pct for item in metrics)
         assert all(len(item.chart_bars) == len(item.closes) for item in metrics)
         assert all(
             item.lower_contact_count
@@ -65,6 +67,16 @@ def test_warming_window_requires_incomplete_structure_days() -> None:
             "box_high",
             "amplitude_pct",
             "position_pct",
+            "median_daily_range_pct",
+            "max_daily_range_pct",
+            "median_daily_rebound_pct",
+            "max_daily_rebound_pct",
+            "reach_days_5pct",
+            "reach_days_10pct",
+            "reach_days_15pct",
+            "current_to_window_high_pct",
+            "lower_trend_pct",
+            "lower_trend",
             "target_price_10pct",
             "lower_contact_count",
             "target_reach_count",
@@ -120,12 +132,19 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert 'number > 0 ? "+"' not in html
     assert "minimumFractionDigits: 1" in html
     assert "기간수익률" in html
-    assert "하단+10% 도달" in html
+    assert "일중 진폭" in html
+    assert "저점 반등" in html
+    assert "도달일수" in html
+    assert "현재→기간고점" in html
+    assert "하단 방향" in html
     assert "왕복</th>" not in html
     assert 'id="chartModal"' in html
     assert "60분봉 상세 보기" in html
     assert "chart_bars" in html
     assert "target_price_10pct" in html
+    assert 'id="chartModalHead"' in html
+    assert "byDateBucket" in html
+    assert "hour-bar-cell" in html
     assert "선택 기간 첫 거래일 수정종가 대비 현재가 변화율" in html
     assert "연구용 · 주문 불가" in html
     assert "strategy_status" in html

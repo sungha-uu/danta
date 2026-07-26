@@ -101,7 +101,7 @@ domain <- application <- adapters <- entrypoints
 | `instruments`, `daily_bars`, `intraday_bars` | 종목·일봉 보조자료·정규장 1분봉 원본과 파생 5/10/30/60분봉 |
 | `ticks`, `orderbooks` | 체결·호가 원본 또는 보존본 |
 | `investor_flows`, `disclosures` | 수급·공시 |
-| `box_features` | 박스·하단+10% 상승 탄력성·유지성 버전형 특징 |
+| `box_features` | 박스·일중 변동성·다중 목표 상승 탄력성·하단 방향 버전형 특징 |
 | `candidate_runs`, `candidates` | 정량·AI 후보와 근거 |
 | `universe_memberships`, `intraday_coverage` | 사전필터 편입·이탈 이력, 공통 수집 시작일, 종목별 목표·완료·누락 거래일과 체크포인트 |
 | `candidate_window_metrics` | 후보별 7·14·21일 박스·진폭·위치·수급·차트 입력 |

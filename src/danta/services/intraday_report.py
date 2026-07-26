@@ -63,6 +63,15 @@ class _Analyzed:
     lower_contacts: int
     target_reaches: int
     target_pending: int
+    median_daily_range: Decimal
+    max_daily_range: Decimal
+    median_daily_rebound: Decimal
+    max_daily_rebound: Decimal
+    reach_days_5: int
+    reach_days_10: int
+    reach_days_15: int
+    current_to_window_high: Decimal
+    lower_trend: Decimal
     box_inclusion: Decimal
     hour_bars: list[HourBar]
     hourly_closes: list[Decimal]
@@ -245,6 +254,58 @@ def _target_reach_episodes(
     return contacts, reaches, int(armed)
 
 
+def _daily_dynamics(
+    minute_bars: list[KisMinuteBar],
+    current: Decimal,
+) -> tuple[Decimal, Decimal, Decimal, Decimal, int, int, int, Decimal, Decimal]:
+    grouped: dict[str, list[KisMinuteBar]] = {}
+    for bar in sorted(minute_bars, key=lambda item: (item.trading_date, item.trading_time)):
+        grouped.setdefault(bar.trading_date, []).append(bar)
+    ranges: list[Decimal] = []
+    rebounds: list[Decimal] = []
+    daily_lows: list[Decimal] = []
+    for bars in grouped.values():
+        daily_low = min(Decimal(bar.low) for bar in bars)
+        daily_high = max(Decimal(bar.high) for bar in bars)
+        low_index = next(
+            index for index, bar in enumerate(bars) if Decimal(bar.low) == daily_low
+        )
+        later = bars[low_index + 1 :]
+        rebound_high = (
+            max(Decimal(bar.high) for bar in later) if later else daily_low
+        )
+        ranges.append((daily_high / daily_low - Decimal("1")) * HUNDRED)
+        rebounds.append(
+            max(Decimal("0"), (rebound_high / daily_low - Decimal("1")) * HUNDRED)
+        )
+        daily_lows.append(daily_low)
+    if not ranges:
+        raise CandidateReportError("daily dynamics require minute bars")
+    reach_days_5 = sum(value >= Decimal("5") for value in rebounds)
+    reach_days_10 = sum(value >= Decimal("10") for value in rebounds)
+    reach_days_15 = sum(value >= Decimal("15") for value in rebounds)
+    window_high = max(Decimal(bar.high) for bar in minute_bars)
+    current_to_high = max(
+        Decimal("0"), (window_high / current - Decimal("1")) * HUNDRED
+    )
+    lower_trend = (
+        (daily_lows[-1] / daily_lows[0] - Decimal("1")) * HUNDRED
+        if len(daily_lows) > 1
+        else Decimal("0")
+    )
+    return (
+        _percentile(ranges, Decimal("0.50")),
+        max(ranges),
+        _percentile(rebounds, Decimal("0.50")),
+        max(rebounds),
+        reach_days_5,
+        reach_days_10,
+        reach_days_15,
+        current_to_high,
+        lower_trend,
+    )
+
+
 def _flow_for(
     dataset: MarketDataset,
     symbol: str,
@@ -332,6 +393,17 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
     lower_contacts, target_reaches, target_pending = _target_reach_episodes(
         minute_bars, low
     )
+    (
+        median_daily_range,
+        max_daily_range,
+        median_daily_rebound,
+        max_daily_rebound,
+        reach_days_5,
+        reach_days_10,
+        reach_days_15,
+        current_to_window_high,
+        lower_trend,
+    ) = _daily_dynamics(minute_bars, current)
     return _Analyzed(
         symbol=symbol,
         low=low,
@@ -342,6 +414,15 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
         lower_contacts=lower_contacts,
         target_reaches=target_reaches,
         target_pending=target_pending,
+        median_daily_range=median_daily_range,
+        max_daily_range=max_daily_range,
+        median_daily_rebound=median_daily_rebound,
+        max_daily_rebound=max_daily_rebound,
+        reach_days_5=reach_days_5,
+        reach_days_10=reach_days_10,
+        reach_days_15=reach_days_15,
+        current_to_window_high=current_to_window_high,
+        lower_trend=lower_trend,
         box_inclusion=box_inclusion,
         hour_bars=hour_bars,
         hourly_closes=[bar.close for bar in hour_bars],
@@ -353,30 +434,52 @@ def _score_all(
     analyses: list[_Analyzed],
     candidates: dict[str, PrefilterCandidate],
 ) -> list[_Analyzed]:
-    max_amplitude = max(item.amplitude for item in analyses)
-    max_target_reaches = max(item.target_reaches for item in analyses) or 1
     max_liquidity_log = max(
         math.log10(float(item.average_trading_value))
         for item in candidates.values()
     )
     result: list[_Analyzed] = []
     for item in analyses:
-        amplitude_score = min(HUNDRED, item.amplitude / max_amplitude * HUNDRED)
-        target_reach_score = min(
+        day_count = Decimal("7")
+        target_frequency_score = min(
             HUNDRED,
-            Decimal(item.target_reaches) / Decimal(max_target_reaches) * HUNDRED,
+            Decimal(item.reach_days_5) / day_count * Decimal("20")
+            + Decimal(item.reach_days_10) / day_count * Decimal("30")
+            + Decimal(item.reach_days_15) / day_count * Decimal("50"),
+        )
+        rebound_score = min(
+            HUNDRED,
+            min(HUNDRED, item.median_daily_rebound / Decimal("10") * HUNDRED)
+            * Decimal("0.60")
+            + min(HUNDRED, item.max_daily_rebound / Decimal("15") * HUNDRED)
+            * Decimal("0.40"),
+        )
+        daily_range_score = min(
+            HUNDRED,
+            min(HUNDRED, item.median_daily_range / Decimal("8") * HUNDRED)
+            * Decimal("0.60")
+            + min(HUNDRED, item.max_daily_range / Decimal("15") * HUNDRED)
+            * Decimal("0.40"),
         )
         liquidity_log = Decimal(
             str(math.log10(float(candidates[item.symbol].average_trading_value)))
         )
         liquidity_score = liquidity_log / Decimal(str(max_liquidity_log)) * HUNDRED
         lower_score = max(Decimal("0"), HUNDRED - max(Decimal("0"), item.position))
+        upside_room_score = min(
+            HUNDRED, item.current_to_window_high / Decimal("15") * HUNDRED
+        )
+        trend_penalty = min(
+            Decimal("15"), max(Decimal("0"), -item.lower_trend) * Decimal("1.5")
+        )
         score = (
-            target_reach_score * Decimal("0.35")
-            + amplitude_score * Decimal("0.20")
-            + liquidity_score * Decimal("0.20")
-            + lower_score * Decimal("0.15")
-            + item.box_inclusion * Decimal("0.10")
+            upside_room_score * Decimal("0.25")
+            + lower_score * Decimal("0.20")
+            + target_frequency_score * Decimal("0.20")
+            + liquidity_score * Decimal("0.15")
+            + rebound_score * Decimal("0.12")
+            + daily_range_score * Decimal("0.08")
+            - trend_penalty
         )
         result.append(
             replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
@@ -421,7 +524,7 @@ def build_intraday_report(
         risk = min(
             HUNDRED,
             max(Decimal("0"), -period_return) * Decimal("2")
-            + (Decimal("20") if analysis.target_reaches == 0 else Decimal("0"))
+            + (Decimal("20") if analysis.reach_days_5 == 0 else Decimal("0"))
             + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
         )
         score = analysis.score.quantize(Decimal("0.01"))
@@ -435,6 +538,24 @@ def build_intraday_report(
             box_high=analysis.high.quantize(Decimal("0.01")),
             amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
             position_pct=analysis.position.quantize(Decimal("0.01")),
+            median_daily_range_pct=analysis.median_daily_range.quantize(Decimal("0.01")),
+            max_daily_range_pct=analysis.max_daily_range.quantize(Decimal("0.01")),
+            median_daily_rebound_pct=analysis.median_daily_rebound.quantize(Decimal("0.01")),
+            max_daily_rebound_pct=analysis.max_daily_rebound.quantize(Decimal("0.01")),
+            reach_days_5pct=analysis.reach_days_5,
+            reach_days_10pct=analysis.reach_days_10,
+            reach_days_15pct=analysis.reach_days_15,
+            current_to_window_high_pct=analysis.current_to_window_high.quantize(
+                Decimal("0.01")
+            ),
+            lower_trend_pct=analysis.lower_trend.quantize(Decimal("0.01")),
+            lower_trend=(
+                "상승"
+                if analysis.lower_trend > Decimal("2")
+                else "하락"
+                if analysis.lower_trend < Decimal("-2")
+                else "횡보"
+            ),
             return_pct=period_return,
             average_trading_value_billion=average_value,
             volume_ratio=volume_ratio,
@@ -449,15 +570,18 @@ def build_intraday_report(
             ai_grade=grade,
             ai_comment=(
                 f"실제 7거래일 1분봉을 60분봉으로 집계한 정량 기준선입니다. "
-                f"진폭 {analysis.amplitude.quantize(Decimal('0.1'))}%, 박스 하단 대비 "
-                f"+10% 목표 도달 {analysis.target_reaches}회, 현재 위치 "
+                f"일중 진폭 중앙값 {analysis.median_daily_range.quantize(Decimal('0.1'))}%, "
+                f"저점 반등 중앙값 {analysis.median_daily_rebound.quantize(Decimal('0.1'))}%, "
+                f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
+                f"{analysis.reach_days_10}/{analysis.reach_days_15}일, 현재 위치 "
                 f"{analysis.position.quantize(Decimal('0.1'))}%입니다. "
                 "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
             ),
             reasons=[
-                f"60분봉 진폭 {analysis.amplitude.quantize(Decimal('0.1'))}%",
-                f"하단+10% 목표 도달 {analysis.target_reaches}회",
-                f"박스 내부 봉 {analysis.box_inclusion.quantize(Decimal('0.1'))}%",
+                f"일중 진폭 중앙값 {analysis.median_daily_range.quantize(Decimal('0.1'))}%",
+                f"저점 반등 중앙값 {analysis.median_daily_rebound.quantize(Decimal('0.1'))}%",
+                f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
+                f"{analysis.reach_days_10}/{analysis.reach_days_15}일",
             ],
             risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
             invalidation=(
@@ -512,7 +636,7 @@ def build_intraday_report(
         generated_at=datetime.now(KST),
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime="실제 7거래일 분봉 · 연구용 기준선",
-        calculation_version="box-elasticity-v3-60m-target10-prefilter-balanced-v1",
+        calculation_version="intraday-elasticity-v4-multitarget-prefilter-balanced-v1",
         strategy_status="RESEARCH_ONLY",
         source_bar_interval_minutes=1,
         analysis_bar_interval_minutes=60,

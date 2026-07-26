@@ -65,7 +65,9 @@
               <tr>
                 <th class="sticky-select">선택</th><th class="sticky-rank">순위</th><th class="sticky-name">종목명</th>
                 <th id="reviewGradeHeader">AI 등급</th><th>현재가</th><th title="선택 기간 첫 거래일 수정종가 대비 현재가 변화율">기간수익률</th><th>가격 흐름</th>
-                <th title="60분봉 저가의 10분위로 계산한 하단 경계">박스 하단</th><th title="60분봉 고가의 90분위로 계산한 상단 경계">박스 상단</th><th>진폭</th><th>현재 위치</th><th title="박스 하단 접촉 뒤 하단 대비 10% 높은 가격에 실제 도달한 횟수">하단+10% 도달</th>
+                <th title="60분봉 저가의 10분위로 계산한 하단 경계">박스 하단</th><th title="60분봉 고가의 90분위로 계산한 상단 경계">박스 상단</th>
+                <th title="날짜별 고가/저가 변동폭의 중앙값과 최대값">일중 진폭<br>중앙/최대</th><th title="당일 저점 이후 고가까지 실제 반등폭의 중앙값과 최대값">저점 반등<br>중앙/최대</th>
+                <th title="당일 저점 이후 각각 5%, 10%, 15% 이상 반등한 거래일 수">도달일수<br>5%/10%/15%</th><th title="현재가에서 선택 기간 고점까지의 기계적 가격 공간">현재→기간고점</th><th>현재 위치</th><th title="첫 거래일 저가 대비 마지막 거래일 저가의 방향">하단 방향</th>
                 <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
                 <th>정량점수</th><th id="reviewScoreHeader">AI점수</th><th id="reviewCommentHeader">AI 코멘트</th>
                 <th>최신 뉴스</th><th>토론 요약</th><th>차트보기</th>
@@ -90,7 +92,7 @@
       <div id="chartModalPlot" class="chart-modal-plot"></div>
       <div class="chart-modal-table-wrap">
         <table class="chart-modal-table">
-          <thead><tr><th>거래일</th><th>시간</th><th>시가</th><th>고가</th><th>저가</th><th>종가</th><th>거래량</th></tr></thead>
+          <thead id="chartModalHead"></thead>
           <tbody id="chartModalBody"></tbody>
         </table>
       </div>

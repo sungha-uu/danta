@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from statistics import median
 from typing import Literal
 
 from pydantic import HttpUrl
@@ -117,6 +118,14 @@ def _window(
     pension = Decimal((rank % 5) - 1) * scale
     retail = -(foreign + institution) * Decimal("0.72")
     contacts, reaches, pending = _target_reach_episodes(closes, low)
+    moves = [
+        abs((closes[index] / closes[index - 1] - Decimal("1")) * Decimal("100"))
+        for index in range(1, len(closes))
+    ] or [Decimal("0")]
+    median_move = Decimal(median(moves))
+    max_move = max(moves)
+    current_to_high = max(Decimal("0"), (high / closes[-1] - Decimal("1")) * Decimal("100"))
+    lower_trend = (closes[-1] / closes[0] - Decimal("1")) * Decimal("100")
     start = datetime.now(KST).date() - timedelta(days=len(closes) - 1)
     return WindowMetrics(
         days=days,
@@ -125,6 +134,22 @@ def _window(
         box_high=high,
         amplitude_pct=amplitude.quantize(Decimal("0.01")),
         position_pct=position.quantize(Decimal("0.01")),
+        median_daily_range_pct=median_move.quantize(Decimal("0.01")),
+        max_daily_range_pct=max_move.quantize(Decimal("0.01")),
+        median_daily_rebound_pct=median_move.quantize(Decimal("0.01")),
+        max_daily_rebound_pct=max_move.quantize(Decimal("0.01")),
+        reach_days_5pct=sum(value >= 5 for value in moves),
+        reach_days_10pct=sum(value >= 10 for value in moves),
+        reach_days_15pct=sum(value >= 15 for value in moves),
+        current_to_window_high_pct=current_to_high.quantize(Decimal("0.01")),
+        lower_trend_pct=lower_trend.quantize(Decimal("0.01")),
+        lower_trend=(
+            "상승"
+            if lower_trend > 2
+            else "하락"
+            if lower_trend < -2
+            else "횡보"
+        ),
         return_pct=period_return.quantize(Decimal("0.01")),
         average_trading_value_billion=Decimal(38 + rank * 4 + days).quantize(Decimal("0.1")),
         volume_ratio=Decimal("1.85") - Decimal(rank) * Decimal("0.02"),

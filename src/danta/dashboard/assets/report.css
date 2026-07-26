@@ -132,10 +132,15 @@ body.modal-open { overflow: hidden; }
 .modal-lower-line { stroke: #397d58; stroke-width: 1.2; stroke-dasharray: 6 4; }
 .chart-modal-plot text { fill: #627087; font-size: 10px; font-weight: 700; }
 .chart-modal-table-wrap { min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
-.chart-modal-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.chart-modal-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 11px; }
 .chart-modal-table th, .chart-modal-table td { padding: 7px 10px; border-right: 1px solid var(--cell-line); border-bottom: 1px solid var(--cell-line); text-align: right; }
 .chart-modal-table th { position: sticky; top: 0; z-index: 1; color: white; background: var(--blue); text-align: center; }
-.chart-modal-table td:first-child, .chart-modal-table td:nth-child(2) { text-align: center; }
+.chart-modal-table tbody th { position: sticky; left: 0; z-index: 1; min-width: 62px; color: var(--text); background: #eef2f7; }
+.chart-modal-table thead th:first-child { left: 0; z-index: 3; }
+.hour-bar-cell { min-width: 150px; text-align: center !important; }
+.hour-bar-cell strong { display: block; margin-bottom: 3px; color: #10223c; font-size: 12px; }
+.hour-bar-cell small { display: block; color: var(--muted); font-size: 8px; line-height: 1.45; }
+.empty-bar { min-width: 150px; color: #9aa5b5; text-align: center !important; }
 .chart-modal-table tbody tr:nth-child(even) { background: #f7f9fc; }
 
 .selection-tray { min-height: 65px; padding: 6px 10px 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: end; gap: 4px 8px; color: var(--text); border-top: 1px solid #aeb9c8; background: #eef2f7; }
