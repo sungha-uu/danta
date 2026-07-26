@@ -12,6 +12,7 @@ from danta.services.intraday_report import (
     _Analyzed,
     _daily_dynamics,
     _entry_location_factor,
+    _intraday_period_return,
     _score_all,
     _setup_eligible,
     _setup_grade,
@@ -203,3 +204,12 @@ def test_entry_location_is_a_gate_not_a_small_bonus() -> None:
     assert _setup_grade(
         Decimal("90"), Decimal("20"), Decimal("-9")
     ) == "NOT_RECOMMEND"
+
+
+def test_ready_period_return_matches_chart_endpoints() -> None:
+    result = _intraday_period_return(
+        Decimal("482000"),
+        [Decimal("478500"), Decimal("489500"), Decimal("482000")],
+    )
+
+    assert result == Decimal("0.73")

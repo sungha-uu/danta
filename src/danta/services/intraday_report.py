@@ -367,6 +367,17 @@ def _reference_values(
     )
 
 
+def _intraday_period_return(
+    current_price: Decimal,
+    hourly_closes: list[Decimal],
+) -> Decimal:
+    if not hourly_closes or hourly_closes[0] <= 0:
+        raise CandidateReportError("intraday period return requires a positive first close")
+    return (
+        (current_price / hourly_closes[0] - Decimal("1")) * HUNDRED
+    ).quantize(Decimal("0.01"))
+
+
 def _grade(score: Decimal) -> AiGrade:
     if score >= Decimal("75"):
         return "STRONG_RECOMMEND"
@@ -554,8 +565,12 @@ def build_intraday_report(
             Decimal("0"),
             (current_price / analysis.high - Decimal("1")) * HUNDRED,
         )
-        period_return, average_value, volume_ratio, flows = _reference_values(
+        _, average_value, volume_ratio, flows = _reference_values(
             dataset, symbol, 7
+        )
+        period_return = _intraday_period_return(
+            current_price,
+            analysis.hourly_closes,
         )
         risk = min(
             HUNDRED,
@@ -672,7 +687,8 @@ def build_intraday_report(
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime="실제 7거래일 분봉 · 연구용 기준선",
         calculation_version=(
-            "intraday-elasticity-v4.2-display-drawdown-entry-gated-prefilter-balanced-v1"
+            "intraday-elasticity-v4.3-chart-aligned-return-entry-gated-"
+            "prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",
         source_bar_interval_minutes=1,
