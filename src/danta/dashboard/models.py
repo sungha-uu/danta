@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 WindowKey = Literal["7", "14", "21"]
+CANDIDATE_COUNT = 30
+EXTENDED_WATCHLIST_COUNT = 20
 Sentiment = Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]
 AiGrade = Literal[
     "STRONG_RECOMMEND",
@@ -47,7 +49,11 @@ class WindowMetrics(BaseModel):
     days: Literal[7, 14, 21]
     structure_status: Literal["READY", "WARMING_UP"] = "READY"
     structure_completed_days: int | None = Field(default=None, ge=0, le=21)
-    rank: int | None = Field(default=None, ge=1, le=30)
+    rank: int | None = Field(
+        default=None,
+        ge=1,
+        le=CANDIDATE_COUNT + EXTENDED_WATCHLIST_COUNT,
+    )
     box_low: Decimal | None = Field(default=None, gt=0)
     box_high: Decimal | None = Field(default=None, gt=0)
     amplitude_pct: Decimal | None = Field(default=None, ge=0)
@@ -187,6 +193,10 @@ class DashboardReport(BaseModel):
     prompt_version: str
     is_demo: bool = False
     candidates: list[CandidateView] = Field(min_length=30, max_length=30)
+    extended_watchlist: list[CandidateView] = Field(
+        default_factory=list,
+        max_length=EXTENDED_WATCHLIST_COUNT,
+    )
 
     @model_validator(mode="after")
     def validate_candidate_set(self) -> DashboardReport:
@@ -198,8 +208,11 @@ class DashboardReport(BaseModel):
                 "ACTIVE reports require 1-minute source and an approved "
                 "10/30/60-minute analysis bar"
             )
-        codes = [candidate.code for candidate in self.candidates]
-        if len(set(codes)) != 30:
+        codes = [
+            candidate.code
+            for candidate in [*self.candidates, *self.extended_watchlist]
+        ]
+        if len(set(codes)) != len(codes):
             raise ValueError("candidate codes must be unique")
         windows: tuple[WindowKey, WindowKey, WindowKey] = ("7", "14", "21")
         for window in windows:
@@ -210,4 +223,24 @@ class DashboardReport(BaseModel):
             ranks = [item.rank for item in ready if item.rank is not None]
             if ready and sorted(ranks) != list(range(1, 31)):
                 raise ValueError(f"candidate ranks for {window} days must be 1 through 30")
+            extended = [
+                candidate.windows[window] for candidate in self.extended_watchlist
+            ]
+            extended_ready = [
+                item for item in extended if item.structure_status == "READY"
+            ]
+            if extended_ready and len(extended_ready) != len(extended):
+                raise ValueError(
+                    f"extended watchlist structures for {window} days "
+                    "must share one status"
+                )
+            extended_ranks = [
+                item.rank for item in extended_ready if item.rank is not None
+            ]
+            if extended_ready and sorted(extended_ranks) != list(
+                range(31, 31 + len(extended_ready))
+            ):
+                raise ValueError(
+                    f"extended watchlist ranks for {window} days must start at 31"
+                )
         return self

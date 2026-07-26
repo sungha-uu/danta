@@ -18,7 +18,7 @@ def _dataset() -> MarketDataset:
         14: {},
         21: {},
     }
-    for stock_index in range(40):
+    for stock_index in range(60):
         symbol = f"{stock_index + 1:06d}"
         names[symbol] = f"테스트{stock_index + 1}"
         series: list[DailyBar] = []
@@ -54,10 +54,14 @@ def test_quant_report_contains_ranked_real_candidate_shape() -> None:
     assert report.analysis_bar_interval_minutes is None
     assert report.model_id == "quant-baseline-no-llm"
     assert len(report.candidates) == 30
+    assert len(report.extended_watchlist) == 20
     for window in ("7", "14", "21"):
         assert sorted(candidate.windows[window].rank for candidate in report.candidates) == list(
             range(1, 31)
         )
+        assert sorted(
+            candidate.windows[window].rank for candidate in report.extended_watchlist
+        ) == list(range(31, 51))
 
 
 def test_target_reach_episodes_are_internally_consistent() -> None:

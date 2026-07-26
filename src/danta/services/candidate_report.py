@@ -9,6 +9,7 @@ from pydantic import HttpUrl
 
 from danta.adapters.krx.client import DailyBar, MarketDataset
 from danta.dashboard.models import (
+    EXTENDED_WATCHLIST_COUNT,
     AiGrade,
     CandidateView,
     ChartBar,
@@ -260,8 +261,9 @@ def build_quant_report(dataset: MarketDataset) -> DashboardReport:
             continue
         provisional.append((symbol, metrics))
     provisional.sort(key=lambda item: _ready_score(item[1]), reverse=True)
-    selected_symbols = [symbol for symbol, _ in provisional[:30]]
-    if len(selected_symbols) != 30:
+    published_count = 30 + EXTENDED_WATCHLIST_COUNT
+    selected_symbols = [symbol for symbol, _ in provisional[:published_count]]
+    if len(selected_symbols) != published_count:
         raise CandidateReportError(
             f"only {len(selected_symbols)} candidates passed the data and liquidity gates"
         )
@@ -326,5 +328,6 @@ def build_quant_report(dataset: MarketDataset) -> DashboardReport:
         model_id="quant-baseline-no-llm",
         prompt_version="candidate-review-not-connected",
         is_demo=False,
-        candidates=candidates,
+        candidates=candidates[:30],
+        extended_watchlist=candidates[30:],
     )

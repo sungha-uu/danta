@@ -15,6 +15,7 @@ from pydantic import HttpUrl
 from danta.adapters.kis.client import KisApiError, KisClient, KisMinuteBar
 from danta.adapters.krx.client import MarketDataset
 from danta.dashboard.models import (
+    EXTENDED_WATCHLIST_COUNT,
     AiGrade,
     CandidateView,
     ChartBar,
@@ -544,7 +545,7 @@ def build_intraday_report(
             f"only {len(analyses)} balanced symbols have complete 7-day minute data"
         )
     candidate_map = {item.symbol: item for item in candidates}
-    selected = _score_all(analyses, candidate_map)[:30]
+    selected = _score_all(analyses, candidate_map)[: 30 + EXTENDED_WATCHLIST_COUNT]
     views: list[CandidateView] = []
     for rank, analysis in enumerate(selected, start=1):
         symbol = analysis.symbol
@@ -676,5 +677,6 @@ def build_intraday_report(
         model_id="quant-intraday-baseline-no-llm",
         prompt_version="not-applied",
         is_demo=False,
-        candidates=views,
+        candidates=views[:30],
+        extended_watchlist=views[30:],
     )

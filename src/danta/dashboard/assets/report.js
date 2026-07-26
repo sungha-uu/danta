@@ -2,7 +2,8 @@
   "use strict";
 
   const report = JSON.parse(document.getElementById("reportData").textContent);
-  const candidates = [...report.candidates];
+  const officialCodes = new Set(report.candidates.map((candidate) => candidate.code));
+  const candidates = [...report.candidates, ...(report.extended_watchlist ?? [])];
   const quantBaseline = report.model_id.includes("no-llm");
   const actionable = report.strategy_status === "ACTIVE"
     && report.source_bar_interval_minutes === 1
@@ -192,13 +193,16 @@
   function renderRanking() {
     const rows = filtered();
     $("#visibleCount").textContent = rows.length;
+    $("#totalCount").textContent = candidates.length;
     $("#rankingBody").innerHTML = rows.map((candidate) => {
       const item = metric(candidate);
       const flows = item.flows;
-      const selectable = actionable && item.structure_status !== "WARMING_UP";
-      return `<tr>
-        <td class="sticky-select"><input class="candidate-check" data-select-code="${h(candidate.code)}" type="checkbox" aria-label="${h(candidate.name)} 선택" ${selection.has(candidate.code) ? "checked" : ""} ${selectable ? "" : "disabled"}></td>
-        <td class="sticky-rank">${structureCell(item, item.rank)}</td>
+      const official = officialCodes.has(candidate.code);
+      const selectable = official && actionable && item.structure_status !== "WARMING_UP";
+      const selectionLabel = official ? `${candidate.name} 선택` : `${candidate.name} 확장 관찰군`;
+      return `<tr class="${official ? "" : "extended-watch-row"}">
+        <td class="sticky-select"><input class="candidate-check" data-select-code="${h(candidate.code)}" type="checkbox" aria-label="${h(selectionLabel)}" ${selection.has(candidate.code) ? "checked" : ""} ${selectable ? "" : "disabled"}></td>
+        <td class="sticky-rank">${structureCell(item, `${item.rank}${official ? "" : '<small class="extended-badge">관찰</small>'}`)}</td>
         ${stockCell(candidate)}
         <td>${grade(item)}</td>
         <td>${won.format(n(candidate.current_price))}</td>
@@ -231,28 +235,51 @@
   }
 
   function expandedPlot(item, name, currentPrice) {
-    const values = item.chart_bars.map((bar) => n(bar.close));
+    const bars = item.chart_bars;
+    const values = bars.map((bar) => n(bar.close));
     const width = 900;
-    const height = 210;
-    const padX = 42;
-    const padY = 18;
-    const low = Math.min(n(item.box_low), ...item.chart_bars.map((bar) => n(bar.low)));
+    const height = 240;
+    const padLeft = 78;
+    const padRight = 18;
+    const padTop = 16;
+    const padBottom = 30;
+    const plotBottom = height - padBottom;
+    const low = Math.min(n(item.box_low), ...bars.map((bar) => n(bar.low)));
     const target15 = n(currentPrice) * 1.15;
     const high = Math.max(
       target15,
-      ...item.chart_bars.map((bar) => n(bar.high)),
+      ...bars.map((bar) => n(bar.high)),
     );
     const spread = Math.max(1, high - low);
-    const x = (index) => padX + index * ((width - padX * 2) / Math.max(1, values.length - 1));
-    const y = (value) => padY + (high - value) / spread * (height - padY * 2);
+    const x = (index) => padLeft + index * ((width - padLeft - padRight) / Math.max(1, values.length - 1));
+    const y = (value) => padTop + (high - value) / spread * (plotBottom - padTop);
     const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
     const lowerY = y(n(item.box_low));
     const targetY = y(target15);
+    const priceTicks = Array.from({ length: 5 }, (_, index) => high - (spread * index / 4));
+    const dateGroups = [];
+    bars.forEach((bar, index) => {
+      const last = dateGroups.at(-1);
+      if (last?.date === bar.trading_date) last.end = index;
+      else dateGroups.push({ date: bar.trading_date, start: index, end: index });
+    });
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${h(name)} ${state.window}일 60분봉 종가 흐름">
-      <line class="modal-target-line" x1="${padX}" y1="${targetY}" x2="${width - padX}" y2="${targetY}"></line>
-      <line class="modal-lower-line" x1="${padX}" y1="${lowerY}" x2="${width - padX}" y2="${lowerY}"></line>
-      <text x="4" y="${Math.max(12, targetY - 4)}">현재+15%</text>
-      <text x="4" y="${Math.min(height - 4, lowerY + 13)}">하단</text>
+      ${priceTicks.map((value) => {
+        const tickY = y(value);
+        return `<line class="modal-grid-line" x1="${padLeft}" y1="${tickY}" x2="${width - padRight}" y2="${tickY}"></line>
+          <text class="modal-price-tick" x="${padLeft - 8}" y="${tickY + 3}" text-anchor="end">${won.format(Math.round(value))}원</text>`;
+      }).join("")}
+      ${dateGroups.map((group) => {
+        const startX = x(group.start);
+        const centerX = x((group.start + group.end) / 2);
+        const label = `${group.date.slice(4, 6)}.${group.date.slice(6, 8)}`;
+        return `<line class="modal-date-line" x1="${startX}" y1="${padTop}" x2="${startX}" y2="${plotBottom}"></line>
+          <text class="modal-date-tick" x="${centerX}" y="${height - 8}" text-anchor="middle">${h(label)}</text>`;
+      }).join("")}
+      <line class="modal-target-line" x1="${padLeft}" y1="${targetY}" x2="${width - padRight}" y2="${targetY}"></line>
+      <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${width - padRight}" y2="${lowerY}"></line>
+      <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.max(12, targetY - 4)}">현재+15%</text>
+      <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.min(plotBottom - 3, lowerY + 13)}">하단</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }
@@ -285,8 +312,8 @@
           if (!bar) return '<td class="empty-bar">-</td>';
           return `<td class="hour-bar-cell">
             <strong>${won.format(n(bar.close))}</strong>
-            <small>시 ${won.format(n(bar.open))} · 고 ${won.format(n(bar.high))}</small>
-            <small>저 ${won.format(n(bar.low))} · 량 ${won.format(n(bar.volume))}</small>
+            <small>량 ${won.format(n(bar.volume))} · 시 ${won.format(n(bar.open))}</small>
+            <small>저 ${won.format(n(bar.low))} · 고 ${won.format(n(bar.high))}</small>
           </td>`;
         }).join("")}
       </tr>`).join("");

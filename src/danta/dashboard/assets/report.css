@@ -126,22 +126,32 @@ body.modal-open { overflow: hidden; }
 .chart-modal-header p { margin: 5px 0 0; color: #cbd6e6; font-size: 11px; }
 .chart-modal-close { width: 34px; height: 34px; border: 1px solid #63728a; border-radius: 4px; color: white; background: transparent; font-size: 25px; line-height: 1; cursor: pointer; }
 .chart-modal-plot { padding: 10px 18px 4px; background: #f8fafc; }
-.chart-modal-plot svg { display: block; width: 100%; height: 210px; }
+.chart-modal-plot svg { display: block; width: 100%; height: 240px; }
 .modal-price-line { fill: none; stroke: #254f7a; stroke-width: 2.2; vector-effect: non-scaling-stroke; }
 .modal-target-line { stroke: #cf3b3b; stroke-width: 1.2; stroke-dasharray: 6 4; }
 .modal-lower-line { stroke: #397d58; stroke-width: 1.2; stroke-dasharray: 6 4; }
+.modal-grid-line { stroke: #dce3ec; stroke-width: 1; }
+.modal-date-line { stroke: #e7ebf1; stroke-width: 1; }
 .chart-modal-plot text { fill: #627087; font-size: 10px; font-weight: 700; }
+.chart-modal-plot .modal-price-tick { font-size: 9px; font-weight: 600; }
+.chart-modal-plot .modal-date-tick { font-size: 9px; font-weight: 700; }
+.chart-modal-plot .modal-reference-label { paint-order: stroke; stroke: #f8fafc; stroke-width: 3px; }
 .chart-modal-table-wrap { min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
 .chart-modal-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 11px; }
 .chart-modal-table th, .chart-modal-table td { padding: 7px 10px; border-right: 1px solid var(--cell-line); border-bottom: 1px solid var(--cell-line); text-align: right; }
 .chart-modal-table th { position: sticky; top: 0; z-index: 1; color: white; background: var(--blue); text-align: center; }
 .chart-modal-table tbody th { position: sticky; left: 0; z-index: 1; min-width: 62px; color: var(--text); background: #eef2f7; }
 .chart-modal-table thead th:first-child { left: 0; z-index: 3; }
-.hour-bar-cell { min-width: 150px; text-align: center !important; }
+.hour-bar-cell { min-width: 126px; padding-inline: 7px !important; text-align: center !important; }
 .hour-bar-cell strong { display: block; margin-bottom: 3px; color: #10223c; font-size: 12px; }
 .hour-bar-cell small { display: block; color: var(--muted); font-size: 8px; line-height: 1.45; }
-.empty-bar { min-width: 150px; color: #9aa5b5; text-align: center !important; }
+.empty-bar { min-width: 126px; color: #9aa5b5; text-align: center !important; }
 .chart-modal-table tbody tr:nth-child(even) { background: #f7f9fc; }
+.extended-watch-row td { background-color: #f7f8fa; }
+.extended-watch-row .sticky-select,
+.extended-watch-row .sticky-rank,
+.extended-watch-row .sticky-stock { background-color: #eef1f5; }
+.extended-badge { display: block; margin-top: 2px; color: #7a8494; font-size: 7px; font-weight: 800; }
 
 .selection-tray { min-height: 65px; padding: 6px 10px 7px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: end; gap: 4px 8px; color: var(--text); border-top: 1px solid #aeb9c8; background: #eef2f7; }
 .selection-summary { grid-column: 1 / -1; min-width: 0; display: flex; align-items: center; gap: 9px; min-height: 14px; line-height: 1; }

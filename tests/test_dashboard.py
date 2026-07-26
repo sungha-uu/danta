@@ -17,6 +17,7 @@ def test_demo_report_has_thirty_ranked_and_graded_candidates_for_every_window() 
 
     assert report.strategy_status == "RESEARCH_ONLY"
     assert len(report.candidates) == 30
+    assert len(report.extended_watchlist) == 20
     for window in ("7", "14", "21"):
         metrics = [candidate.windows[window] for candidate in report.candidates]
         assert sorted(item.rank for item in metrics) == list(range(1, 31))
@@ -154,7 +155,11 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "structure_status" in html
     assert '"average_trading_value_billion"' in html
     assert "item.flows" in html
-    assert "후보 30 종합" in html
+    assert "후보 30 + 확장 관찰 20" in html
+    assert "확장 관찰 20" in html
+    assert "extended_watchlist" in html
+    assert "extended-watch-row" in html
+    assert "extended-badge" in html
     assert "AI 코멘트" in html
     assert "정량 등급" in html
     assert "AI 정성 검토는 아직 미연결입니다." in html
