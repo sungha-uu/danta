@@ -109,6 +109,11 @@ def _parser() -> argparse.ArgumentParser:
         default=7,
         help="minute coverage target; 14/21 use the 50-symbol audit pool",
     )
+    intraday.add_argument(
+        "--skip-backfill",
+        action="store_true",
+        help="rebuild from stored minute bars without calling the KIS minute API",
+    )
     ai_review = subparsers.add_parser(
         "apply-ai-review",
         help="apply a complete versioned AI review to a public report",
@@ -400,23 +405,26 @@ def main() -> None:
                 f"starting resumable {args.window_days}-day minute backfill",
                 flush=True,
             )
-            credentials = load_kis_credentials(settings)
+            if not args.skip_backfill:
+                credentials = load_kis_credentials(settings)
 
-            async def collect_minutes() -> None:
-                async with KisClient(
-                    credentials,
-                    token_cache_path=Path("data/kis-token-cache.json"),
-                ) as client:
-                    await backfill_minute_bars(
-                        client,
-                        MinuteBarStore(args.data_root),
-                        collection_candidates,
-                        dataset.trading_dates,
-                        window_days=args.window_days,
-                        progress=lambda message: print(message, flush=True),
-                    )
+                async def collect_minutes() -> None:
+                    async with KisClient(
+                        credentials,
+                        token_cache_path=Path("data/kis-token-cache.json"),
+                    ) as client:
+                        await backfill_minute_bars(
+                            client,
+                            MinuteBarStore(args.data_root),
+                            collection_candidates,
+                            dataset.trading_dates,
+                            window_days=args.window_days,
+                            progress=lambda message: print(message, flush=True),
+                        )
 
-            asyncio.run(collect_minutes())
+                asyncio.run(collect_minutes())
+            else:
+                print("KIS minute backfill skipped; using stored bars", flush=True)
             report = build_intraday_report(
                 dataset,
                 prefiltered,

@@ -55,7 +55,7 @@
           </div>
           <div class="filters">
             <label><input id="recommendedOnly" type="checkbox"> <span id="recommendFilterLabel">추천 이상</span></label>
-            <label><input id="lowerOnly" type="checkbox"> 박스 하단 35%↓</label>
+            <label><input id="lowerOnly" type="checkbox"> 활성 하단 35%↓</label>
             <span><b id="visibleCount">50</b> / <b id="totalCount">50</b></span>
           </div>
         </div>
@@ -65,7 +65,8 @@
               <tr>
                 <th class="sticky-select">선택</th><th class="sticky-rank">순위</th><th class="sticky-name">종목명</th>
                 <th id="reviewGradeHeader">AI 등급</th><th>현재가</th><th title="분봉 준비 시 첫 60분봉 종가, 준비 중에는 첫 거래일 종가 대비 현재가 변화율">기간수익률</th><th title="선택 기간 최고가 대비 현재가의 등락률">기간고점 대비</th><th>가격 흐름</th>
-                <th title="60분봉 저가의 10분위로 계산한 하단 경계">박스 하단</th><th title="60분봉 고가의 90분위로 계산한 상단 경계">박스 상단</th><th>현재 위치</th><th title="첫 거래일 저가 대비 마지막 거래일 저가의 방향">하단 방향</th>
+                <th title="최근 가격 레짐에서 반복된 활성 하단 가격 구역">활성 하단권</th><th title="최근 가격 레짐에서 반복된 활성 상단 가격 구역">활성 상단권</th><th title="활성 하단 접촉 뒤 상단 재도달과 -7% 손절 선행의 후향 관측값">재도달/손절</th><th title="활성 구간 길이·해결 표본·박스 포함률을 결합한 설명 통계 신뢰도">활성 신뢰</th>
+                <th title="선택 기간 전체 60분봉 저가의 10분위">기간 하단</th><th title="선택 기간 전체 60분봉 고가의 90분위">기간 상단</th><th>활성 위치</th><th title="첫 거래일 저가 대비 마지막 거래일 저가의 방향">하단 방향</th>
                 <th title="날짜별 고가/저가 변동폭의 중앙값과 최대값">일중 진폭<br>중앙/최대</th><th title="당일 저점 이후 고가까지 실제 반등폭의 중앙값과 최대값">저점 반등<br>중앙/최대</th><th title="당일 저점 이후 각각 5%, 10%, 15% 이상 반등한 거래일 수">도달일수<br>5%/10%/15%</th>
                 <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
                 <th>정량점수</th><th id="reviewScoreHeader">AI점수</th><th id="reviewCommentHeader">AI 코멘트</th>

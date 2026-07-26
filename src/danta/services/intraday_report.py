@@ -16,6 +16,7 @@ from pydantic import HttpUrl
 from danta.adapters.kis.client import KisApiError, KisClient, KisMinuteBar
 from danta.adapters.krx.client import MarketDataset
 from danta.dashboard.models import (
+    ActiveBoxMetrics,
     AiGrade,
     CandidateView,
     ChartBar,
@@ -56,6 +57,32 @@ class HourBar:
 
 
 @dataclass(frozen=True, slots=True)
+class _ActiveBox:
+    start_date: str
+    trading_days: int
+    lower_zone_low: Decimal
+    lower_zone_high: Decimal
+    upper_zone_low: Decimal
+    upper_zone_high: Decimal
+    position: Decimal
+    amplitude: Decimal
+    upside_to_upper: Decimal
+    inclusion: Decimal
+    lower_contacts: int
+    upper_reaches: int
+    stop_first: int
+    timeouts: int
+    pending: int
+    completed_cycles: int
+    success_rate: Decimal
+    stop_first_rate: Decimal
+    median_time_to_target_hours: Decimal | None
+    rebound_trend: Literal["강화", "유지", "약화", "표본 부족"]
+    confidence: Literal["HIGH", "MEDIUM", "LOW"]
+    structural_invalidation_price: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class _Analyzed:
     symbol: str
     low: Decimal
@@ -79,6 +106,7 @@ class _Analyzed:
     hour_bars: list[HourBar]
     hourly_closes: list[Decimal]
     score: Decimal
+    active: _ActiveBox | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +367,251 @@ def _daily_dynamics(
     )
 
 
+def _active_regime_start(hour_bars: list[HourBar]) -> str:
+    grouped: dict[str, list[HourBar]] = {}
+    for bar in hour_bars:
+        grouped.setdefault(bar.trading_date, []).append(bar)
+    dates = list(grouped)
+    if len(dates) < 5:
+        return dates[0]
+    typical = {
+        trading_date: _percentile(
+            (bar.close for bar in grouped[trading_date]),
+            Decimal("0.50"),
+        )
+        for trading_date in dates
+    }
+    minimum_active_days = 4
+    selected = dates[0]
+    for index in range(1, len(dates) - minimum_active_days + 1):
+        prior_dates = dates[max(0, index - 3) : index]
+        baseline = _percentile(
+            (typical[trading_date] for trading_date in prior_dates),
+            Decimal("0.50"),
+        )
+        if baseline <= 0:
+            continue
+        direction = (
+            (typical[dates[index]] / baseline - Decimal("1")) * HUNDRED
+        )
+        if abs(direction) < Decimal("6"):
+            continue
+        confirmation_dates = dates[index : min(len(dates), index + 2)]
+        confirmation = _percentile(
+            (typical[trading_date] for trading_date in confirmation_dates),
+            Decimal("0.50"),
+        )
+        confirmation_shift = (
+            (confirmation / baseline - Decimal("1")) * HUNDRED
+        )
+        if (
+            abs(confirmation_shift) >= Decimal("4.5")
+            and direction * confirmation_shift > 0
+        ):
+            selected = dates[index]
+    return selected
+
+
+def _active_episode_stats(
+    minute_bars: list[KisMinuteBar],
+    *,
+    lower_zone_high: Decimal,
+    upper_zone_low: Decimal,
+    box_width: Decimal,
+) -> tuple[int, int, int, int, int, int, Decimal, Decimal, Decimal | None, str]:
+    ordered = sorted(
+        minute_bars,
+        key=lambda item: (item.trading_date, item.trading_time),
+    )
+    trading_days = sorted({bar.trading_date for bar in ordered})
+    day_index = {trading_day: index for index, trading_day in enumerate(trading_days)}
+    contacts = reaches = stop_first = timeouts = completed_cycles = 0
+    armed_index: int | None = None
+    armed_day: int | None = None
+    max_excursion = Decimal("0")
+    reset_ready = True
+    waiting_cycle = False
+    durations: list[Decimal] = []
+    excursions: list[Decimal] = []
+    stop_price = lower_zone_high * Decimal("0.93")
+    reset_price = lower_zone_high + box_width * Decimal("0.20")
+
+    for index, bar in enumerate(ordered):
+        low = Decimal(bar.low)
+        high = Decimal(bar.high)
+        current_day = day_index[bar.trading_date]
+        if waiting_cycle and low <= lower_zone_high:
+            completed_cycles += 1
+            waiting_cycle = False
+            reset_ready = True
+        if not reset_ready and high >= reset_price:
+            reset_ready = True
+
+        if armed_index is not None and armed_day is not None:
+            max_excursion = max(
+                max_excursion,
+                (high / lower_zone_high - Decimal("1")) * HUNDRED,
+            )
+            elapsed_days = current_day - armed_day
+            outcome: str | None = None
+            if index > armed_index and low <= stop_price:
+                stop_first += 1
+                outcome = "stop"
+            elif index > armed_index and high >= upper_zone_low:
+                reaches += 1
+                durations.append(Decimal(index - armed_index) / Decimal("60"))
+                waiting_cycle = True
+                outcome = "reach"
+            elif elapsed_days >= 5:
+                timeouts += 1
+                outcome = "timeout"
+            if outcome is not None:
+                excursions.append(max(Decimal("0"), max_excursion))
+                armed_index = None
+                armed_day = None
+                max_excursion = Decimal("0")
+                reset_ready = False
+                continue
+
+        if armed_index is None and reset_ready and low <= lower_zone_high:
+            contacts += 1
+            armed_index = index
+            armed_day = current_day
+            max_excursion = max(
+                Decimal("0"),
+                (high / lower_zone_high - Decimal("1")) * HUNDRED,
+            )
+            reset_ready = False
+
+    pending = int(armed_index is not None)
+    resolved = reaches + stop_first + timeouts
+    success_rate = (
+        Decimal(reaches) / Decimal(resolved) * HUNDRED
+        if resolved
+        else Decimal("0")
+    )
+    stop_rate = (
+        Decimal(stop_first) / Decimal(resolved) * HUNDRED
+        if resolved
+        else Decimal("0")
+    )
+    median_hours = (
+        _percentile(durations, Decimal("0.50")) if durations else None
+    )
+    rebound_trend = "표본 부족"
+    if len(excursions) >= 4:
+        split = len(excursions) // 2
+        earlier = _percentile(excursions[:split], Decimal("0.50"))
+        recent = _percentile(excursions[split:], Decimal("0.50"))
+        rebound_trend = (
+            "강화"
+            if recent - earlier >= Decimal("2")
+            else "약화"
+            if earlier - recent >= Decimal("2")
+            else "유지"
+        )
+    return (
+        contacts,
+        reaches,
+        stop_first,
+        timeouts,
+        pending,
+        completed_cycles,
+        success_rate,
+        stop_rate,
+        median_hours,
+        rebound_trend,
+    )
+
+
+def _active_box_analysis(
+    hour_bars: list[HourBar],
+    minute_bars: list[KisMinuteBar],
+    current: Decimal,
+) -> _ActiveBox:
+    start_date = _active_regime_start(hour_bars)
+    active_hours = [bar for bar in hour_bars if bar.trading_date >= start_date]
+    active_minutes = [
+        bar for bar in minute_bars if bar.trading_date >= start_date
+    ]
+    trading_days = len({bar.trading_date for bar in active_hours})
+    low_center = _percentile(
+        (bar.low for bar in active_hours), Decimal("0.10")
+    )
+    high_center = _percentile(
+        (bar.high for bar in active_hours), Decimal("0.90")
+    )
+    if high_center <= low_center:
+        raise CandidateReportError("active intraday box has no positive width")
+    box_width = high_center - low_center
+    lower_zone_low = _percentile(
+        (bar.low for bar in active_hours), Decimal("0.05")
+    )
+    lower_zone_high = low_center + box_width * Decimal("0.12")
+    upper_zone_low = high_center - box_width * Decimal("0.12")
+    upper_zone_high = _percentile(
+        (bar.high for bar in active_hours), Decimal("0.95")
+    )
+    included = sum(
+        bar.low >= lower_zone_low and bar.high <= upper_zone_high
+        for bar in active_hours
+    )
+    inclusion = Decimal(included) / Decimal(len(active_hours)) * HUNDRED
+    center = (high_center + low_center) / Decimal("2")
+    position = (current - low_center) / box_width * HUNDRED
+    amplitude = box_width / center * HUNDRED
+    upside = (upper_zone_low / current - Decimal("1")) * HUNDRED
+    (
+        contacts,
+        reaches,
+        stop_first,
+        timeouts,
+        pending,
+        cycles,
+        success_rate,
+        stop_rate,
+        median_hours,
+        rebound_trend,
+    ) = _active_episode_stats(
+        active_minutes,
+        lower_zone_high=lower_zone_high,
+        upper_zone_low=upper_zone_low,
+        box_width=box_width,
+    )
+    resolved = reaches + stop_first + timeouts
+    confidence: Literal["HIGH", "MEDIUM", "LOW"] = (
+        "HIGH"
+        if resolved >= 5 and trading_days >= 10 and inclusion >= Decimal("60")
+        else "MEDIUM"
+        if resolved >= 3 and trading_days >= 7
+        else "LOW"
+    )
+    return _ActiveBox(
+        start_date=start_date,
+        trading_days=trading_days,
+        lower_zone_low=lower_zone_low,
+        lower_zone_high=lower_zone_high,
+        upper_zone_low=upper_zone_low,
+        upper_zone_high=upper_zone_high,
+        position=position,
+        amplitude=amplitude,
+        upside_to_upper=upside,
+        inclusion=inclusion,
+        lower_contacts=contacts,
+        upper_reaches=reaches,
+        stop_first=stop_first,
+        timeouts=timeouts,
+        pending=pending,
+        completed_cycles=cycles,
+        success_rate=success_rate,
+        stop_first_rate=stop_rate,
+        median_time_to_target_hours=median_hours,
+        rebound_trend=rebound_trend,  # type: ignore[arg-type]
+        confidence=confidence,
+        structural_invalidation_price=lower_zone_low * Decimal("0.98"),
+    )
+
+
 def _flow_for(
     dataset: MarketDataset,
     symbol: str,
@@ -444,18 +717,22 @@ def _setup_grade(
 
 
 def _setup_eligible(item: _Analyzed) -> bool:
+    position = item.active.position if item.active else item.position
+    reaches = item.active.upper_reaches if item.active else item.target_reaches
     return (
-        item.position <= Decimal("35")
-        and item.target_reaches >= 1
+        position <= Decimal("35")
+        and reaches >= 1
     )
 
 
 def _setup_rejection_reasons(item: _Analyzed) -> tuple[str, ...]:
     reasons: list[str] = []
-    if item.position > Decimal("35"):
-        reasons.append("현재 위치가 박스 하단 35% 밖")
-    if item.target_reaches < 1:
-        reasons.append("하단 접촉 후 3거래일 내 +10% 도달 이력 없음")
+    position = item.active.position if item.active else item.position
+    reaches = item.active.upper_reaches if item.active else item.target_reaches
+    if position > Decimal("35"):
+        reasons.append("현재 위치가 활성 박스 하단 35% 밖")
+    if reaches < 1:
+        reasons.append("활성 하단권 접촉 후 5거래일 내 활성 상단권 재도달 이력 없음")
     return tuple(reasons)
 
 
@@ -470,6 +747,7 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
     center = (high + low) / Decimal("2")
     amplitude = (high - low) / center * HUNDRED
     current = Decimal(minute_bars[-1].close)
+    active = _active_box_analysis(hour_bars, minute_bars, current)
     position = (current - low) / (high - low) * HUNDRED
     included = sum(1 for bar in hour_bars if bar.low >= low and bar.high <= high)
     box_inclusion = Decimal(included) / Decimal(len(hour_bars)) * HUNDRED
@@ -510,6 +788,7 @@ def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
         hour_bars=hour_bars,
         hourly_closes=[bar.close for bar in hour_bars],
         score=Decimal("0"),
+        active=active,
     )
 
 
@@ -523,6 +802,12 @@ def _score_all(
     )
     result: list[_Analyzed] = []
     for item in analyses:
+        active_position = item.active.position if item.active else item.position
+        active_upside = (
+            item.active.upside_to_upper
+            if item.active
+            else item.current_to_window_high
+        )
         day_count = Decimal("7")
         target_frequency_score = min(
             HUNDRED,
@@ -548,19 +833,36 @@ def _score_all(
             str(math.log10(float(candidates[item.symbol].average_trading_value)))
         )
         liquidity_score = liquidity_log / Decimal(str(max_liquidity_log)) * HUNDRED
-        lower_score = max(Decimal("0"), HUNDRED - max(Decimal("0"), item.position))
+        lower_score = max(
+            Decimal("0"),
+            HUNDRED - max(Decimal("0"), active_position),
+        )
         upside_room_score = min(
-            HUNDRED, item.current_to_window_high / Decimal("15") * HUNDRED
+            HUNDRED,
+            max(Decimal("0"), active_upside)
+            / Decimal("15")
+            * HUNDRED,
+        )
+        resolved_active = (
+            item.active.upper_reaches + item.active.stop_first + item.active.timeouts
+            if item.active
+            else item.target_reaches
+        )
+        active_quality_score = (
+            item.active.success_rate
+            if item.active and resolved_active
+            else min(HUNDRED, Decimal(item.target_reaches) * Decimal("50"))
         )
         raw_score = (
-            upside_room_score * Decimal("0.25")
-            + lower_score * Decimal("0.20")
-            + target_frequency_score * Decimal("0.20")
+            upside_room_score * Decimal("0.22")
+            + lower_score * Decimal("0.22")
+            + active_quality_score * Decimal("0.18")
+            + target_frequency_score * Decimal("0.10")
             + liquidity_score * Decimal("0.15")
-            + rebound_score * Decimal("0.12")
-            + daily_range_score * Decimal("0.08")
+            + rebound_score * Decimal("0.08")
+            + daily_range_score * Decimal("0.05")
         )
-        score = raw_score * _entry_location_factor(item.position)
+        score = raw_score * _entry_location_factor(active_position)
         result.append(
             replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
         )
@@ -630,9 +932,15 @@ def screening_pool_audit(
                 score=item.score.quantize(Decimal("0.01")),
                 eligible=not reasons,
                 rejection_reasons=reasons,
-                position_pct=item.position.quantize(Decimal("0.01")),
+                position_pct=(
+                    item.active.position if item.active else item.position
+                ).quantize(Decimal("0.01")),
                 lower_trend_pct=item.lower_trend.quantize(Decimal("0.01")),
-                target_reach_count=item.target_reaches,
+                target_reach_count=(
+                    item.active.upper_reaches
+                    if item.active
+                    else item.target_reaches
+                ),
             )
         )
     return entries
@@ -671,6 +979,8 @@ def _ready_window_metrics(
     rank: int,
 ) -> WindowMetrics:
     symbol = analysis.symbol
+    if analysis.active is None:
+        raise CandidateReportError("intraday READY metrics require active box analysis")
     current_price = analysis.hourly_closes[-1]
     current_vs_high = min(
         Decimal("0"),
@@ -695,9 +1005,16 @@ def _ready_window_metrics(
     rejection_reasons = _setup_rejection_reasons(analysis)
     grade = _setup_grade(
         score,
-        analysis.position,
+        analysis.active.position,
         analysis.lower_trend,
-        analysis.target_reaches,
+        analysis.active.upper_reaches,
+    )
+    flow_confirmation: Literal["순유입", "중립", "순유출"] = (
+        "순유입"
+        if flows.foreign + flows.institution > 0
+        else "순유출"
+        if flows.foreign + flows.institution < 0
+        else "중립"
     )
     return WindowMetrics(
         days=days,
@@ -707,7 +1024,7 @@ def _ready_window_metrics(
         box_low=analysis.low.quantize(Decimal("0.01")),
         box_high=analysis.high.quantize(Decimal("0.01")),
         amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
-        position_pct=analysis.position.quantize(Decimal("0.01")),
+        position_pct=analysis.active.position.quantize(Decimal("0.01")),
         median_daily_range_pct=analysis.median_daily_range.quantize(
             Decimal("0.01")
         ),
@@ -748,7 +1065,13 @@ def _ready_window_metrics(
         final_score=score,
         ai_grade=grade,
         ai_comment=(
-            f"실제 {days}거래일 1분봉을 60분봉으로 집계한 정량 기준선입니다. "
+            f"실제 {days}거래일 1분봉을 60분봉으로 집계했고 "
+            f"{analysis.active.start_date[4:6]}.{analysis.active.start_date[6:8]}부터 "
+            f"{analysis.active.trading_days}거래일을 활성 박스로 판정했습니다. "
+            f"활성 하단권→상단권 재도달 {analysis.active.upper_reaches}회, "
+            f"손절 선행 {analysis.active.stop_first}회, "
+            f"관측 재도달률 {analysis.active.success_rate.quantize(Decimal('0.1'))}% "
+            f"(신뢰 {analysis.active.confidence})입니다. "
             f"일중 진폭 중앙값 "
             f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%, "
             f"저점 반등 중앙값 "
@@ -765,17 +1088,19 @@ def _ready_window_metrics(
             + "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
         ),
         reasons=[
+            f"활성 상단 재도달 {analysis.active.upper_reaches}회 / "
+            f"손절 선행 {analysis.active.stop_first}회",
+            f"활성 박스 신뢰 {analysis.active.confidence}, "
+            f"반등 {analysis.active.rebound_trend}",
             f"일중 진폭 중앙값 "
             f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%",
-            f"저점 반등 중앙값 "
-            f"{analysis.median_daily_rebound.quantize(Decimal('0.1'))}%",
-            f"3거래일 이내 하단→+10% {analysis.target_reaches}회",
             *rejection_reasons,
-        ],
+        ][:5],
         risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
         invalidation=(
-            f"박스 하단 {analysis.low.quantize(Decimal('1'))}원 "
-            "이탈 후 재진입 실패"
+            "활성 구조 무효화 "
+            f"{analysis.active.structural_invalidation_price.quantize(Decimal('1'))}원. "
+            "보유 후 평균 체결가 대비 -7% 손절은 별도 불변 규칙"
         ),
         closes=analysis.hourly_closes,
         chart_bars=[
@@ -790,6 +1115,45 @@ def _ready_window_metrics(
             )
             for bar in analysis.hour_bars
         ],
+        active_box=ActiveBoxMetrics(
+            start_date=analysis.active.start_date,
+            trading_days=analysis.active.trading_days,
+            lower_zone_low=analysis.active.lower_zone_low.quantize(Decimal("0.01")),
+            lower_zone_high=analysis.active.lower_zone_high.quantize(Decimal("0.01")),
+            upper_zone_low=analysis.active.upper_zone_low.quantize(Decimal("0.01")),
+            upper_zone_high=analysis.active.upper_zone_high.quantize(Decimal("0.01")),
+            position_pct=analysis.active.position.quantize(Decimal("0.01")),
+            amplitude_pct=analysis.active.amplitude.quantize(Decimal("0.01")),
+            upside_to_upper_pct=analysis.active.upside_to_upper.quantize(
+                Decimal("0.01")
+            ),
+            inclusion_pct=analysis.active.inclusion.quantize(Decimal("0.01")),
+            lower_contacts=analysis.active.lower_contacts,
+            upper_reaches=analysis.active.upper_reaches,
+            stop_first=analysis.active.stop_first,
+            timeouts=analysis.active.timeouts,
+            pending=analysis.active.pending,
+            completed_cycles=analysis.active.completed_cycles,
+            success_rate_pct=analysis.active.success_rate.quantize(Decimal("0.01")),
+            stop_first_rate_pct=analysis.active.stop_first_rate.quantize(
+                Decimal("0.01")
+            ),
+            median_time_to_target_hours=(
+                analysis.active.median_time_to_target_hours.quantize(
+                    Decimal("0.01")
+                )
+                if analysis.active.median_time_to_target_hours is not None
+                else None
+            ),
+            rebound_trend=analysis.active.rebound_trend,
+            confidence=analysis.active.confidence,
+            flow_confirmation=flow_confirmation,
+            structural_invalidation_price=(
+                analysis.active.structural_invalidation_price.quantize(
+                    Decimal("0.01")
+                )
+            ),
+        ),
         flows=flows,
     )
 
@@ -899,10 +1263,10 @@ def build_intraday_report(
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime=(
             f"실제 {'·'.join(ready_windows)}거래일 분봉 · "
-            "+10% 자격 게이트 연구 기준선"
+            "활성 박스 재도달 연구 기준선"
         ),
         calculation_version=(
-            "intraday-elasticity-v6-public-review-50-chart-aligned-"
+            "intraday-elasticity-v7-active-box-v1-public-review-50-"
             "prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",

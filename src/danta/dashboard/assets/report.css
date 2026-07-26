@@ -124,6 +124,10 @@ main { flex: 1 1 auto; min-height: 0; padding: 8px 8px 0; overflow: hidden; }
 .context-failed { color: #a12622; font-weight: 700; }
 .chart-link { display: inline-block; padding: 5px 8px; border: 1px solid #a9bad0; border-radius: 3px; color: #174f97; background: #f5f9ff; text-decoration: none; }
 .target-detail { display: block; margin-top: 3px; color: var(--muted); font-size: 8px; }
+.active-confidence { display: inline-block; min-width: 42px; padding: 2px 5px; border-radius: 4px; }
+.confidence-high { color: #17633a; background: #e2f3e8; }
+.confidence-medium { color: #745400; background: #fff2c7; }
+.confidence-low { color: #8b2e2e; background: #f8dddd; }
 
 body.modal-open { overflow: hidden; }
 .chart-modal[hidden] { display: none; }

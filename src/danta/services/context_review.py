@@ -394,11 +394,17 @@ def build_context_review(
             score = metrics.quant_score + flow_adjustment + news_adjustment
             if decline_opportunity:
                 score += Decimal("5")
+            active = metrics.active_box
+            active_reaches = (
+                active.upper_reaches
+                if active is not None
+                else (metrics.target_reach_count or 0)
+            )
             if (metrics.position_pct or Decimal("100")) > Decimal("50"):
                 score = min(score, Decimal("44"))
             elif (metrics.position_pct or Decimal("100")) > Decimal("35"):
                 score = min(score, Decimal("59"))
-            if (metrics.target_reach_count or 0) < 1:
+            if active_reaches < 1:
                 score = min(score, Decimal("69"))
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
@@ -414,9 +420,18 @@ def build_context_review(
                 else "하락 추세는 단독 감점하지 않았습니다."
             )
             gate_text = (
-                f"하단 후 +10% 도달 {metrics.target_reach_count}회"
-                if (metrics.target_reach_count or 0) > 0
-                else "하단 후 +10% 도달 이력 없음"
+                (
+                    f"활성 하단→상단 재도달 {active.upper_reaches}회, "
+                    f"손절 선행 {active.stop_first}회, "
+                    f"관측 재도달률 {active.success_rate_pct.quantize(Decimal('0.1'))}% "
+                    f"(신뢰 {active.confidence})"
+                )
+                if active is not None
+                else (
+                    f"하단 후 +10% 도달 {metrics.target_reach_count}회"
+                    if (metrics.target_reach_count or 0) > 0
+                    else "하단 후 +10% 도달 이력 없음"
+                )
             )
             news_text = (
                 f"최신 뉴스 {len(snapshot.news)}건 중 긍정 {positive_news}·"

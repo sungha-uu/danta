@@ -45,6 +45,48 @@ class ChartBar(BaseModel):
         return self
 
 
+class ActiveBoxMetrics(BaseModel):
+    calculation_version: Literal["active-box-v1"] = "active-box-v1"
+    start_date: str = Field(pattern=r"^\d{8}$")
+    trading_days: int = Field(ge=4, le=21)
+    lower_zone_low: Decimal = Field(gt=0)
+    lower_zone_high: Decimal = Field(gt=0)
+    upper_zone_low: Decimal = Field(gt=0)
+    upper_zone_high: Decimal = Field(gt=0)
+    position_pct: Decimal
+    amplitude_pct: Decimal = Field(ge=0)
+    upside_to_upper_pct: Decimal
+    inclusion_pct: Decimal = Field(ge=0, le=100)
+    lower_contacts: int = Field(ge=0)
+    upper_reaches: int = Field(ge=0)
+    stop_first: int = Field(ge=0)
+    timeouts: int = Field(ge=0)
+    pending: int = Field(ge=0, le=1)
+    completed_cycles: int = Field(ge=0)
+    success_rate_pct: Decimal = Field(ge=0, le=100)
+    stop_first_rate_pct: Decimal = Field(ge=0, le=100)
+    median_time_to_target_hours: Decimal | None = Field(default=None, ge=0)
+    rebound_trend: Literal["강화", "유지", "약화", "표본 부족"]
+    confidence: Literal["HIGH", "MEDIUM", "LOW"]
+    flow_confirmation: Literal["순유입", "중립", "순유출"]
+    structural_invalidation_price: Decimal = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_active_box(self) -> ActiveBoxMetrics:
+        if not (
+            self.lower_zone_low
+            <= self.lower_zone_high
+            < self.upper_zone_low
+            <= self.upper_zone_high
+        ):
+            raise ValueError("active box zones must be ordered and non-overlapping")
+        if self.lower_contacts != (
+            self.upper_reaches + self.stop_first + self.timeouts + self.pending
+        ):
+            raise ValueError("active contacts must equal all episode outcomes")
+        return self
+
+
 class WindowMetrics(BaseModel):
     days: Literal[7, 14, 21]
     structure_status: Literal["READY", "WARMING_UP"] = "READY"
@@ -87,6 +129,7 @@ class WindowMetrics(BaseModel):
     invalidation: str | None = Field(default=None, min_length=1, max_length=240)
     closes: list[Decimal] = Field(default_factory=list, max_length=200)
     chart_bars: list[ChartBar] = Field(default_factory=list, max_length=200)
+    active_box: ActiveBoxMetrics | None = None
     flows: FlowBreakdown
 
     @model_validator(mode="after")
@@ -156,6 +199,8 @@ class WindowMetrics(BaseModel):
                 raise ValueError("READY structure must include one OHLC bar per chart close")
         elif any(value is not None for value in structural) or self.closes or self.chart_bars:
             raise ValueError("WARMING_UP structure must not contain fabricated structure fields")
+        elif self.active_box is not None:
+            raise ValueError("WARMING_UP structure must not include active box metrics")
         return self
 
 

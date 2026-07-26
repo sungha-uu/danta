@@ -167,6 +167,36 @@
     return `<b>${item.reach_days_5pct}/${item.reach_days_10pct}/${item.reach_days_15pct}일</b>`;
   }
 
+  function activeZoneCell(item, side) {
+    const active = item.active_box;
+    if (!active) return '<span class="structure-warming">활성 박스 미적용</span>';
+    const low = side === "lower" ? active.lower_zone_low : active.upper_zone_low;
+    const high = side === "lower" ? active.lower_zone_high : active.upper_zone_high;
+    const detail = side === "lower"
+      ? `무효화 ${won.format(n(active.structural_invalidation_price))}원`
+      : `현재→상단 ${percent(active.upside_to_upper_pct)}`;
+    return `<b>${won.format(n(low))}~${won.format(n(high))}</b><small class="target-detail">${h(detail)}</small>`;
+  }
+
+  function activeOutcomeCell(item) {
+    const active = item.active_box;
+    if (!active) return '<span class="structure-warming">활성 박스 미적용</span>';
+    return `<b>재도달 ${one.format(n(active.success_rate_pct))}%</b>
+      <small class="target-detail">손절 선행 ${one.format(n(active.stop_first_rate_pct))}%</small>
+      <small class="target-detail">성공/손절/만료/진행 ${active.upper_reaches}/${active.stop_first}/${active.timeouts}/${active.pending}</small>`;
+  }
+
+  function activeConfidenceCell(item) {
+    const active = item.active_box;
+    if (!active) return '<span class="structure-warming">활성 박스 미적용</span>';
+    const reached = active.median_time_to_target_hours == null
+      ? "도달시간 없음"
+      : `중앙 ${one.format(n(active.median_time_to_target_hours))}거래시간`;
+    return `<b class="active-confidence confidence-${h(active.confidence.toLowerCase())}">${h(active.confidence)}</b>
+      <small class="target-detail">${h(active.start_date.slice(4, 6))}.${h(active.start_date.slice(6, 8))}~ · ${active.trading_days}일</small>
+      <small class="target-detail">${h(active.rebound_trend)} · ${h(active.flow_confirmation)} · ${h(reached)}</small>`;
+  }
+
   function lowerTrendCell(item) {
     const className = item.lower_trend === "상승" ? "pos" : item.lower_trend === "하락" ? "neg" : "";
     return `<b class="${className}">${h(item.lower_trend)}</b><small class="target-detail">${percent(
@@ -244,6 +274,10 @@
         <td class="${tone(item.return_pct)}"><b>${percent(item.return_pct)}</b></td>
         <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
         <td>${structureCell(item, sparkline(item, candidate.name, candidate.code))}</td>
+        <td>${structureCell(item, activeZoneCell(item, "lower"))}</td>
+        <td>${structureCell(item, activeZoneCell(item, "upper"))}</td>
+        <td>${structureCell(item, activeOutcomeCell(item))}</td>
+        <td>${structureCell(item, activeConfidenceCell(item))}</td>
         <td>${structureCell(item, won.format(n(item.box_low)))}</td>
         <td>${structureCell(item, won.format(n(item.box_high)))}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>

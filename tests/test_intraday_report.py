@@ -9,6 +9,8 @@ from danta.adapters.krx.client import DailyBar, MarketDataset
 from danta.services.intraday_report import (
     HourBar,
     PrefilterCandidate,
+    _active_episode_stats,
+    _active_regime_start,
     _Analyzed,
     _daily_dynamics,
     _entry_location_factor,
@@ -166,6 +168,59 @@ def test_daily_dynamics_only_counts_rebound_after_the_daily_low() -> None:
     assert metrics[8] < 0
 
 
+def test_active_regime_starts_after_sustained_level_shift() -> None:
+    bars = [
+        HourBar(
+            trading_date=f"202607{day:02d}",
+            bucket="09",
+            open=price,
+            high=price + Decimal("1"),
+            low=price - Decimal("1"),
+            close=price,
+            volume=Decimal("1000"),
+        )
+        for day, price in [
+            (13, Decimal("100")),
+            (14, Decimal("101")),
+            (15, Decimal("85")),
+            (16, Decimal("86")),
+            (17, Decimal("84")),
+            (18, Decimal("87")),
+        ]
+    ]
+
+    assert _active_regime_start(bars) == "20260715"
+
+
+def test_active_episode_treats_same_bar_target_and_stop_as_stop_first() -> None:
+    rows = [
+        KisMinuteBar(
+            trading_date="20260724",
+            trading_time=trading_time,
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=10,
+            accumulated_trading_value=0,
+        )
+        for trading_time, open_, high, low, close in [
+            ("090000", 100, 101, 99, 100),
+            ("090100", 100, 112, 92, 105),
+        ]
+    ]
+
+    stats = _active_episode_stats(
+        rows,
+        lower_zone_high=Decimal("100"),
+        upper_zone_low=Decimal("110"),
+        box_width=Decimal("10"),
+    )
+
+    assert stats[:5] == (1, 0, 1, 0, 0)
+    assert stats[7] == Decimal("100")
+
+
 def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     hour_bar = HourBar(
         trading_date="20260724",
@@ -220,8 +275,8 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     assert _setup_rejection_reasons(
         replace(analysis, position=Decimal("68"), target_reaches=0)
     ) == (
-        "현재 위치가 박스 하단 35% 밖",
-        "하단 접촉 후 3거래일 내 +10% 도달 이력 없음",
+        "현재 위치가 활성 박스 하단 35% 밖",
+        "활성 하단권 접촉 후 5거래일 내 활성 상단권 재도달 이력 없음",
     )
 
 
