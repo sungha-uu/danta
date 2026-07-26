@@ -303,6 +303,10 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "function selectedCandidates()" in html
     assert "[...selection.keys()]" in html
     assert ".report-table thead th { text-align: center !important; }" in html
+    assert (
+        'window: $(".window-picker button.active")?.dataset.window || "14"'
+        in html
+    )
     assert "<th>일평균 거래대금</th>" not in html
     assert "<th>거래량 배율</th>" not in html
     assert ">유동성</th>" not in html

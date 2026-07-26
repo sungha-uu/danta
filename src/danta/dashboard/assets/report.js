@@ -12,7 +12,9 @@
   const actionable = report.strategy_status === "ACTIVE"
     && report.source_bar_interval_minutes === 1
     && [10, 30, 60].includes(report.analysis_bar_interval_minutes);
-  const state = { window: "7" };
+  const state = {
+    window: $(".window-picker button.active")?.dataset.window || "14",
+  };
   const selectionKey = `danta-watch-draft:v3:${report.data_as_of}`;
   const selection = new Map();
   let copyBusy = false;
