@@ -14,6 +14,7 @@ from danta.services.intraday_report import (
     _ActiveBox,
     _Analyzed,
     _daily_dynamics,
+    _decline_shape,
     _entry_location_factor,
     _intraday_period_return,
     _score_all,
@@ -23,6 +24,7 @@ from danta.services.intraday_report import (
     _target_reach_episodes,
     aggregate_hour_bars,
     balanced_prefilter,
+    market_cap_top_universe,
 )
 
 
@@ -64,6 +66,35 @@ def test_balanced_prefilter_applies_all_three_thresholds() -> None:
     )
 
     assert [item.symbol for item in balanced_prefilter(dataset)] == ["000001"]
+
+
+def test_market_cap_top_universe_sorts_common_stocks_by_market_cap() -> None:
+    dates = [date(2026, 7, 24)]
+    dataset = MarketDataset(
+        bars={
+            "000001": [
+                DailyBar(dates[0], Decimal("10000"), Decimal("100"), Decimal("1000"))
+            ],
+            "000002": [
+                DailyBar(dates[0], Decimal("20000"), Decimal("100"), Decimal("2000"))
+            ],
+            "000003": [
+                DailyBar(dates[0], Decimal("30000"), Decimal("100"), Decimal("3000"))
+            ],
+        },
+        names={"000001": "중형", "000002": "대형", "000003": "대형우"},
+        flows={},
+        trading_dates=dates,
+        market_caps={
+            "000001": Decimal("100"),
+            "000002": Decimal("300"),
+            "000003": Decimal("500"),
+        },
+    )
+
+    universe = market_cap_top_universe(dataset, limit=2)
+
+    assert [item.symbol for item in universe] == ["000002", "000001"]
 
 
 def test_aggregate_hour_bars_uses_full_ohlcv() -> None:
@@ -169,6 +200,23 @@ def test_daily_dynamics_only_counts_rebound_after_the_daily_low() -> None:
     assert metrics[8] < 0
 
 
+def test_decline_shape_separates_good_pullback_from_structural_decline() -> None:
+    assert _decline_shape(
+        position=Decimal("20"),
+        lower_trend=Decimal("-6"),
+        upper_trend=Decimal("-2"),
+        range_retention=Decimal("90"),
+        rebound_retention=Decimal("85"),
+    ) == "GOOD_PULLBACK"
+    assert _decline_shape(
+        position=Decimal("20"),
+        lower_trend=Decimal("-10"),
+        upper_trend=Decimal("-12"),
+        range_retention=Decimal("70"),
+        rebound_retention=Decimal("60"),
+    ) == "STRUCTURAL_DECLINE"
+
+
 def test_active_regime_starts_after_sustained_level_shift() -> None:
     bars = [
         HourBar(
@@ -251,6 +299,10 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
         reach_days_15=0,
         current_to_window_high=Decimal("11"),
         lower_trend=Decimal("-2"),
+        upper_trend=Decimal("-1"),
+        range_retention=Decimal("90"),
+        rebound_retention=Decimal("90"),
+        decline_shape="GOOD_PULLBACK",
         box_inclusion=Decimal("80"),
         hour_bars=[hour_bar],
         hourly_closes=[Decimal("108")],
@@ -271,6 +323,9 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     assert _setup_eligible(analysis)
     assert not _setup_eligible(replace(analysis, position=Decimal("68")))
     assert _setup_eligible(replace(analysis, lower_trend=Decimal("-20")))
+    assert not _setup_eligible(
+        replace(analysis, decline_shape="STRUCTURAL_DECLINE")
+    )
     assert not _setup_eligible(replace(analysis, target_reaches=0))
     assert _setup_rejection_reasons(analysis) == ()
     assert _setup_rejection_reasons(

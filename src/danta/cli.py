@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import json
 import sys
-from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -34,10 +33,8 @@ from danta.services.context_review import PublicContextCollector, build_context_
 from danta.services.intraday_report import (
     MinuteBarStore,
     backfill_minute_bars,
-    balanced_prefilter,
     build_intraday_report,
-    screening_pool,
-    screening_pool_audit,
+    market_cap_top_universe,
 )
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.provider_doctor import KisProviderDoctor
@@ -381,20 +378,16 @@ def main() -> None:
             load_krx_environment(settings)
             print("collecting 21 KRX trading days...", flush=True)
             dataset = PykrxMarketDataClient().collect(required_days=21)
-            prefiltered = balanced_prefilter(dataset)
-            if len(prefiltered) < 30:
-                raise CandidateReportError(
-                    f"balanced prefilter returned only {len(prefiltered)} symbols"
-                )
-            snapshot = Path("data/prefilter-balanced-v1.json")
+            universe = market_cap_top_universe(dataset, limit=200)
+            snapshot = Path("data/market-cap-top-200-v1.json")
             snapshot.parent.mkdir(parents=True, exist_ok=True)
             snapshot_temporary = snapshot.with_suffix(".tmp")
             snapshot_temporary.write_text(
                 json.dumps(
                     {
-                        "version": "prefilter-balanced-v1",
+                        "version": "market-cap-top-200-v1",
                         "data_as_of": dataset.trading_dates[-1].isoformat(),
-                        "count": len(prefiltered),
+                        "count": len(universe),
                         "symbols": [
                             {
                                 "symbol": item.symbol,
@@ -405,7 +398,7 @@ def main() -> None:
                                     item.average_trading_value
                                 ),
                             }
-                            for item in prefiltered
+                            for item in universe
                         ],
                     },
                     ensure_ascii=False,
@@ -414,45 +407,7 @@ def main() -> None:
                 encoding="utf-8",
             )
             snapshot_temporary.replace(snapshot)
-            collection_candidates = prefiltered
-            if args.window_days > 7:
-                collection_candidates = screening_pool(
-                    prefiltered,
-                    MinuteBarStore(args.data_root),
-                    dataset.trading_dates,
-                    limit=50,
-                )
-                audit_snapshot = Path("data/filter-audit-pool-v1.json")
-                audit_temporary = audit_snapshot.with_suffix(".tmp")
-                audit_entries = screening_pool_audit(
-                    prefiltered,
-                    MinuteBarStore(args.data_root),
-                    dataset.trading_dates,
-                    limit=50,
-                )
-                audit_temporary.write_text(
-                    json.dumps(
-                        {
-                            "version": "filter-audit-pool-v1",
-                            "data_as_of": dataset.trading_dates[-1].isoformat(),
-                            "window_days": args.window_days,
-                            "count": len(collection_candidates),
-                            "candidates": [
-                                {
-                                    **asdict(item),
-                                    "score": str(item.score),
-                                    "position_pct": str(item.position_pct),
-                                    "lower_trend_pct": str(item.lower_trend_pct),
-                                }
-                                for item in audit_entries
-                            ],
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-                audit_temporary.replace(audit_snapshot)
+            collection_candidates = universe
             print(
                 f"collection universe: {len(collection_candidates)} symbols; "
                 f"starting resumable {args.window_days}-day minute backfill",
@@ -480,7 +435,7 @@ def main() -> None:
                 print("KIS minute backfill skipped; using stored bars", flush=True)
             report = build_intraday_report(
                 dataset,
-                prefiltered,
+                universe,
                 MinuteBarStore(args.data_root),
             )
             args.json_output.parent.mkdir(parents=True, exist_ok=True)

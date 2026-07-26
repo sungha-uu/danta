@@ -14,7 +14,7 @@
 - 사용자 승인 범위 검증과 -7% 손절 도메인 함수
 - 단위·계약·API 테스트
 - 추천 여부와 무관한 검토 후보 50개 공개 DTO 검증과 GitHub Pages용 단일 HTML 대시보드 빌더
-- 7·14·21일 전역 전환: 순위·AI 30개 코멘트·수익률·박스·차트·거래대금·수급 동기화
+- 7·14·21일 전역 전환: 동일 정량 상위 50개의 기간별 순위·AI 코멘트·수익률·박스·차트·거래대금·수급 동기화
 - `SmtpNotifier`와 `notify-report`: 비밀 SMTP 설정을 사용한 Pages 배포 알림
 - `apply-ai-review`: 보고서 기준시각과 공식 후보 전체 커버리지를 검증한 버전형 AI 리뷰 적용
 - `sungha-uu/danta` 코드 저장소와 `sungha-uu/danta_report` 정적 Pages 배포
@@ -198,7 +198,7 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 - 실전 주문은 `real_order_execution_enabled=false`와 Phase 0 정책 검증으로 차단되어 있다.
 - 대시보드 `--demo`와 `--input`은 동시에 사용할 수 없으며, 입력 JSON은 적격 후보 전부의 기간별 AI 4단계 등급과 코멘트를 반드시 가져야 한다.
 - `daily-report`는 KRX 자격정보를 Git 제외 파일에서 읽고 KOSPI 실제 후보 JSON과 정적 대시보드를 함께 원자적으로 생성한다. 기본 동작으로 후보 30개의 KIS 현재가를 교차검증하며 2% 초과 불일치, 수급 그룹 누락, 일별 전 종목 스냅샷 불완전 시 이전 보고서를 덮어쓰지 않는다. 데이터 공급자 장애 조사 때만 `--skip-kis-validation`으로 명시적인 미검증 오프라인 보고서를 만들 수 있다.
-- `intraday-report`는 `prefilter-balanced-v1`을 적용하고 최근 7거래일 KIS 1분봉을 종목·거래일 파일로 원자 저장한다. 재실행 시 정규장 커버리지 검증을 통과한 파일을 건너뛰고 미완료 구간부터 재개하며, 완료 후 7일 정량 상위 50개를 추천 여부와 무관한 공개 검토군으로 생성한다. `--window-days 14|21`은 같은 50개를 백필하고, 실제 커버리지를 충족한 기간만 `READY`로 표시한다.
+- `intraday-report`는 `kospi-market-cap-top200-v1`을 적용하고 최근 21거래일 KIS 1분봉을 종목·거래일 파일로 원자 저장한다. 재실행 시 정규장 커버리지 검증을 통과한 파일을 건너뛰고 미완료 구간부터 재개하며, 완료 후 200개 전체의 7·14·21일 분석을 `50/30/20`으로 합성해 정량 상위 50개를 공개 검토군으로 생성한다.
 
 기본 로컬 DB는 빠른 테스트를 위해 SQLite를 사용한다. PostgreSQL 통합 검증은 `docker compose up -d postgres` 후 `DANTA_DATABASE_URL`을 주입해서 수행한다.
 
