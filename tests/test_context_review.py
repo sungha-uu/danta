@@ -66,4 +66,8 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
     assert all(set(candidate.windows) == {"7", "14", "21"} for candidate in review.candidates)
     assert all(candidate.context_status == "READY" for candidate in review.candidates)
     assert all(len(candidate.news) == 1 for candidate in validated.candidates)
+    assert all(
+        candidate.discussion_titles == ["반등 기대", "매수 의견"]
+        for candidate in validated.candidates
+    )
     assert all(candidate.discussion_url is not None for candidate in validated.candidates)

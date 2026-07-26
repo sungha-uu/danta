@@ -453,6 +453,7 @@ def build_context_review(
             AiCandidateReview(
                 code=candidate.code,
                 discussion_summary=_discussion_summary(snapshot),
+                discussion_titles=list(snapshot.discussion_titles),
                 discussion_url=HttpUrl(snapshot.discussion_url),
                 context_status=_context_status(snapshot),
                 windows=window_reviews,  # type: ignore[arg-type]

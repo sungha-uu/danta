@@ -31,6 +31,7 @@ class AiCandidateReview(BaseModel):
     discussion_summary: str = Field(min_length=1, max_length=500)
     windows: dict[WindowKey, AiWindowReview]
     news: list[AiNewsReview] = Field(default_factory=list, max_length=5)
+    discussion_titles: list[str] = Field(default_factory=list, max_length=10)
     discussion_url: HttpUrl | None = None
     context_status: Literal["NOT_COLLECTED", "READY", "PARTIAL", "FAILED"] = (
         "NOT_COLLECTED"
@@ -96,6 +97,7 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                         for item in candidate_review.news
                     ],
                     "discussion_summary": candidate_review.discussion_summary,
+                    "discussion_titles": candidate_review.discussion_titles,
                     "discussion_url": candidate_review.discussion_url,
                     "context_status": candidate_review.context_status,
                     "context_fetched_at": review.reviewed_at,

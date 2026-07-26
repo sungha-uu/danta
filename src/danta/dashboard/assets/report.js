@@ -195,9 +195,34 @@
         ? '<span class="context-failed">뉴스 수집 실패</span>'
         : "최근 뉴스 결과 없음";
     }
-    return candidate.news.slice(0, 2).map((news) => `
-      <a class="news-link" href="${h(news.url)}" target="_blank" rel="noopener noreferrer">${h(news.title)}</a>
-      <span class="news-meta">${h(news.source)} · ${formatDate(news.published_at)}</span>`).join("");
+    const sentiment = {
+      POSITIVE: { label: "긍정", className: "sentiment-positive" },
+      NEGATIVE: { label: "부정", className: "sentiment-negative" },
+      NEUTRAL: { label: "중립", className: "sentiment-neutral" },
+    };
+    return candidate.news.map((news) => {
+      const tag = sentiment[news.sentiment] ?? sentiment.NEUTRAL;
+      return `<div class="news-item">
+        <a class="news-link" href="${h(news.url)}" target="_blank" rel="noopener noreferrer">
+          <span class="sentiment-tag ${tag.className}">[${tag.label}]</span>
+          <span>${h(news.title)}</span>
+        </a>
+        <span class="news-meta">${h(news.source)} · ${formatDate(news.published_at)}</span>
+      </div>`;
+    }).join("");
+  }
+
+  function discussionHtml(candidate) {
+    if (!candidate.discussion_titles?.length) {
+      return candidate.context_status === "FAILED"
+        ? '<span class="context-failed">토론 수집 실패</span>'
+        : "최근 토론 제목 없음";
+    }
+    return candidate.discussion_titles.map((title) => (
+      candidate.discussion_url
+        ? `<a class="discussion-title" href="${h(candidate.discussion_url)}" target="_blank" rel="noopener noreferrer">${h(title)}</a>`
+        : `<span class="discussion-title">${h(title)}</span>`
+    )).join("");
   }
 
   function renderRanking() {
@@ -236,11 +261,7 @@
         <td>${structureCell(item, one.format(n(item.ai_score)))}</td>
         <td class="wrap">${structureCell(item, h(item.ai_comment))}</td>
         <td class="news-cell">${newsHtml(candidate)}</td>
-        <td class="discussion">${
-          candidate.discussion_url
-            ? `<a class="discussion-link" href="${h(candidate.discussion_url)}" target="_blank" rel="noopener noreferrer">${h(candidate.discussion_summary)}</a>`
-            : h(candidate.discussion_summary)
-        }</td>
+        <td class="discussion">${discussionHtml(candidate)}</td>
         <td><a class="chart-link" href="${h(candidate.naver_url)}" target="_blank" rel="noopener noreferrer">차트보기</a></td>
       </tr>`;
     }).join("");

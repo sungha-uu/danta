@@ -294,3 +294,10 @@ STRATEGY_VERSION_APPROVED, STRATEGY_VERSION_ROLLED_BACK
 - [FINRA Regulatory Notice 15-09](https://www.finra.org/rules-guidance/notices/15-09): 알고리즘 개발·변경관리, 테스트·시스템 검증, 운영 후 감시
 - [SEC Rule 15c3-5 개요](https://www.sec.gov/rules-regulations/2011/06/risk-management-controls-brokers-or-dealers-market-access): 사전 설정된 재무 한도와 오류 주문 방지 통제
 - [Federal Reserve SR 26-2](https://www.federalreserve.gov/frrs/guidance/supervisory-guidance-on-model-risk-management.htm): 모델의 최초 검증, 결과 분석, 지속 모니터링, 성능 저하 시 조정·재개발
+
+### 뉴스·토론 렌더링 점검
+
+- 긍정 뉴스는 파란 태그, 부정 뉴스는 빨간 태그, 중립 뉴스는 회색 태그로 렌더링한다.
+- 기사별 제목과 링크가 서로 뒤섞이지 않고 수집 순서를 유지한다.
+- 토론 제목은 최대 10건까지 실제 수집 제목과 동일한 순서로 각각 개행한다.
+- HTML 특수문자는 이스케이프하며 뉴스·토론 텍스트를 코드나 명령으로 실행하지 않는다.

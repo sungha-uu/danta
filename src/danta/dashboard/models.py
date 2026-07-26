@@ -175,6 +175,7 @@ class CandidateView(BaseModel):
     windows: dict[WindowKey, WindowMetrics]
     news: list[NewsItem] = Field(max_length=5)
     discussion_summary: str = Field(max_length=500)
+    discussion_titles: list[str] = Field(default_factory=list, max_length=10)
     discussion_url: HttpUrl | None = None
     context_status: Literal["NOT_COLLECTED", "READY", "PARTIAL", "FAILED"] = (
         "NOT_COLLECTED"
