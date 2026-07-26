@@ -450,6 +450,15 @@ def _setup_eligible(item: _Analyzed) -> bool:
     )
 
 
+def _setup_rejection_reasons(item: _Analyzed) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if item.position > Decimal("35"):
+        reasons.append("현재 위치가 박스 하단 35% 밖")
+    if item.target_reaches < 1:
+        reasons.append("하단 접촉 후 3거래일 내 +10% 도달 이력 없음")
+    return tuple(reasons)
+
+
 def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
     hour_bars = aggregate_hour_bars(minute_bars)
     if len(hour_bars) < 20:
@@ -612,11 +621,7 @@ def screening_pool_audit(
     ranked = _score_all(analyses, candidate_map)
     entries: list[FilterAuditEntry] = []
     for rank, item in enumerate(ranked, start=1):
-        reasons: list[str] = []
-        if item.position > Decimal("35"):
-            reasons.append("CURRENT_POSITION_ABOVE_35")
-        if item.target_reaches < 1:
-            reasons.append("NO_LOWER_CONTACT_TO_PLUS_10_WITHIN_3_DAYS")
+        reasons = _setup_rejection_reasons(item)
         entries.append(
             FilterAuditEntry(
                 rank=rank,
@@ -624,7 +629,7 @@ def screening_pool_audit(
                 name=candidate_map[item.symbol].name,
                 score=item.score.quantize(Decimal("0.01")),
                 eligible=not reasons,
-                rejection_reasons=tuple(reasons),
+                rejection_reasons=reasons,
                 position_pct=item.position.quantize(Decimal("0.01")),
                 lower_trend_pct=item.lower_trend.quantize(Decimal("0.01")),
                 target_reach_count=item.target_reaches,
@@ -687,6 +692,7 @@ def _ready_window_metrics(
         + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
     )
     score = analysis.score.quantize(Decimal("0.01"))
+    rejection_reasons = _setup_rejection_reasons(analysis)
     grade = _setup_grade(
         score,
         analysis.position,
@@ -751,7 +757,12 @@ def _ready_window_metrics(
             f"{analysis.reach_days_10}/{analysis.reach_days_15}일, "
             f"하단 접촉 후 3거래일 이내 +10% "
             f"{analysis.target_reaches}회입니다. "
-            "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
+            + (
+                "자격 게이트를 통과했습니다. "
+                if not rejection_reasons
+                else f"현재 비추천 사유: {', '.join(rejection_reasons)}. "
+            )
+            + "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
         ),
         reasons=[
             f"일중 진폭 중앙값 "
@@ -759,6 +770,7 @@ def _ready_window_metrics(
             f"저점 반등 중앙값 "
             f"{analysis.median_daily_rebound.quantize(Decimal('0.1'))}%",
             f"3거래일 이내 하단→+10% {analysis.target_reaches}회",
+            *rejection_reasons,
         ],
         risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
         invalidation=(
@@ -803,13 +815,9 @@ def build_intraday_report(
             "7-day minute data"
         )
     candidate_map = {item.symbol: item for item in candidates}
-    selected = [
-        item
-        for item in _score_all(base_analyses, candidate_map)
-        if _setup_eligible(item)
-    ][:30]
+    selected = _score_all(base_analyses, candidate_map)[:50]
     if not selected:
-        raise CandidateReportError("no symbols passed the +10% qualification gate")
+        raise CandidateReportError("no symbols were available for the 50-name review cohort")
     selected_symbols = [item.symbol for item in selected]
     analyses_by_window: dict[int, dict[str, _Analyzed]] = {}
     ranks_by_window: dict[int, dict[str, int]] = {}
@@ -827,7 +835,7 @@ def build_intraday_report(
             completed_by_window[days][symbol] = completed
             if analysis is not None:
                 window_analyses.append(analysis)
-        if len(window_analyses) == len(selected_symbols):
+        if window_analyses:
             ranked = _score_all(window_analyses, candidate_map)
             analyses_by_window[days] = {
                 item.symbol: item for item in ranked
@@ -894,7 +902,7 @@ def build_intraday_report(
             "+10% 자격 게이트 연구 기준선"
         ),
         calculation_version=(
-            "intraday-elasticity-v5-target-reach-qualified-chart-aligned-"
+            "intraday-elasticity-v6-public-review-50-chart-aligned-"
             "prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",

@@ -43,7 +43,7 @@ class AiReviewBatch(BaseModel):
     prompt_version: str = Field(min_length=1)
     report_data_as_of: datetime
     reviewed_at: datetime
-    candidates: list[AiCandidateReview] = Field(min_length=1, max_length=30)
+    candidates: list[AiCandidateReview] = Field(min_length=1, max_length=50)
 
 
 def load_ai_review(path: Path) -> AiReviewBatch:

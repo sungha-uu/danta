@@ -16,6 +16,7 @@ from danta.services.intraday_report import (
     _score_all,
     _setup_eligible,
     _setup_grade,
+    _setup_rejection_reasons,
     _target_reach_episodes,
     aggregate_hour_bars,
     balanced_prefilter,
@@ -215,6 +216,13 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     assert not _setup_eligible(replace(analysis, position=Decimal("68")))
     assert _setup_eligible(replace(analysis, lower_trend=Decimal("-20")))
     assert not _setup_eligible(replace(analysis, target_reaches=0))
+    assert _setup_rejection_reasons(analysis) == ()
+    assert _setup_rejection_reasons(
+        replace(analysis, position=Decimal("68"), target_reaches=0)
+    ) == (
+        "현재 위치가 박스 하단 35% 밖",
+        "하단 접촉 후 3거래일 내 +10% 도달 이력 없음",
+    )
 
 
 def test_entry_location_is_a_gate_not_a_small_bonus() -> None:

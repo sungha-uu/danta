@@ -12,15 +12,15 @@ from danta.dashboard.demo import _target_reach_episodes, demo_report
 from danta.dashboard.models import DashboardReport
 
 
-def test_demo_report_has_thirty_ranked_and_graded_candidates_for_every_window() -> None:
+def test_demo_report_has_fifty_ranked_and_graded_candidates_for_every_window() -> None:
     report = demo_report()
 
     assert report.strategy_status == "RESEARCH_ONLY"
-    assert len(report.candidates) == 30
-    assert len(report.extended_watchlist) == 20
+    assert len(report.candidates) == 50
+    assert len(report.extended_watchlist) == 0
     for window in ("7", "14", "21"):
         metrics = [candidate.windows[window] for candidate in report.candidates]
-        assert sorted(item.rank for item in metrics) == list(range(1, 31))
+        assert sorted(item.rank for item in metrics) == list(range(1, 51))
         assert all(len(item.closes) == item.days for item in metrics)
         assert all(
             item.ai_grade
@@ -61,7 +61,7 @@ def test_active_report_requires_intraday_source_and_approved_analysis_bar() -> N
 
 def test_warming_window_requires_incomplete_structure_days() -> None:
     payload = demo_report().model_dump(mode="json")
-    for candidate in payload["candidates"]:
+    for candidate in payload["candidates"][-1:]:
         candidate["windows"]["14"]["structure_status"] = "WARMING_UP"
         candidate["windows"]["14"]["structure_completed_days"] = 10
         for field in (
@@ -101,9 +101,9 @@ def test_warming_window_requires_incomplete_structure_days() -> None:
 
     report = DashboardReport.model_validate(payload)
 
-    assert report.candidates[0].windows["14"].structure_completed_days == 10
+    assert report.candidates[-1].windows["14"].structure_completed_days == 10
 
-    payload["candidates"][0]["windows"]["14"]["structure_completed_days"] = 14
+    payload["candidates"][-1]["windows"]["14"]["structure_completed_days"] = 14
     with pytest.raises(ValidationError, match="WARMING_UP"):
         DashboardReport.model_validate(payload)
 
@@ -196,7 +196,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "structure_status" in html
     assert '"average_trading_value_billion"' in html
     assert "item.flows" in html
-    assert "적격 후보 ${report.candidates.length}" in html
+    assert "검토 후보 ${candidates.length}" in html
     assert "extended_watchlist" in html
     assert "extended-watch-row" in html
     assert "extended-badge" in html

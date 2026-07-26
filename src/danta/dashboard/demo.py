@@ -265,6 +265,6 @@ def demo_report() -> DashboardReport:
         model_id="demo-model",
         prompt_version="candidate-review-v0-demo",
         is_demo=True,
-        candidates=candidates[:30],
-        extended_watchlist=candidates[30:],
+        candidates=candidates,
+        extended_watchlist=[],
     )

@@ -7,8 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 WindowKey = Literal["7", "14", "21"]
-CANDIDATE_COUNT = 30
-EXTENDED_WATCHLIST_COUNT = 20
+CANDIDATE_COUNT = 50
+EXTENDED_WATCHLIST_COUNT = 0
 Sentiment = Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]
 AiGrade = Literal[
     "STRONG_RECOMMEND",
@@ -201,7 +201,10 @@ class DashboardReport(BaseModel):
     model_id: str
     prompt_version: str
     is_demo: bool = False
-    candidates: list[CandidateView] = Field(min_length=1, max_length=30)
+    candidates: list[CandidateView] = Field(
+        min_length=CANDIDATE_COUNT,
+        max_length=CANDIDATE_COUNT,
+    )
     extended_watchlist: list[CandidateView] = Field(
         default_factory=list,
         max_length=EXTENDED_WATCHLIST_COUNT,
@@ -227,8 +230,6 @@ class DashboardReport(BaseModel):
         for window in windows:
             metrics = [candidate.windows[window] for candidate in self.candidates]
             ready = [item for item in metrics if item.structure_status == "READY"]
-            if ready and len(ready) != len(metrics):
-                raise ValueError(f"candidate structures for {window} days must share one status")
             ranks = [item.rank for item in ready if item.rank is not None]
             if ready and sorted(ranks) != list(range(1, len(ready) + 1)):
                 raise ValueError(

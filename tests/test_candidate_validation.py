@@ -45,7 +45,7 @@ async def test_candidate_quotes_add_verified_calculation_version() -> None:
 async def test_candidate_quote_mismatch_blocks_report() -> None:
     report = demo_report()
 
-    with pytest.raises(CandidateValidationError, match="30 candidates"):
+    with pytest.raises(CandidateValidationError, match="50 candidates"):
         await validate_candidate_quotes(
             report,
             FakeQuoteClient(multiplier=Decimal("1.10")),

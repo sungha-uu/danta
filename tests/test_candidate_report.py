@@ -53,15 +53,12 @@ def test_quant_report_contains_ranked_real_candidate_shape() -> None:
     assert report.strategy_status == "RESEARCH_ONLY"
     assert report.analysis_bar_interval_minutes is None
     assert report.model_id == "quant-baseline-no-llm"
-    assert len(report.candidates) == 30
-    assert len(report.extended_watchlist) == 20
+    assert len(report.candidates) == 50
+    assert len(report.extended_watchlist) == 0
     for window in ("7", "14", "21"):
         assert sorted(candidate.windows[window].rank for candidate in report.candidates) == list(
-            range(1, 31)
+            range(1, 51)
         )
-        assert sorted(
-            candidate.windows[window].rank for candidate in report.extended_watchlist
-        ) == list(range(31, 51))
 
 
 def test_target_reach_episodes_are_internally_consistent() -> None:
