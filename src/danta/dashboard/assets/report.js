@@ -167,18 +167,6 @@
     return `<b>${item.reach_days_5pct}/${item.reach_days_10pct}/${item.reach_days_15pct}일</b>`;
   }
 
-  function actualWindowHigh(item) {
-    return Math.max(...item.chart_bars.map((bar) => n(bar.high)));
-  }
-
-  function targetHistoryCell(item) {
-    const reached = n(item.target_reach_count);
-    const contacts = n(item.lower_contact_count);
-    const status = reached > 0 ? "충족" : "미충족";
-    const className = reached > 0 ? "pos" : "neg";
-    return `<b class="${className}">${status}</b><small class="target-detail">성공 ${reached}회 / 하단 접촉 ${contacts}회</small>`;
-  }
-
   function activeZoneCell(item, side) {
     const active = item.active_box;
     if (!active) return '<span class="structure-warming">활성 박스 미적용</span>';
@@ -287,9 +275,7 @@
         <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
         <td>${structureCell(item, sparkline(item, candidate.name, candidate.code))}</td>
         <td>${structureCell(item, won.format(n(item.box_low)))}</td>
-        <td>${structureCell(item, won.format(n(item.target_price_10pct)))}</td>
-        <td>${structureCell(item, won.format(actualWindowHigh(item)))}</td>
-        <td>${structureCell(item, targetHistoryCell(item))}</td>
+        <td>${structureCell(item, won.format(n(item.box_high)))}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
         <td>${structureCell(item, lowerTrendCell(item))}</td>
         <td>${structureCell(item, metricPair(item.median_daily_range_pct, item.max_daily_range_pct))}</td>

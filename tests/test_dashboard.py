@@ -178,10 +178,8 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
         "기간수익률",
         ">기간고점 대비<",
         "가격 흐름",
-        "진입 기준가",
-        "+10% 목표가",
+        "기간 최저가",
         "기간 최고가",
-        "+10% 이력",
         "현재 위치",
         "하단 방향",
         "일중 진폭",
@@ -191,6 +189,9 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert [header_html.index(value) for value in expected_headers] == sorted(
         header_html.index(value) for value in expected_headers
     )
+    assert "진입 기준가" not in header_html
+    assert "+10% 목표가" not in header_html
+    assert "+10% 이력" not in header_html
     assert "일중 진폭" in html
     assert "저점 반등" in html
     assert "도달일수" in html
