@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
@@ -30,6 +31,10 @@ class AiCandidateReview(BaseModel):
     discussion_summary: str = Field(min_length=1, max_length=500)
     windows: dict[WindowKey, AiWindowReview]
     news: list[AiNewsReview] = Field(default_factory=list, max_length=5)
+    discussion_url: HttpUrl | None = None
+    context_status: Literal["NOT_COLLECTED", "READY", "PARTIAL", "FAILED"] = (
+        "NOT_COLLECTED"
+    )
 
     @model_validator(mode="after")
     def validate_windows(self) -> AiCandidateReview:
@@ -63,6 +68,9 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
         candidate_review = review_map[candidate.code]
         windows = {}
         for key, metrics in candidate.windows.items():
+            if metrics.structure_status == "WARMING_UP":
+                windows[key] = metrics
+                continue
             window_review = candidate_review.windows[key]
             ai_score = Decimal(window_review.ai_score)
             windows[key] = metrics.model_copy(
@@ -88,6 +96,9 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                         for item in candidate_review.news
                     ],
                     "discussion_summary": candidate_review.discussion_summary,
+                    "discussion_url": candidate_review.discussion_url,
+                    "context_status": candidate_review.context_status,
+                    "context_fetched_at": review.reviewed_at,
                 }
             )
         )

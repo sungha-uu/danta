@@ -8,6 +8,7 @@
   const candidates = [...report.candidates, ...(report.extended_watchlist ?? [])];
   $("#candidateCountTitle").textContent = `📊 검토 후보 ${candidates.length}`;
   const quantBaseline = report.model_id.includes("no-llm");
+  const agentContextReview = report.model_id.startsWith("agent-context-review");
   const actionable = report.strategy_status === "ACTIVE"
     && report.source_bar_interval_minutes === 1
     && [10, 30, 60].includes(report.analysis_bar_interval_minutes);
@@ -39,7 +40,11 @@
     NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
   })[grade] || grade;
   const reviewGradeLabel = (grade) => (
-    quantBaseline ? `정량 ${gradeLabel(grade)}` : gradeLabel(grade)
+    quantBaseline
+      ? `정량 ${gradeLabel(grade)}`
+      : agentContextReview
+      ? `에이전트 ${gradeLabel(grade)}`
+      : gradeLabel(grade)
   );
   const gradeClass = (grade) => ({
     STRONG_RECOMMEND: "grade-strong", RECOMMEND: "grade-recommend",
@@ -185,7 +190,11 @@
   }
 
   function newsHtml(candidate) {
-    if (!candidate.news.length) return "수집된 뉴스 없음";
+    if (!candidate.news.length) {
+      return candidate.context_status === "FAILED"
+        ? '<span class="context-failed">뉴스 수집 실패</span>'
+        : "최근 뉴스 결과 없음";
+    }
     return candidate.news.slice(0, 2).map((news) => `
       <a class="news-link" href="${h(news.url)}" target="_blank" rel="noopener noreferrer">${h(news.title)}</a>
       <span class="news-meta">${h(news.source)} · ${formatDate(news.published_at)}</span>`).join("");
@@ -227,7 +236,11 @@
         <td>${structureCell(item, one.format(n(item.ai_score)))}</td>
         <td class="wrap">${structureCell(item, h(item.ai_comment))}</td>
         <td class="news-cell">${newsHtml(candidate)}</td>
-        <td class="discussion">${h(candidate.discussion_summary)}</td>
+        <td class="discussion">${
+          candidate.discussion_url
+            ? `<a class="discussion-link" href="${h(candidate.discussion_url)}" target="_blank" rel="noopener noreferrer">${h(candidate.discussion_summary)}</a>`
+            : h(candidate.discussion_summary)
+        }</td>
         <td><a class="chart-link" href="${h(candidate.naver_url)}" target="_blank" rel="noopener noreferrer">차트보기</a></td>
       </tr>`;
     }).join("");
@@ -315,12 +328,12 @@
     const byDateBucket = new Map(
       item.chart_bars.map((bar) => [`${bar.trading_date}:${bar.bucket}`, bar]),
     );
-    $("#chartModalHead").innerHTML = `<tr><th>거래일</th>${buckets.map(
+    $("#chartModalHead").innerHTML = `<tr><th class="modal-trading-date-head">거래일</th>${buckets.map(
       (bucket) => `<th>${h(bucket)}시</th>`,
     ).join("")}</tr>`;
     $("#chartModalBody").innerHTML = dates.map((date) => `
       <tr>
-        <th>${h(`${date.slice(4, 6)}.${date.slice(6, 8)}`)}</th>
+        <th class="modal-trading-date" scope="row">${h(`${date.slice(4, 6)}.${date.slice(6, 8)}`)}</th>
         ${buckets.map((bucket) => {
           const bar = byDateBucket.get(`${date}:${bucket}`);
           if (!bar) return '<td class="empty-bar">-</td>';
@@ -590,6 +603,13 @@
     $("#reviewGradeHeader").textContent = "정량 등급";
     $("#reviewScoreHeader").textContent = "검토점수";
     $("#reviewCommentHeader").textContent = "정량 코멘트";
+  }
+  if (agentContextReview) {
+    $("#analysisDescription").textContent = "50개 전체의 분봉 구조·수급·최신 뉴스·종목토론 참고 신호를 결합한 에이전트 1차 검토입니다.";
+    $("#recommendFilterLabel").textContent = "에이전트 추천 이상";
+    $("#reviewGradeHeader").textContent = "에이전트 등급";
+    $("#reviewScoreHeader").textContent = "에이전트 점수";
+    $("#reviewCommentHeader").textContent = "에이전트 코멘트";
   }
   renderAll();
 })();

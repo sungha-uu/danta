@@ -171,6 +171,9 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "modal-price-tick" in html
     assert "modal-date-tick" in html
     assert "modal-current-line" in html
+    assert "modal-trading-date" in html
+    assert "modal-trading-date-head" in html
+    assert "z-index: 4" in html
     assert "상단(현재가+10%)" in html
     assert ">박스 하단</text>" in html
     assert ">현재가</text>" in html

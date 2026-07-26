@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -27,6 +28,7 @@ from danta.services.candidate_validation import (
     CandidateValidationError,
     validate_candidate_quotes,
 )
+from danta.services.context_review import PublicContextCollector, build_context_review
 from danta.services.intraday_report import (
     MinuteBarStore,
     backfill_minute_bars,
@@ -119,6 +121,28 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("dashboard/dist"),
     )
+    context_review = subparsers.add_parser(
+        "context-review",
+        help="collect public news/discussion context and review all 50 candidates",
+    )
+    context_review.add_argument("--input", type=Path, required=True)
+    context_review.add_argument("--output", type=Path, required=True)
+    context_review.add_argument(
+        "--review-output",
+        type=Path,
+        default=Path("data/context-review-latest.json"),
+    )
+    context_review.add_argument(
+        "--cache-root",
+        type=Path,
+        default=Path("data/public-context"),
+    )
+    context_review.add_argument(
+        "--dashboard-output",
+        type=Path,
+        default=Path("dashboard/dist"),
+    )
+    context_review.add_argument("--refresh", action="store_true")
     return parser
 
 
@@ -202,6 +226,53 @@ def main() -> None:
             print(f"AI review failed: {exc}", file=sys.stderr)
             raise SystemExit(7) from None
         print(f"AI-reviewed report built: {target}")
+        return
+    if args.command == "context-review":
+        try:
+            report = load_dashboard_report(args.input)
+            snapshots = asyncio.run(
+                PublicContextCollector(args.cache_root).collect(
+                    [(item.code, item.name) for item in report.candidates],
+                    refresh=args.refresh,
+                )
+            )
+            review = build_context_review(
+                report,
+                snapshots,
+                reviewed_at=datetime.now().astimezone(),
+            )
+            reviewed = apply_ai_review(report, review)
+            args.review_output.parent.mkdir(parents=True, exist_ok=True)
+            review_temporary = args.review_output.with_suffix(".tmp")
+            review_temporary.write_text(
+                json.dumps(
+                    review.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            review_temporary.replace(args.review_output)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.output.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    reviewed.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(args.output)
+            target = build_dashboard(reviewed, args.dashboard_output)
+        except (ValueError, ValidationError) as exc:
+            print(f"context review failed: {exc}", file=sys.stderr)
+            raise SystemExit(8) from None
+        print(
+            f"context-reviewed report built: {target} "
+            f"({len(review.candidates)} candidates)",
+            flush=True,
+        )
         return
     if args.command == "daily-report":
         try:

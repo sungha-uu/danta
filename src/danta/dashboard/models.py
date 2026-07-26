@@ -175,6 +175,11 @@ class CandidateView(BaseModel):
     windows: dict[WindowKey, WindowMetrics]
     news: list[NewsItem] = Field(max_length=5)
     discussion_summary: str = Field(max_length=500)
+    discussion_url: HttpUrl | None = None
+    context_status: Literal["NOT_COLLECTED", "READY", "PARTIAL", "FAILED"] = (
+        "NOT_COLLECTED"
+    )
+    context_fetched_at: datetime | None = None
     naver_url: HttpUrl
 
     @model_validator(mode="after")
