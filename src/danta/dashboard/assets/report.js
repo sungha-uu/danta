@@ -258,6 +258,11 @@
     const lowerY = y(n(item.box_low));
     const currentY = y(current);
     const targetY = y(target10);
+    const labelAbove = (lineY) => Math.max(padTop + 9, lineY - 4);
+    const labelBelow = (lineY) => Math.min(plotBottom - 3, lineY + 13);
+    const lowerIsAboveCurrent = lowerY < currentY;
+    const lowerLabelY = lowerIsAboveCurrent ? labelAbove(lowerY) : labelBelow(lowerY);
+    const currentLabelY = lowerIsAboveCurrent ? labelBelow(currentY) : labelAbove(currentY);
     const priceTicks = Array.from({ length: 5 }, (_, index) => high - (spread * index / 4));
     const dateGroups = [];
     bars.forEach((bar, index) => {
@@ -282,8 +287,8 @@
       <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${width - padRight}" y2="${lowerY}"></line>
       <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${width - padRight}" y2="${currentY}"></line>
       <text class="modal-reference-label modal-target-label" x="${width - padRight - 5}" y="${Math.min(plotBottom - 3, targetY + 13)}" text-anchor="end">상단(현재가+10%)</text>
-      <text class="modal-reference-label modal-lower-label" x="${width - padRight - 5}" y="${Math.min(plotBottom - 3, lowerY + 13)}" text-anchor="end">하단</text>
-      <text class="modal-reference-label modal-current-label" x="${width - padRight - 5}" y="${Math.max(padTop + 9, currentY - 4)}" text-anchor="end">현재가</text>
+      <text class="modal-reference-label modal-lower-label" x="${width - padRight - 5}" y="${lowerLabelY}" text-anchor="end">하단</text>
+      <text class="modal-reference-label modal-current-label" x="${width - padRight - 5}" y="${currentLabelY}" text-anchor="end">현재가</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }
