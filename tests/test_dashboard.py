@@ -75,7 +75,7 @@ def test_warming_window_requires_incomplete_structure_days() -> None:
             "reach_days_5pct",
             "reach_days_10pct",
             "reach_days_15pct",
-            "current_to_window_high_pct",
+            "current_vs_window_high_pct",
             "lower_trend_pct",
             "lower_trend",
             "target_price_10pct",
@@ -136,7 +136,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "일중 진폭" in html
     assert "저점 반등" in html
     assert "도달일수" in html
-    assert "현재→기간고점" in html
+    assert "기간고점 대비 현재가" in html
     assert "하단 방향" in html
     assert "하단 진입권" in html
     assert "상단권" in html
@@ -152,7 +152,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "modal-date-tick" in html
     assert "modal-current-line" in html
     assert "현재가+10%" in html
-    assert "현재가 ${won.format(current)}원" in html
+    assert "modal-current-label" not in html
     assert "target15" not in html
     assert "현재가 ${won.format(" in html
     assert 'id="chartModalSummary"' in html

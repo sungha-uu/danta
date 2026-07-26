@@ -147,7 +147,7 @@ def _metrics(
     ] or [Decimal("0")]
     median_move = Decimal(median(moves))
     max_move = max(moves)
-    current_to_high = max(Decimal("0"), (high / closes[-1] - ONE) * HUNDRED)
+    current_vs_high = min(Decimal("0"), (closes[-1] / high - ONE) * HUNDRED)
     lower_trend = (closes[-1] / closes[0] - ONE) * HUNDRED
     downside_trend = max(Decimal("0"), -period_return)
     risk = min(
@@ -198,7 +198,7 @@ def _metrics(
         reach_days_5pct=sum(value >= 5 for value in moves),
         reach_days_10pct=sum(value >= 10 for value in moves),
         reach_days_15pct=sum(value >= 15 for value in moves),
-        current_to_window_high_pct=_round(current_to_high),
+        current_vs_window_high_pct=_round(current_vs_high),
         lower_trend_pct=_round(lower_trend),
         lower_trend=(
             "상승"

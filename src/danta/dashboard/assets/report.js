@@ -213,7 +213,7 @@
         <td>${structureCell(item, metricPair(item.median_daily_range_pct, item.max_daily_range_pct))}</td>
         <td>${structureCell(item, metricPair(item.median_daily_rebound_pct, item.max_daily_rebound_pct))}</td>
         <td>${structureCell(item, targetDaysCell(item))}</td>
-        <td class="${tone(item.current_to_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_to_window_high_pct)}</b>`)}</td>
+        <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
         <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
         <td>${structureCell(item, lowerTrendCell(item))}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
@@ -283,7 +283,6 @@
       <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${width - padRight}" y2="${currentY}"></line>
       <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.max(12, targetY - 4)}">현재가+10%</text>
       <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.min(plotBottom - 3, lowerY + 13)}">하단</text>
-      <text class="modal-current-label" x="${width - padRight - 5}" y="${Math.max(12, currentY - 4)}" text-anchor="end">현재가 ${won.format(current)}원</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }

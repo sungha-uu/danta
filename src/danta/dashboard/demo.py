@@ -144,7 +144,10 @@ def _window(
     ] or [Decimal("0")]
     median_move = Decimal(median(moves))
     max_move = max(moves)
-    current_to_high = max(Decimal("0"), (high / closes[-1] - Decimal("1")) * Decimal("100"))
+    current_vs_high = min(
+        Decimal("0"),
+        (closes[-1] / high - Decimal("1")) * Decimal("100"),
+    )
     lower_trend = (closes[-1] / closes[0] - Decimal("1")) * Decimal("100")
     start = datetime.now(KST).date() - timedelta(days=len(closes) - 1)
     return WindowMetrics(
@@ -161,7 +164,7 @@ def _window(
         reach_days_5pct=sum(value >= 5 for value in moves),
         reach_days_10pct=sum(value >= 10 for value in moves),
         reach_days_15pct=sum(value >= 15 for value in moves),
-        current_to_window_high_pct=current_to_high.quantize(Decimal("0.01")),
+        current_vs_window_high_pct=current_vs_high.quantize(Decimal("0.01")),
         lower_trend_pct=lower_trend.quantize(Decimal("0.01")),
         lower_trend=(
             "상승"

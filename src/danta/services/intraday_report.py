@@ -549,6 +549,11 @@ def build_intraday_report(
     views: list[CandidateView] = []
     for rank, analysis in enumerate(selected, start=1):
         symbol = analysis.symbol
+        current_price = Decimal(minute_by_symbol[symbol][-1].close)
+        current_vs_high = min(
+            Decimal("0"),
+            (current_price / analysis.high - Decimal("1")) * HUNDRED,
+        )
         period_return, average_value, volume_ratio, flows = _reference_values(
             dataset, symbol, 7
         )
@@ -576,9 +581,7 @@ def build_intraday_report(
             reach_days_5pct=analysis.reach_days_5,
             reach_days_10pct=analysis.reach_days_10,
             reach_days_15pct=analysis.reach_days_15,
-            current_to_window_high_pct=analysis.current_to_window_high.quantize(
-                Decimal("0.01")
-            ),
+            current_vs_window_high_pct=current_vs_high.quantize(Decimal("0.01")),
             lower_trend_pct=analysis.lower_trend.quantize(Decimal("0.01")),
             lower_trend=(
                 "상승"
@@ -654,7 +657,7 @@ def build_intraday_report(
                 code=symbol,
                 name=name,
                 sector="KOSPI",
-                current_price=Decimal(minute_by_symbol[symbol][-1].close),
+                current_price=current_price,
                 windows=windows,  # type: ignore[arg-type]
                 news=[],
                 discussion_summary="실제 분봉 기준 연구용 후보이며 AI 뉴스 검토 전입니다.",
@@ -669,7 +672,7 @@ def build_intraday_report(
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
         market_regime="실제 7거래일 분봉 · 연구용 기준선",
         calculation_version=(
-            "intraday-elasticity-v4.1-entry-gated-prefilter-balanced-v1"
+            "intraday-elasticity-v4.2-display-drawdown-entry-gated-prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",
         source_bar_interval_minutes=1,

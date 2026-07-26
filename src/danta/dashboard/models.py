@@ -65,7 +65,7 @@ class WindowMetrics(BaseModel):
     reach_days_5pct: int | None = Field(default=None, ge=0, le=21)
     reach_days_10pct: int | None = Field(default=None, ge=0, le=21)
     reach_days_15pct: int | None = Field(default=None, ge=0, le=21)
-    current_to_window_high_pct: Decimal | None = Field(default=None, ge=0)
+    current_vs_window_high_pct: Decimal | None = Field(default=None, le=0)
     lower_trend_pct: Decimal | None = None
     lower_trend: Literal["상승", "횡보", "하락"] | None = None
     return_pct: Decimal
@@ -111,7 +111,7 @@ class WindowMetrics(BaseModel):
             self.reach_days_5pct,
             self.reach_days_10pct,
             self.reach_days_15pct,
-            self.current_to_window_high_pct,
+            self.current_vs_window_high_pct,
             self.lower_trend_pct,
             self.lower_trend,
             self.target_price_10pct,
