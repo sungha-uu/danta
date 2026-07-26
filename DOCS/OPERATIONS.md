@@ -273,7 +273,19 @@ AI 사용량과 관계없이 로컬 Python이 계속 수행하는 것:
 - [Codex `/status`·`/usage` 명령](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)
 - [OpenAI API 사용량 페이지](https://platform.openai.com/usage)
 
-## 10. 실전 전환 후 모의투자 병행
+## 10. GitHub Pages 실제 브라우저 배포 검증
+
+2026-07-26 `danta_report` 커밋 `806f53c` 배포를 Chrome에서 직접 검증했다.
+
+- 후보 행 3개와 `적격 후보 3` 제목 표시
+- 14일·21일 전환 시 활성 기간과 기간 데이터 변경
+- 현대모비스 21일 60분봉 상세 팝업의 제목·차트·기준선 범례·시간대별 표 표시
+- 현재 배포 URL 기준 JavaScript 콘솔 오류 없음
+- 검증 URL: `https://sungha-uu.github.io/danta_report/?verify=806f53c-2`
+
+최초 확인에서는 GitHub Pages 배포 지연으로 이전 파일이 제공되었다. 이후 배포 완료 판정은 커밋 푸시나 HTTP 200만으로 하지 않고, 배포된 파일 버전과 실제 브라우저 렌더링을 함께 확인한다.
+
+## 11. 실전 전환 후 모의투자 병행
 
 실전 전환은 모의투자의 종료가 아니다. 운영 주기와 승격 기준은 [`QUALITY_AND_VALIDATION.md`](QUALITY_AND_VALIDATION.md)를 단일 기준으로 사용한다.
 
