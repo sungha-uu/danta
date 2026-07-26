@@ -240,7 +240,9 @@
     const width = 900;
     const height = 220;
     const padLeft = 78;
-    const padRight = 18;
+    const labelGutter = 112;
+    const plotRight = width - labelGutter;
+    const labelX = plotRight + 8;
     const padTop = 16;
     const padBottom = 30;
     const plotBottom = height - padBottom;
@@ -252,7 +254,7 @@
       ...bars.map((bar) => n(bar.high)),
     );
     const spread = Math.max(1, high - low);
-    const x = (index) => padLeft + index * ((width - padLeft - padRight) / Math.max(1, values.length - 1));
+    const x = (index) => padLeft + index * ((plotRight - padLeft) / Math.max(1, values.length - 1));
     const y = (value) => padTop + (high - value) / spread * (plotBottom - padTop);
     const points = values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
     const lowerY = y(n(item.box_low));
@@ -273,7 +275,7 @@
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${h(name)} ${state.window}일 60분봉 종가 흐름">
       ${priceTicks.map((value) => {
         const tickY = y(value);
-        return `<line class="modal-grid-line" x1="${padLeft}" y1="${tickY}" x2="${width - padRight}" y2="${tickY}"></line>
+        return `<line class="modal-grid-line" x1="${padLeft}" y1="${tickY}" x2="${plotRight}" y2="${tickY}"></line>
           <text class="modal-price-tick" x="${padLeft - 8}" y="${tickY + 3}" text-anchor="end">${won.format(Math.round(value))}원</text>`;
       }).join("")}
       ${dateGroups.map((group) => {
@@ -283,12 +285,12 @@
         return `<line class="modal-date-line" x1="${startX}" y1="${padTop}" x2="${startX}" y2="${plotBottom}"></line>
           <text class="modal-date-tick" x="${centerX}" y="${height - 8}" text-anchor="middle">${h(label)}</text>`;
       }).join("")}
-      <line class="modal-target-line" x1="${padLeft}" y1="${targetY}" x2="${width - padRight}" y2="${targetY}"></line>
-      <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${width - padRight}" y2="${lowerY}"></line>
-      <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${width - padRight}" y2="${currentY}"></line>
-      <text class="modal-reference-label modal-target-label" x="${width - padRight - 5}" y="${Math.min(plotBottom - 3, targetY + 13)}" text-anchor="end">상단(현재가+10%)</text>
-      <text class="modal-reference-label modal-lower-label" x="${width - padRight - 5}" y="${lowerLabelY}" text-anchor="end">하단</text>
-      <text class="modal-reference-label modal-current-label" x="${width - padRight - 5}" y="${currentLabelY}" text-anchor="end">현재가</text>
+      <line class="modal-target-line" x1="${padLeft}" y1="${targetY}" x2="${plotRight}" y2="${targetY}"></line>
+      <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${plotRight}" y2="${lowerY}"></line>
+      <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${plotRight}" y2="${currentY}"></line>
+      <text class="modal-reference-label modal-target-label" x="${labelX}" y="${Math.min(plotBottom - 3, targetY + 13)}" text-anchor="start">상단(현재가+10%)</text>
+      <text class="modal-reference-label modal-lower-label" x="${labelX}" y="${lowerLabelY}" text-anchor="start">하단</text>
+      <text class="modal-reference-label modal-current-label" x="${labelX}" y="${currentLabelY}" text-anchor="start">현재가</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }

@@ -171,7 +171,9 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert ">하단</text>" in html
     assert ">현재가</text>" in html
     assert "modal-current-label" in html
-    assert 'text-anchor="end"' in html
+    assert 'text-anchor="start"' in html
+    assert "const labelGutter = 112" in html
+    assert "const labelX = plotRight + 8" in html
     assert "lowerIsAboveCurrent" in html
     assert "lowerLabelY" in html
     assert "currentLabelY" in html
