@@ -69,7 +69,7 @@ flowchart LR
 | 시장위험 가드 | 손절 후 종목·업종·시장·시스템 원인을 분류하고 진입 회로 차단 |
 | 이벤트 버스·Outbox | 워커·AI·대시보드 간 내구성 있는 이벤트 전달과 재처리 |
 | 알림·대시보드 | SMTP 큐와 정제된 정적 페이지 |
-| 정적 리포트 빌더 | 공식 후보 30개와 확장 관찰군 20개 공개 DTO 검증, 7·14·21일 지표와 자체 차트 생성 |
+| 정적 리포트 빌더 | +10% 자격 게이트를 통과한 공식 후보 최대 30개 공개 DTO 검증, 7·14·21일 지표와 자체 차트 생성 |
 
 권장 스택은 Python 3.11+, FastAPI, Pydantic, SQLAlchemy 2, Alembic, PostgreSQL, asyncio/httpx/WebSocket, pytest/hypothesis, 구조화 로그다.
 

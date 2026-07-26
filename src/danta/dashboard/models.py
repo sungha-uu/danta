@@ -192,7 +192,7 @@ class DashboardReport(BaseModel):
     model_id: str
     prompt_version: str
     is_demo: bool = False
-    candidates: list[CandidateView] = Field(min_length=30, max_length=30)
+    candidates: list[CandidateView] = Field(min_length=1, max_length=30)
     extended_watchlist: list[CandidateView] = Field(
         default_factory=list,
         max_length=EXTENDED_WATCHLIST_COUNT,
@@ -218,11 +218,13 @@ class DashboardReport(BaseModel):
         for window in windows:
             metrics = [candidate.windows[window] for candidate in self.candidates]
             ready = [item for item in metrics if item.structure_status == "READY"]
-            if ready and len(ready) != 30:
+            if ready and len(ready) != len(metrics):
                 raise ValueError(f"candidate structures for {window} days must share one status")
             ranks = [item.rank for item in ready if item.rank is not None]
-            if ready and sorted(ranks) != list(range(1, 31)):
-                raise ValueError(f"candidate ranks for {window} days must be 1 through 30")
+            if ready and sorted(ranks) != list(range(1, len(ready) + 1)):
+                raise ValueError(
+                    f"candidate ranks for {window} days must be contiguous"
+                )
             extended = [
                 candidate.windows[window] for candidate in self.extended_watchlist
             ]
@@ -237,10 +239,11 @@ class DashboardReport(BaseModel):
             extended_ranks = [
                 item.rank for item in extended_ready if item.rank is not None
             ]
+            extended_start = len(self.candidates) + 1
             if extended_ready and sorted(extended_ranks) != list(
-                range(31, 31 + len(extended_ready))
+                range(extended_start, extended_start + len(extended_ready))
             ):
                 raise ValueError(
-                    f"extended watchlist ranks for {window} days must start at 31"
+                    "extended watchlist ranks must follow official candidates"
                 )
         return self

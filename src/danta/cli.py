@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import uvicorn
@@ -30,6 +31,8 @@ from danta.services.intraday_report import (
     backfill_minute_bars,
     balanced_prefilter,
     build_intraday_report,
+    screening_pool,
+    screening_pool_audit,
 )
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.provider_doctor import KisProviderDoctor
@@ -55,6 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     notify = subparsers.add_parser("notify-report", help="email a published report link")
     notify.add_argument("--url", required=True)
     notify.add_argument("--demo", action="store_true")
+    notify.add_argument("--stage")
+    notify.add_argument("--detail", default="")
 
     daily = subparsers.add_parser(
         "daily-report",
@@ -93,6 +98,13 @@ def _parser() -> argparse.ArgumentParser:
         "--dashboard-output",
         type=Path,
         default=Path("dashboard/dist"),
+    )
+    intraday.add_argument(
+        "--window-days",
+        type=int,
+        choices=(7, 14, 21),
+        default=7,
+        help="minute coverage target; 14/21 use the 50-symbol audit pool",
     )
     return parser
 
@@ -144,7 +156,14 @@ def main() -> None:
         try:
             settings = load_settings()
             notifier = SmtpNotifier(load_smtp_config(settings))
-            receipt = notifier.send_report_published(args.url, is_demo=args.demo)
+            if args.stage:
+                receipt = notifier.send_stage_completed(
+                    args.url,
+                    stage=args.stage,
+                    detail=args.detail or "요청한 단계가 완료되었습니다.",
+                )
+            else:
+                receipt = notifier.send_report_published(args.url, is_demo=args.demo)
         except (ValueError, ValidationError, NotificationError) as exc:
             print(f"report notification failed: {exc}", file=sys.stderr)
             raise SystemExit(4) from None
@@ -232,9 +251,48 @@ def main() -> None:
                 encoding="utf-8",
             )
             snapshot_temporary.replace(snapshot)
+            collection_candidates = prefiltered
+            if args.window_days > 7:
+                collection_candidates = screening_pool(
+                    prefiltered,
+                    MinuteBarStore(args.data_root),
+                    dataset.trading_dates,
+                    limit=50,
+                )
+                audit_snapshot = Path("data/filter-audit-pool-v1.json")
+                audit_temporary = audit_snapshot.with_suffix(".tmp")
+                audit_entries = screening_pool_audit(
+                    prefiltered,
+                    MinuteBarStore(args.data_root),
+                    dataset.trading_dates,
+                    limit=50,
+                )
+                audit_temporary.write_text(
+                    json.dumps(
+                        {
+                            "version": "filter-audit-pool-v1",
+                            "data_as_of": dataset.trading_dates[-1].isoformat(),
+                            "window_days": args.window_days,
+                            "count": len(collection_candidates),
+                            "candidates": [
+                                {
+                                    **asdict(item),
+                                    "score": str(item.score),
+                                    "position_pct": str(item.position_pct),
+                                    "lower_trend_pct": str(item.lower_trend_pct),
+                                }
+                                for item in audit_entries
+                            ],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                audit_temporary.replace(audit_snapshot)
             print(
-                f"balanced universe: {len(prefiltered)} symbols; "
-                "starting resumable 7-day minute backfill",
+                f"collection universe: {len(collection_candidates)} symbols; "
+                f"starting resumable {args.window_days}-day minute backfill",
                 flush=True,
             )
             credentials = load_kis_credentials(settings)
@@ -247,8 +305,9 @@ def main() -> None:
                     await backfill_minute_bars(
                         client,
                         MinuteBarStore(args.data_root),
-                        prefiltered,
+                        collection_candidates,
                         dataset.trading_dates,
+                        window_days=args.window_days,
                         progress=lambda message: print(message, flush=True),
                     )
 

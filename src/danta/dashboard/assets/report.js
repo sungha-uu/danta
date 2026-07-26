@@ -4,6 +4,9 @@
   const report = JSON.parse(document.getElementById("reportData").textContent);
   const officialCodes = new Set(report.candidates.map((candidate) => candidate.code));
   const candidates = [...report.candidates, ...(report.extended_watchlist ?? [])];
+  $("#candidateCountTitle").textContent = report.extended_watchlist?.length
+    ? `📊 적격 후보 ${report.candidates.length} + 참고 ${report.extended_watchlist.length}`
+    : `📊 적격 후보 ${report.candidates.length}`;
   const quantBaseline = report.model_id.includes("no-llm");
   const actionable = report.strategy_status === "ACTIVE"
     && report.source_bar_interval_minutes === 1

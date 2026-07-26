@@ -9,13 +9,13 @@ from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 from pydantic import HttpUrl
 
 from danta.adapters.kis.client import KisApiError, KisClient, KisMinuteBar
 from danta.adapters.krx.client import MarketDataset
 from danta.dashboard.models import (
-    EXTENDED_WATCHLIST_COUNT,
     AiGrade,
     CandidateView,
     ChartBar,
@@ -27,6 +27,8 @@ from danta.services.candidate_report import CandidateReportError
 
 KST = timezone(timedelta(hours=9))
 HUNDRED = Decimal("100")
+WindowDays = Literal[7, 14, 21]
+WINDOW_DAYS: tuple[WindowDays, WindowDays, WindowDays] = (7, 14, 21)
 MIN_CAPITALIZATION = Decimal("500000000000")
 MIN_PRICE = Decimal("5000")
 MIN_AVERAGE_TRADING_VALUE = Decimal("5000000000")
@@ -77,6 +79,19 @@ class _Analyzed:
     hour_bars: list[HourBar]
     hourly_closes: list[Decimal]
     score: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class FilterAuditEntry:
+    rank: int
+    symbol: str
+    name: str
+    score: Decimal
+    eligible: bool
+    rejection_reasons: tuple[str, ...]
+    position_pct: Decimal
+    lower_trend_pct: Decimal
+    target_reach_count: int
 
 
 class MinuteBarStore:
@@ -162,9 +177,14 @@ async def backfill_minute_bars(
     candidates: list[PrefilterCandidate],
     trading_dates: list[date],
     *,
+    window_days: int = 7,
     progress: Callable[[str], None] = print,
 ) -> None:
-    required_dates = [item.strftime("%Y%m%d") for item in trading_dates[-7:]]
+    if window_days not in {7, 14, 21}:
+        raise ValueError("window_days must be 7, 14, or 21")
+    required_dates = [
+        item.strftime("%Y%m%d") for item in trading_dates[-window_days:]
+    ]
     total = len(candidates) * len(required_dates)
     completed = 0
     for candidate in candidates:
@@ -237,22 +257,34 @@ def _target_reach_episodes(
     low: Decimal,
     *,
     target_gain: Decimal = Decimal("0.10"),
+    max_holding_trading_days: int = 3,
 ) -> tuple[int, int, int]:
-    """Count lower-box contacts that later reach the configured profit target."""
+    """Count lower contacts that reach target within the bounded holding window."""
+    if max_holding_trading_days < 1:
+        raise ValueError("max_holding_trading_days must be positive")
     target = low * (Decimal("1") + target_gain)
-    armed = False
+    ordered = sorted(
+        minute_bars,
+        key=lambda item: (item.trading_date, item.trading_time),
+    )
+    trading_days = sorted({bar.trading_date for bar in ordered})
+    day_index = {trading_day: index for index, trading_day in enumerate(trading_days)}
+    armed_at: int | None = None
     contacts = 0
     reaches = 0
-    for bar in sorted(minute_bars, key=lambda item: (item.trading_date, item.trading_time)):
-        if armed:
-            if Decimal(bar.high) >= target:
+    for bar in ordered:
+        current_day = day_index[bar.trading_date]
+        if armed_at is not None:
+            if current_day - armed_at >= max_holding_trading_days:
+                armed_at = None
+            elif Decimal(bar.high) >= target:
                 reaches += 1
-                armed = False
-            continue
-        if Decimal(bar.low) <= low:
+                armed_at = None
+                continue
+        if armed_at is None and Decimal(bar.low) <= low:
             contacts += 1
-            armed = True
-    return contacts, reaches, int(armed)
+            armed_at = current_day
+    return contacts, reaches, int(armed_at is not None)
 
 
 def _daily_dynamics(
@@ -404,14 +436,23 @@ def _setup_grade(
     score: Decimal,
     position: Decimal,
     lower_trend: Decimal,
+    target_reaches: int = 1,
 ) -> AiGrade:
-    if position > Decimal("35") or lower_trend <= Decimal("-8"):
+    if (
+        position > Decimal("35")
+        or lower_trend <= Decimal("-8")
+        or target_reaches < 1
+    ):
         return "NOT_RECOMMEND" if score >= Decimal("45") else "STRONG_NOT_RECOMMEND"
     return _grade(score)
 
 
 def _setup_eligible(item: _Analyzed) -> bool:
-    return item.position <= Decimal("35") and item.lower_trend > Decimal("-8")
+    return (
+        item.position <= Decimal("35")
+        and item.lower_trend > Decimal("-8")
+        and item.target_reaches >= 1
+    )
 
 
 def _analyze_symbol(symbol: str, minute_bars: list[KisMinuteBar]) -> _Analyzed:
@@ -529,143 +570,306 @@ def _score_all(
     )
 
 
+def screening_pool(
+    candidates: list[PrefilterCandidate],
+    store: MinuteBarStore,
+    trading_dates: list[date],
+    *,
+    limit: int = 50,
+) -> list[PrefilterCandidate]:
+    if limit < 1:
+        raise ValueError("screening pool limit must be positive")
+    required_dates = [
+        item.strftime("%Y%m%d") for item in trading_dates[-7:]
+    ]
+    analyses: list[_Analyzed] = []
+    for candidate in candidates:
+        bars: list[KisMinuteBar] = []
+        for trading_date in required_dates:
+            if not store.is_complete(candidate.symbol, trading_date):
+                bars = []
+                break
+            bars.extend(store.load(candidate.symbol, trading_date))
+        if bars:
+            analyses.append(_analyze_symbol(candidate.symbol, bars))
+    if not analyses:
+        raise CandidateReportError("screening pool requires complete 7-day data")
+    candidate_map = {item.symbol: item for item in candidates}
+    ranked = _score_all(analyses, candidate_map)[:limit]
+    return [candidate_map[item.symbol] for item in ranked]
+
+
+def screening_pool_audit(
+    candidates: list[PrefilterCandidate],
+    store: MinuteBarStore,
+    trading_dates: list[date],
+    *,
+    limit: int = 50,
+) -> list[FilterAuditEntry]:
+    pool = screening_pool(candidates, store, trading_dates, limit=limit)
+    required_dates = [item.strftime("%Y%m%d") for item in trading_dates[-7:]]
+    candidate_map = {item.symbol: item for item in candidates}
+    analyses: list[_Analyzed] = []
+    for candidate in pool:
+        bars = [
+            bar
+            for trading_date in required_dates
+            for bar in store.load(candidate.symbol, trading_date)
+        ]
+        analyses.append(_analyze_symbol(candidate.symbol, bars))
+    ranked = _score_all(analyses, candidate_map)
+    entries: list[FilterAuditEntry] = []
+    for rank, item in enumerate(ranked, start=1):
+        reasons: list[str] = []
+        if item.position > Decimal("35"):
+            reasons.append("CURRENT_POSITION_ABOVE_35")
+        if item.lower_trend <= Decimal("-8"):
+            reasons.append("LOWER_TREND_AT_OR_BELOW_MINUS_8")
+        if item.target_reaches < 1:
+            reasons.append("NO_LOWER_CONTACT_TO_PLUS_10_WITHIN_3_DAYS")
+        entries.append(
+            FilterAuditEntry(
+                rank=rank,
+                symbol=item.symbol,
+                name=candidate_map[item.symbol].name,
+                score=item.score.quantize(Decimal("0.01")),
+                eligible=not reasons,
+                rejection_reasons=tuple(reasons),
+                position_pct=item.position.quantize(Decimal("0.01")),
+                lower_trend_pct=item.lower_trend.quantize(Decimal("0.01")),
+                target_reach_count=item.target_reaches,
+            )
+        )
+    return entries
+
+
+def _window_analysis(
+    store: MinuteBarStore,
+    symbol: str,
+    trading_dates: list[date],
+    days: int,
+) -> tuple[_Analyzed | None, int]:
+    required_dates = [
+        item.strftime("%Y%m%d") for item in trading_dates[-days:]
+    ]
+    completed = sum(
+        store.is_complete(symbol, trading_date)
+        for trading_date in required_dates
+    )
+    if completed != days:
+        return None, completed
+    bars: list[KisMinuteBar] = []
+    for trading_date in required_dates:
+        bars.extend(store.load(symbol, trading_date))
+    ordered = sorted(
+        bars,
+        key=lambda item: (item.trading_date, item.trading_time),
+    )
+    return _analyze_symbol(symbol, ordered), completed
+
+
+def _ready_window_metrics(
+    dataset: MarketDataset,
+    analysis: _Analyzed,
+    *,
+    days: WindowDays,
+    rank: int,
+) -> WindowMetrics:
+    symbol = analysis.symbol
+    current_price = analysis.hourly_closes[-1]
+    current_vs_high = min(
+        Decimal("0"),
+        (current_price / analysis.high - Decimal("1")) * HUNDRED,
+    )
+    _, average_value, volume_ratio, flows = _reference_values(
+        dataset,
+        symbol,
+        days,
+    )
+    period_return = _intraday_period_return(
+        current_price,
+        analysis.hourly_closes,
+    )
+    risk = min(
+        HUNDRED,
+        max(Decimal("0"), -period_return) * Decimal("2")
+        + (Decimal("20") if analysis.reach_days_5 == 0 else Decimal("0"))
+        + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
+    )
+    score = analysis.score.quantize(Decimal("0.01"))
+    grade = _setup_grade(
+        score,
+        analysis.position,
+        analysis.lower_trend,
+        analysis.target_reaches,
+    )
+    return WindowMetrics(
+        days=days,
+        structure_status="READY",
+        structure_completed_days=days,
+        rank=rank,
+        box_low=analysis.low.quantize(Decimal("0.01")),
+        box_high=analysis.high.quantize(Decimal("0.01")),
+        amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
+        position_pct=analysis.position.quantize(Decimal("0.01")),
+        median_daily_range_pct=analysis.median_daily_range.quantize(
+            Decimal("0.01")
+        ),
+        max_daily_range_pct=analysis.max_daily_range.quantize(Decimal("0.01")),
+        median_daily_rebound_pct=analysis.median_daily_rebound.quantize(
+            Decimal("0.01")
+        ),
+        max_daily_rebound_pct=analysis.max_daily_rebound.quantize(
+            Decimal("0.01")
+        ),
+        reach_days_5pct=analysis.reach_days_5,
+        reach_days_10pct=analysis.reach_days_10,
+        reach_days_15pct=analysis.reach_days_15,
+        current_vs_window_high_pct=current_vs_high.quantize(Decimal("0.01")),
+        lower_trend_pct=analysis.lower_trend.quantize(Decimal("0.01")),
+        lower_trend=(
+            "상승"
+            if analysis.lower_trend > Decimal("2")
+            else "하락"
+            if analysis.lower_trend < Decimal("-2")
+            else "횡보"
+        ),
+        return_pct=period_return,
+        average_trading_value_billion=average_value,
+        volume_ratio=volume_ratio,
+        target_price_10pct=analysis.target_price.quantize(Decimal("0.01")),
+        lower_contact_count=analysis.lower_contacts,
+        target_reach_count=analysis.target_reaches,
+        target_pending_count=analysis.target_pending,
+        breakdown_risk_pct=risk.quantize(Decimal("0.01")),
+        quant_score=score,
+        ai_score=score,
+        final_score=score,
+        ai_grade=grade,
+        ai_comment=(
+            f"실제 {days}거래일 1분봉을 60분봉으로 집계한 정량 기준선입니다. "
+            f"일중 진폭 중앙값 "
+            f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%, "
+            f"저점 반등 중앙값 "
+            f"{analysis.median_daily_rebound.quantize(Decimal('0.1'))}%, "
+            f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
+            f"{analysis.reach_days_10}/{analysis.reach_days_15}일, "
+            f"하단 접촉 후 3거래일 이내 +10% "
+            f"{analysis.target_reaches}회입니다. "
+            "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
+        ),
+        reasons=[
+            f"일중 진폭 중앙값 "
+            f"{analysis.median_daily_range.quantize(Decimal('0.1'))}%",
+            f"저점 반등 중앙값 "
+            f"{analysis.median_daily_rebound.quantize(Decimal('0.1'))}%",
+            f"3거래일 이내 하단→+10% {analysis.target_reaches}회",
+        ],
+        risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
+        invalidation=(
+            f"박스 하단 {analysis.low.quantize(Decimal('1'))}원 "
+            "이탈 후 재진입 실패"
+        ),
+        closes=analysis.hourly_closes,
+        chart_bars=[
+            ChartBar(
+                trading_date=bar.trading_date,
+                bucket=bar.bucket,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            )
+            for bar in analysis.hour_bars
+        ],
+        flows=flows,
+    )
+
+
 def build_intraday_report(
     dataset: MarketDataset,
     candidates: list[PrefilterCandidate],
     store: MinuteBarStore,
 ) -> DashboardReport:
-    trading_dates = [item.strftime("%Y%m%d") for item in dataset.trading_dates[-7:]]
-    analyses: list[_Analyzed] = []
-    minute_by_symbol: dict[str, list[KisMinuteBar]] = {}
+    base_analyses: list[_Analyzed] = []
     for candidate in candidates:
-        bars: list[KisMinuteBar] = []
-        for trading_date in trading_dates:
-            day = store.load(candidate.symbol, trading_date)
-            if not store.is_complete(candidate.symbol, trading_date):
-                bars = []
-                break
-            bars.extend(day)
-        if not bars:
-            continue
-        minute_by_symbol[candidate.symbol] = sorted(
-            bars, key=lambda item: (item.trading_date, item.trading_time)
+        analysis, _ = _window_analysis(
+            store,
+            candidate.symbol,
+            dataset.trading_dates,
+            7,
         )
-        analyses.append(_analyze_symbol(candidate.symbol, minute_by_symbol[candidate.symbol]))
-    if len(analyses) < 30:
+        if analysis is not None:
+            base_analyses.append(analysis)
+    if len(base_analyses) < 30:
         raise CandidateReportError(
-            f"only {len(analyses)} balanced symbols have complete 7-day minute data"
+            f"only {len(base_analyses)} balanced symbols have complete "
+            "7-day minute data"
         )
     candidate_map = {item.symbol: item for item in candidates}
-    selected = _score_all(analyses, candidate_map)[: 30 + EXTENDED_WATCHLIST_COUNT]
+    selected = [
+        item
+        for item in _score_all(base_analyses, candidate_map)
+        if _setup_eligible(item)
+    ][:30]
+    if not selected:
+        raise CandidateReportError("no symbols passed the +10% qualification gate")
+    selected_symbols = [item.symbol for item in selected]
+    analyses_by_window: dict[int, dict[str, _Analyzed]] = {}
+    ranks_by_window: dict[int, dict[str, int]] = {}
+    completed_by_window: dict[int, dict[str, int]] = {}
+    for days in WINDOW_DAYS:
+        window_analyses: list[_Analyzed] = []
+        completed_by_window[days] = {}
+        for symbol in selected_symbols:
+            analysis, completed = _window_analysis(
+                store,
+                symbol,
+                dataset.trading_dates,
+                days,
+            )
+            completed_by_window[days][symbol] = completed
+            if analysis is not None:
+                window_analyses.append(analysis)
+        if len(window_analyses) == len(selected_symbols):
+            ranked = _score_all(window_analyses, candidate_map)
+            analyses_by_window[days] = {
+                item.symbol: item for item in ranked
+            }
+            ranks_by_window[days] = {
+                item.symbol: rank
+                for rank, item in enumerate(ranked, start=1)
+            }
     views: list[CandidateView] = []
-    for rank, analysis in enumerate(selected, start=1):
-        symbol = analysis.symbol
-        current_price = Decimal(minute_by_symbol[symbol][-1].close)
-        current_vs_high = min(
-            Decimal("0"),
-            (current_price / analysis.high - Decimal("1")) * HUNDRED,
-        )
-        _, average_value, volume_ratio, flows = _reference_values(
-            dataset, symbol, 7
-        )
-        period_return = _intraday_period_return(
-            current_price,
-            analysis.hourly_closes,
-        )
-        risk = min(
-            HUNDRED,
-            max(Decimal("0"), -period_return) * Decimal("2")
-            + (Decimal("20") if analysis.reach_days_5 == 0 else Decimal("0"))
-            + max(Decimal("0"), Decimal("70") - analysis.box_inclusion),
-        )
-        score = analysis.score.quantize(Decimal("0.01"))
-        grade = _setup_grade(score, analysis.position, analysis.lower_trend)
-        ready = WindowMetrics(
-            days=7,
-            structure_status="READY",
-            structure_completed_days=7,
-            rank=rank,
-            box_low=analysis.low.quantize(Decimal("0.01")),
-            box_high=analysis.high.quantize(Decimal("0.01")),
-            amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
-            position_pct=analysis.position.quantize(Decimal("0.01")),
-            median_daily_range_pct=analysis.median_daily_range.quantize(Decimal("0.01")),
-            max_daily_range_pct=analysis.max_daily_range.quantize(Decimal("0.01")),
-            median_daily_rebound_pct=analysis.median_daily_rebound.quantize(Decimal("0.01")),
-            max_daily_rebound_pct=analysis.max_daily_rebound.quantize(Decimal("0.01")),
-            reach_days_5pct=analysis.reach_days_5,
-            reach_days_10pct=analysis.reach_days_10,
-            reach_days_15pct=analysis.reach_days_15,
-            current_vs_window_high_pct=current_vs_high.quantize(Decimal("0.01")),
-            lower_trend_pct=analysis.lower_trend.quantize(Decimal("0.01")),
-            lower_trend=(
-                "상승"
-                if analysis.lower_trend > Decimal("2")
-                else "하락"
-                if analysis.lower_trend < Decimal("-2")
-                else "횡보"
-            ),
-            return_pct=period_return,
-            average_trading_value_billion=average_value,
-            volume_ratio=volume_ratio,
-            target_price_10pct=analysis.target_price.quantize(Decimal("0.01")),
-            lower_contact_count=analysis.lower_contacts,
-            target_reach_count=analysis.target_reaches,
-            target_pending_count=analysis.target_pending,
-            breakdown_risk_pct=risk.quantize(Decimal("0.01")),
-            quant_score=score,
-            ai_score=score,
-            final_score=score,
-            ai_grade=grade,
-            ai_comment=(
-                f"실제 7거래일 1분봉을 60분봉으로 집계한 정량 기준선입니다. "
-                f"일중 진폭 중앙값 {analysis.median_daily_range.quantize(Decimal('0.1'))}%, "
-                f"저점 반등 중앙값 {analysis.median_daily_rebound.quantize(Decimal('0.1'))}%, "
-                f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
-                f"{analysis.reach_days_10}/{analysis.reach_days_15}일, 현재 위치 "
-                f"{analysis.position.quantize(Decimal('0.1'))}% "
-                f"({'진입권' if analysis.position <= Decimal('35') else '진입권 밖'})입니다. "
-                "뉴스·공시를 포함한 AI 전수 검토는 아직 적용 전입니다."
-            ),
-            reasons=[
-                f"일중 진폭 중앙값 {analysis.median_daily_range.quantize(Decimal('0.1'))}%",
-                f"저점 반등 중앙값 {analysis.median_daily_rebound.quantize(Decimal('0.1'))}%",
-                f"+5/+10/+15% 도달 {analysis.reach_days_5}/"
-                f"{analysis.reach_days_10}/{analysis.reach_days_15}일",
-            ],
-            risks=["연구용 기준선이며 뉴스·공시·호가 검증 전"],
-            invalidation=(
-                f"박스 하단 {analysis.low.quantize(Decimal('1'))}원 이탈 후 재진입 실패"
-            ),
-            closes=analysis.hourly_closes,
-            chart_bars=[
-                ChartBar(
-                    trading_date=bar.trading_date,
-                    bucket=bar.bucket,
-                    open=bar.open,
-                    high=bar.high,
-                    low=bar.low,
-                    close=bar.close,
-                    volume=bar.volume,
+    for base_analysis in selected:
+        symbol = base_analysis.symbol
+        windows: dict[str, WindowMetrics] = {}
+        for days in WINDOW_DAYS:
+            analysis = analyses_by_window.get(days, {}).get(symbol)
+            if analysis is not None:
+                windows[str(days)] = _ready_window_metrics(
+                    dataset,
+                    analysis,
+                    days=days,
+                    rank=ranks_by_window[days][symbol],
                 )
-                for bar in analysis.hour_bars
-            ],
-            flows=flows,
-        )
-        windows: dict[str, WindowMetrics] = {"7": ready}
-        for days in (14, 21):
+                continue
             return_pct, avg_value, ratio, window_flows = _reference_values(
-                dataset, symbol, days
+                dataset,
+                symbol,
+                days,
             )
             windows[str(days)] = WindowMetrics(
                 days=days,
                 structure_status="WARMING_UP",
-                structure_completed_days=7,
+                structure_completed_days=completed_by_window[days][symbol],
                 return_pct=return_pct,
                 average_trading_value_billion=avg_value,
                 volume_ratio=ratio,
                 flows=window_flows,
             )
+        current_price = analyses_by_window[7][symbol].hourly_closes[-1]
         name = candidate_map[symbol].name
         views.append(
             CandidateView(
@@ -682,12 +886,20 @@ def build_intraday_report(
             )
         )
     data_date = dataset.trading_dates[-1]
+    ready_windows = [
+        str(days)
+        for days in WINDOW_DAYS
+        if days in analyses_by_window
+    ]
     return DashboardReport(
         generated_at=datetime.now(KST),
         data_as_of=datetime.combine(data_date, time(15, 30), tzinfo=KST),
-        market_regime="실제 7거래일 분봉 · 연구용 기준선",
+        market_regime=(
+            f"실제 {'·'.join(ready_windows)}거래일 분봉 · "
+            "+10% 자격 게이트 연구 기준선"
+        ),
         calculation_version=(
-            "intraday-elasticity-v4.3-chart-aligned-return-entry-gated-"
+            "intraday-elasticity-v5-target-reach-qualified-chart-aligned-"
             "prefilter-balanced-v1"
         ),
         strategy_status="RESEARCH_ONLY",
@@ -696,6 +908,6 @@ def build_intraday_report(
         model_id="quant-intraday-baseline-no-llm",
         prompt_version="not-applied",
         is_demo=False,
-        candidates=views[:30],
-        extended_watchlist=views[30:],
+        candidates=views,
+        extended_watchlist=[],
     )

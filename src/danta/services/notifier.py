@@ -50,6 +50,39 @@ class SmtpNotifier:
             subtype="html",
         )
 
+        self._deliver(message)
+
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_stage_completed(
+        self,
+        report_url: str,
+        *,
+        stage: str,
+        detail: str,
+    ) -> NotificationReceipt:
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = f"[DANTA][완료] {stage}"
+        message.set_content(
+            f"{stage} 작업이 완료되었습니다.\n"
+            f"{detail}\n\n"
+            f"리포트: {report_url}\n"
+        )
+        message.add_alternative(
+            "<html><body style=\"font-family:Arial,'Malgun Gothic',sans-serif;color:#172033\">"
+            f"<h2>{escape(stage)}</h2>"
+            f"<p>{escape(detail)}</p>"
+            f"<p><a href=\"{escape(report_url)}\">리포트 열기</a></p>"
+            "<p style=\"font-size:12px;color:#657087\">계좌·주문·비밀정보는 포함하지 않습니다.</p>"
+            "</body></html>",
+            subtype="html",
+        )
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def _deliver(self, message: EmailMessage) -> None:
         try:
             if self._config.use_ssl:
                 with smtplib.SMTP_SSL(
@@ -69,8 +102,6 @@ class SmtpNotifier:
                     self._send(client, message)
         except (OSError, smtplib.SMTPException) as exc:
             raise NotificationError("SMTP delivery failed") from exc
-
-        return NotificationReceipt(recipient_count=len(self._config.recipients))
 
     def _send(self, client: smtplib.SMTP, message: EmailMessage) -> None:
         client.login(self._config.sender, self._config.password.get_secret_value())

@@ -114,6 +114,29 @@ def test_target_reach_requires_a_later_minute_after_lower_contact() -> None:
     assert _target_reach_episodes(rows, Decimal("100")) == (2, 1, 1)
 
 
+def test_target_reach_expires_after_three_trading_days() -> None:
+    rows = [
+        KisMinuteBar(
+            trading_date=trading_date,
+            trading_time="090000",
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=10,
+            accumulated_trading_value=0,
+        )
+        for trading_date, open_, high, low, close in [
+            ("20260720", 100, 101, 99, 100),
+            ("20260721", 100, 105, 100, 104),
+            ("20260722", 104, 109, 103, 108),
+            ("20260723", 108, 111, 108, 110),
+        ]
+    ]
+
+    assert _target_reach_episodes(rows, Decimal("100")) == (1, 0, 0)
+
+
 def test_daily_dynamics_only_counts_rebound_after_the_daily_low() -> None:
     rows = [
         KisMinuteBar(
@@ -191,6 +214,7 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     assert _setup_eligible(analysis)
     assert not _setup_eligible(replace(analysis, position=Decimal("68")))
     assert not _setup_eligible(replace(analysis, lower_trend=Decimal("-9")))
+    assert not _setup_eligible(replace(analysis, target_reaches=0))
 
 
 def test_entry_location_is_a_gate_not_a_small_bonus() -> None:

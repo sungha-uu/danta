@@ -87,3 +87,24 @@ def test_report_notification_uses_starttls(monkeypatch: object) -> None:
     )
 
     assert FakeSmtp.instances[-1].started_tls is True
+
+
+def test_stage_notification_contains_stage_and_detail(monkeypatch: object) -> None:
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_stage_completed(
+        "https://example.github.io/danta_report/",
+        stage="14일 분봉 수집 완료",
+        detail="감사 풀 50종목의 14거래일 수집을 검증했습니다.",
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert "14일 분봉 수집 완료" in message["Subject"]
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert "감사 풀 50종목" in plain_body.get_content()

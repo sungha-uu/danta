@@ -192,8 +192,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "structure_status" in html
     assert '"average_trading_value_billion"' in html
     assert "item.flows" in html
-    assert "후보 30 + 확장 관찰 20" in html
-    assert "확장 관찰 20" in html
+    assert "적격 후보 ${report.candidates.length}" in html
     assert "extended_watchlist" in html
     assert "extended-watch-row" in html
     assert "extended-badge" in html
