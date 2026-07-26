@@ -237,12 +237,12 @@
   function expandedPlot(item, name, currentPrice) {
     const bars = item.chart_bars;
     const values = bars.map((bar) => n(bar.close));
-    const width = 900;
+    const width = 920;
     const height = 220;
     const padLeft = 78;
-    const labelGutter = 112;
+    const labelGutter = 132;
     const plotRight = width - labelGutter;
-    const labelX = plotRight + 8;
+    const legendX = plotRight + 8;
     const padTop = 16;
     const padBottom = 30;
     const plotBottom = height - padBottom;
@@ -260,11 +260,6 @@
     const lowerY = y(n(item.box_low));
     const currentY = y(current);
     const targetY = y(target10);
-    const labelAbove = (lineY) => Math.max(padTop + 9, lineY - 4);
-    const labelBelow = (lineY) => Math.min(plotBottom - 3, lineY + 13);
-    const lowerIsAboveCurrent = lowerY < currentY;
-    const lowerLabelY = lowerIsAboveCurrent ? labelAbove(lowerY) : labelBelow(lowerY);
-    const currentLabelY = lowerIsAboveCurrent ? labelBelow(currentY) : labelAbove(currentY);
     const priceTicks = Array.from({ length: 5 }, (_, index) => high - (spread * index / 4));
     const dateGroups = [];
     bars.forEach((bar, index) => {
@@ -288,9 +283,14 @@
       <line class="modal-target-line" x1="${padLeft}" y1="${targetY}" x2="${plotRight}" y2="${targetY}"></line>
       <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${plotRight}" y2="${lowerY}"></line>
       <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${plotRight}" y2="${currentY}"></line>
-      <text class="modal-reference-label modal-target-label" x="${labelX}" y="${Math.min(plotBottom - 3, targetY + 13)}" text-anchor="start">상단(현재가+10%)</text>
-      <text class="modal-reference-label modal-lower-label" x="${labelX}" y="${lowerLabelY}" text-anchor="start">하단</text>
-      <text class="modal-reference-label modal-current-label" x="${labelX}" y="${currentLabelY}" text-anchor="start">현재가</text>
+      <g class="modal-reference-legend" role="group" aria-label="차트 기준선 범례">
+        <line class="modal-target-line" x1="${legendX}" y1="26" x2="${legendX + 18}" y2="26"></line>
+        <text class="modal-target-label" x="${legendX + 24}" y="29">상단(현재가+10%)</text>
+        <line class="modal-lower-line" x1="${legendX}" y1="45" x2="${legendX + 18}" y2="45"></line>
+        <text class="modal-lower-label" x="${legendX + 24}" y="48">박스 하단</text>
+        <line class="modal-current-line" x1="${legendX}" y1="64" x2="${legendX + 18}" y2="64"></line>
+        <text class="modal-current-label" x="${legendX + 24}" y="67">현재가</text>
+      </g>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }

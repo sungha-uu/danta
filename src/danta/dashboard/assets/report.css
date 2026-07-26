@@ -136,7 +136,7 @@ body.modal-open { overflow: hidden; }
 .chart-modal-plot text { fill: #627087; font-size: 10px; font-weight: 700; }
 .chart-modal-plot .modal-price-tick { font-size: 9px; font-weight: 600; }
 .chart-modal-plot .modal-date-tick { font-size: 9px; font-weight: 700; }
-.chart-modal-plot .modal-reference-label { paint-order: stroke; stroke: #f8fafc; stroke-width: 3px; }
+.chart-modal-plot .modal-reference-legend text { font-size: 9px; paint-order: stroke; stroke: #f8fafc; stroke-width: 3px; }
 .chart-modal-plot .modal-target-label { fill: #b72f2f; }
 .chart-modal-plot .modal-lower-label { fill: #2469a7; }
 .chart-modal-plot .modal-current-label { fill: #111827; }
