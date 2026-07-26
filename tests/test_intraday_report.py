@@ -213,7 +213,7 @@ def test_scoring_preserves_typed_hour_bars_for_dashboard_modal() -> None:
     assert isinstance(scored[0].hour_bars[0], HourBar)
     assert _setup_eligible(analysis)
     assert not _setup_eligible(replace(analysis, position=Decimal("68")))
-    assert not _setup_eligible(replace(analysis, lower_trend=Decimal("-9")))
+    assert _setup_eligible(replace(analysis, lower_trend=Decimal("-20")))
     assert not _setup_eligible(replace(analysis, target_reaches=0))
 
 
@@ -227,7 +227,7 @@ def test_entry_location_is_a_gate_not_a_small_bonus() -> None:
     ) == "NOT_RECOMMEND"
     assert _setup_grade(
         Decimal("90"), Decimal("20"), Decimal("-9")
-    ) == "NOT_RECOMMEND"
+    ) == "STRONG_RECOMMEND"
 
 
 def test_ready_period_return_matches_chart_endpoints() -> None:

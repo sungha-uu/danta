@@ -2,6 +2,8 @@
   "use strict";
 
   const report = JSON.parse(document.getElementById("reportData").textContent);
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
   const officialCodes = new Set(report.candidates.map((candidate) => candidate.code));
   const candidates = [...report.candidates, ...(report.extended_watchlist ?? [])];
   $("#candidateCountTitle").textContent = report.extended_watchlist?.length
@@ -26,8 +28,6 @@
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
-  const $ = (selector) => document.querySelector(selector);
-  const $$ = (selector) => [...document.querySelectorAll(selector)];
   const h = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[char]);

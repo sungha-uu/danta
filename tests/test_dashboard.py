@@ -124,6 +124,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     html = target.read_text(encoding="utf-8")
 
     assert target.name == "index.html"
+    assert html.index("const $ =") < html.index('$("#candidateCountTitle")')
     assert (tmp_path / ".nojekyll").exists()
     assert "AI 분석 30" not in html
     assert 'id="searchInput"' not in html

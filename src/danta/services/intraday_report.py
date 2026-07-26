@@ -435,14 +435,10 @@ def _entry_location_factor(position: Decimal) -> Decimal:
 def _setup_grade(
     score: Decimal,
     position: Decimal,
-    lower_trend: Decimal,
+    _lower_trend: Decimal,
     target_reaches: int = 1,
 ) -> AiGrade:
-    if (
-        position > Decimal("35")
-        or lower_trend <= Decimal("-8")
-        or target_reaches < 1
-    ):
+    if position > Decimal("35") or target_reaches < 1:
         return "NOT_RECOMMEND" if score >= Decimal("45") else "STRONG_NOT_RECOMMEND"
     return _grade(score)
 
@@ -450,7 +446,6 @@ def _setup_grade(
 def _setup_eligible(item: _Analyzed) -> bool:
     return (
         item.position <= Decimal("35")
-        and item.lower_trend > Decimal("-8")
         and item.target_reaches >= 1
     )
 
@@ -548,9 +543,6 @@ def _score_all(
         upside_room_score = min(
             HUNDRED, item.current_to_window_high / Decimal("15") * HUNDRED
         )
-        trend_penalty = min(
-            Decimal("15"), max(Decimal("0"), -item.lower_trend) * Decimal("1.5")
-        )
         raw_score = (
             upside_room_score * Decimal("0.25")
             + lower_score * Decimal("0.20")
@@ -559,7 +551,7 @@ def _score_all(
             + rebound_score * Decimal("0.12")
             + daily_range_score * Decimal("0.08")
         )
-        score = raw_score * _entry_location_factor(item.position) - trend_penalty
+        score = raw_score * _entry_location_factor(item.position)
         result.append(
             replace(item, score=min(HUNDRED, max(Decimal("0"), score)))
         )
@@ -623,8 +615,6 @@ def screening_pool_audit(
         reasons: list[str] = []
         if item.position > Decimal("35"):
             reasons.append("CURRENT_POSITION_ABOVE_35")
-        if item.lower_trend <= Decimal("-8"):
-            reasons.append("LOWER_TREND_AT_OR_BELOW_MINUS_8")
         if item.target_reaches < 1:
             reasons.append("NO_LOWER_CONTACT_TO_PLUS_10_WITHIN_3_DAYS")
         entries.append(
