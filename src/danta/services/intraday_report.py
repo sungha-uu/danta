@@ -150,12 +150,12 @@ class MinuteBarStore:
 
     def is_complete(self, symbol: str, trading_date: str) -> bool:
         bars = self.load(symbol, trading_date)
-        # KRX continuous trading is 09:00-15:20. The closing auction follows
-        # until 15:30, but it does not guarantee a separate minute bar.
-        if len(bars) < 370:
+        # KIS returns traded minutes rather than a guaranteed 380-row grid.
+        # Require broad session coverage while allowing legitimate quiet minutes.
+        if len(bars) < 180:
             return False
         return (
-            bars[0].trading_time <= "090100"
+            bars[0].trading_time <= "091000"
             and bars[-1].trading_time >= "151900"
         )
 

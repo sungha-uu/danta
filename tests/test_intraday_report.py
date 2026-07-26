@@ -121,6 +121,14 @@ def test_minute_store_accepts_complete_continuous_session_without_auction_bar(
     assert rows[-1].trading_time == "151900"
     assert store.is_complete("005930", "20260724")
 
+    sparse_rows = rows[::2] + [
+        replace(rows[-1], trading_time="153000"),
+    ]
+    store.save("000500", "20260724", sparse_rows)
+
+    assert len(sparse_rows) == 191
+    assert store.is_complete("000500", "20260724")
+
 
 def test_aggregate_hour_bars_uses_full_ohlcv() -> None:
     rows = [
