@@ -150,9 +150,14 @@ class MinuteBarStore:
 
     def is_complete(self, symbol: str, trading_date: str) -> bool:
         bars = self.load(symbol, trading_date)
-        if len(bars) < 180:
+        # KRX continuous trading is 09:00-15:20. The closing auction follows
+        # until 15:30, but it does not guarantee a separate minute bar.
+        if len(bars) < 370:
             return False
-        return bars[0].trading_time <= "091000" and bars[-1].trading_time >= "152000"
+        return (
+            bars[0].trading_time <= "090100"
+            and bars[-1].trading_time >= "151900"
+        )
 
     def save(self, symbol: str, trading_date: str, bars: list[KisMinuteBar]) -> Path:
         if not bars:

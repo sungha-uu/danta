@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from danta.adapters.kis.client import KisMinuteBar
 from danta.adapters.krx.client import DailyBar, MarketDataset
 from danta.services.intraday_report import (
     HourBar,
+    MinuteBarStore,
     PrefilterCandidate,
     _active_episode_stats,
     _active_regime_start,
@@ -95,6 +96,30 @@ def test_market_cap_top_universe_sorts_common_stocks_by_market_cap() -> None:
     universe = market_cap_top_universe(dataset, limit=2)
 
     assert [item.symbol for item in universe] == ["000002", "000001"]
+
+
+def test_minute_store_accepts_complete_continuous_session_without_auction_bar(
+    tmp_path,
+) -> None:
+    start = datetime(2026, 7, 24, 9, 0)
+    rows = [
+        KisMinuteBar(
+            trading_date="20260724",
+            trading_time=(start + timedelta(minutes=index)).strftime("%H%M%S"),
+            open=100,
+            high=101,
+            low=99,
+            close=100,
+            volume=10,
+            accumulated_trading_value=1000,
+        )
+        for index in range(380)
+    ]
+    store = MinuteBarStore(tmp_path)
+    store.save("005930", "20260724", rows)
+
+    assert rows[-1].trading_time == "151900"
+    assert store.is_complete("005930", "20260724")
 
 
 def test_aggregate_hour_bars_uses_full_ohlcv() -> None:

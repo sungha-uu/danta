@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -39,17 +39,16 @@ def _save_day(
     price: int,
 ) -> None:
     bars: list[KisMinuteBar] = []
-    for index in range(179):
-        hour = 9 + index // 60
-        minute = index % 60
+    start = datetime.strptime(f"{trading_date} 090000", "%Y%m%d %H%M%S")
+    for index in range(380):
+        trading_time = (start + timedelta(minutes=index)).strftime("%H%M%S")
         bars.append(
             _minute_bar(
                 trading_date,
-                f"{hour:02d}{minute:02d}00",
+                trading_time,
                 price=price,
             )
         )
-    bars.append(_minute_bar(trading_date, "152000", price=price))
     store.save(symbol, trading_date, bars)
 
 
