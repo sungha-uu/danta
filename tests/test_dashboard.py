@@ -148,6 +148,12 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert 'id="chartModalHead"' in html
     assert "byDateBucket" in html
     assert "hour-bar-cell" in html
+    assert "modal-price-tick" in html
+    assert "modal-date-tick" in html
+    assert "현재가 ${won.format(" in html
+    assert 'id="chartModalSummary"' in html
+    assert "<small>량 ${won.format(n(bar.volume))} · 시 ${won.format(n(bar.open))}</small>" in html
+    assert "<small>저 ${won.format(n(bar.low))} · 고 ${won.format(n(bar.high))}</small>" in html
     assert "선택 기간 첫 거래일 수정종가 대비 현재가 변화율" in html
     assert "연구용 · 주문 불가" in html
     assert "strategy_status" in html

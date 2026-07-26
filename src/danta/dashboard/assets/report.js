@@ -238,7 +238,7 @@
     const bars = item.chart_bars;
     const values = bars.map((bar) => n(bar.close));
     const width = 900;
-    const height = 240;
+    const height = 220;
     const padLeft = 78;
     const padRight = 18;
     const padTop = 16;
@@ -289,7 +289,9 @@
     if (!candidate) return;
     const item = metric(candidate);
     if (item.structure_status !== "READY" || !item.chart_bars.length) return;
-    $("#chartModalTitle").textContent = `${candidate.name} · ${state.window}일 60분봉`;
+    $("#chartModalTitle").textContent = `${candidate.name} · 현재가 ${won.format(
+      n(candidate.current_price),
+    )}원 · ${state.window}일 60분봉`;
     $("#chartModalSummary").textContent = `일중 진폭 ${one.format(n(item.median_daily_range_pct))}% / 최대 ${one.format(
       n(item.max_daily_range_pct),
     )}% · 저점 반등 ${one.format(n(item.median_daily_rebound_pct))}% / 최대 ${one.format(
