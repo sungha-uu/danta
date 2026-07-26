@@ -133,10 +133,26 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert 'number > 0 ? "+"' not in html
     assert "minimumFractionDigits: 1" in html
     assert "기간수익률" in html
+    header_html = html[html.index("<thead>") : html.index("</thead>")]
+    expected_headers = [
+        "기간수익률",
+        ">기간고점 대비<",
+        "가격 흐름",
+        "박스 상단",
+        "박스 하단",
+        "현재 위치",
+        "하단 방향",
+        "일중 진폭",
+        "저점 반등",
+        "도달일수",
+    ]
+    assert [header_html.index(value) for value in expected_headers] == sorted(
+        header_html.index(value) for value in expected_headers
+    )
     assert "일중 진폭" in html
     assert "저점 반등" in html
     assert "도달일수" in html
-    assert "기간고점 대비 현재가" in html
+    assert ">기간고점 대비<" in html
     assert "하단 방향" in html
     assert "하단 진입권" in html
     assert "상단권" in html

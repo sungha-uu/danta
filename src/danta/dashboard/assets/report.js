@@ -207,15 +207,15 @@
         <td>${grade(item)}</td>
         <td>${won.format(n(candidate.current_price))}</td>
         <td class="${tone(item.return_pct)}"><b>${percent(item.return_pct)}</b></td>
+        <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
         <td>${structureCell(item, sparkline(item, candidate.name, candidate.code))}</td>
-        <td>${structureCell(item, won.format(n(item.box_low)))}</td>
         <td>${structureCell(item, won.format(n(item.box_high)))}</td>
+        <td>${structureCell(item, won.format(n(item.box_low)))}</td>
+        <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
+        <td>${structureCell(item, lowerTrendCell(item))}</td>
         <td>${structureCell(item, metricPair(item.median_daily_range_pct, item.max_daily_range_pct))}</td>
         <td>${structureCell(item, metricPair(item.median_daily_rebound_pct, item.max_daily_rebound_pct))}</td>
         <td>${structureCell(item, targetDaysCell(item))}</td>
-        <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
-        <td class="position">${structureCell(item, `${one.format(n(item.position_pct))}%<small class="target-detail">${positionLabel(item.position_pct)}</small><div class="position-track"><span style="width:${Math.max(0, Math.min(100, n(item.position_pct)))}%"></span></div>`)}</td>
-        <td>${structureCell(item, lowerTrendCell(item))}</td>
         <td class="${tone(flows.retail)}">${signed(flows.retail)}</td>
         <td class="${tone(flows.foreign)}">${signed(flows.foreign)}</td>
         <td class="${tone(flows.institution)}">${signed(flows.institution)}</td>
