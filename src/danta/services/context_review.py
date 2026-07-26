@@ -17,7 +17,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import HttpUrl
 
-from danta.dashboard.models import DashboardReport
+from danta.dashboard.models import DashboardReport, WindowMetrics
 from danta.services.ai_review import (
     AiCandidateReview,
     AiNewsReview,
@@ -345,6 +345,50 @@ def _grade(score: Decimal) -> str:
     return "STRONG_NOT_RECOMMEND"
 
 
+EXPIRED_SPIKE_RISK = "21일 원시세 복귀형 급등 소멸"
+
+
+def _percentile(values: list[Decimal], ratio: Decimal) -> Decimal:
+    ordered = sorted(values)
+    if not ordered:
+        return Decimal("0")
+    index = int((Decimal(len(ordered) - 1) * ratio).to_integral_value())
+    return ordered[index]
+
+
+def _is_expired_spike_reversion(metrics: WindowMetrics) -> bool:
+    if (
+        metrics.days != 21
+        or metrics.structure_status != "READY"
+        or len(metrics.chart_bars) < 21
+    ):
+        return False
+    bars = metrics.chart_bars
+    first_close = bars[0].close
+    peak_index = max(range(len(bars)), key=lambda index: bars[index].high)
+    peak_excursion = (bars[peak_index].high / first_close - Decimal("1")) * Decimal(
+        "100"
+    )
+    dates = sorted({bar.trading_date for bar in bars})
+    third_size = max(1, len(dates) // 3)
+    first_dates = set(dates[:third_size])
+    last_dates = set(dates[-third_size:])
+    first_upper = _percentile(
+        [bar.high for bar in bars if bar.trading_date in first_dates],
+        Decimal("0.80"),
+    )
+    last_upper = _percentile(
+        [bar.high for bar in bars if bar.trading_date in last_dates],
+        Decimal("0.80"),
+    )
+    return (
+        abs(metrics.return_pct) <= Decimal("15")
+        and peak_excursion >= Decimal("25")
+        and Decimal(peak_index) / Decimal(len(bars) - 1) <= Decimal("0.50")
+        and last_upper <= first_upper * Decimal("0.90")
+    )
+
+
 def build_context_review(
     report: DashboardReport,
     snapshots: dict[str, ContextSnapshot],
@@ -354,6 +398,9 @@ def build_context_review(
     reviews: list[AiCandidateReview] = []
     for candidate in report.candidates:
         snapshot = snapshots[candidate.code]
+        expired_spike_reversion = _is_expired_spike_reversion(
+            candidate.windows["21"]
+        )
         positive_news = sum(item.sentiment == "POSITIVE" for item in snapshot.news)
         negative_news = sum(item.sentiment == "NEGATIVE" for item in snapshot.news)
         news_adjustment = Decimal(
@@ -411,6 +458,8 @@ def build_context_review(
                 or metrics.target_price_10pct <= candidate.current_price
             ):
                 score = min(score, Decimal("59"))
+            if expired_spike_reversion:
+                score = min(score, Decimal("44"))
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
                 "외국인·기관 순유입"
@@ -424,6 +473,11 @@ def build_context_review(
                 if decline_opportunity
                 else "하락 추세는 단독 감점하지 않았습니다."
             )
+            if expired_spike_reversion:
+                opportunity_text = (
+                    "21일 급등 뒤 상단 가격대가 낮아지고 시작 가격대로 "
+                    "복귀해 추천 자격을 제한했습니다."
+                )
             gate_text = (
                 f"박스 하단 접촉 후 3거래일 내 실제 +10% "
                 f"{actual_10pct_reaches}회, 현재가+10% 과거 도달 확인, "
@@ -473,6 +527,7 @@ def build_context_review(
                         if (metrics.lower_trend_pct or Decimal("0")) < Decimal("-2")
                         else []
                     ),
+                    *([EXPIRED_SPIKE_RISK] if expired_spike_reversion else []),
                 ],
             )
         reviews.append(
@@ -496,8 +551,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v4-period-lower-entry-priority",
-        prompt_version="period-lower-entry-10pct-flow-news-v4-20260726",
+        model_id="agent-context-review-v5-expired-spike-gate",
+        prompt_version="expired-spike-reversion-flow-news-v5-20260726",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

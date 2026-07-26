@@ -157,10 +157,10 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
 def _active_discovery_rank_key(
     candidate: CandidateView,
     key: WindowKey,
-) -> tuple[bool, bool, bool, bool, bool, Decimal]:
+) -> tuple[bool, bool, bool, bool, bool, bool, Decimal]:
     metrics = candidate.windows[key]
     if metrics.structure_status != "READY":
-        return (False, False, False, False, False, Decimal("-1"))
+        return (False, False, False, False, False, False, Decimal("-1"))
     current_10pct_threshold = (
         Decimal("1") / Decimal("1.10") - Decimal("1")
     ) * Decimal("100")
@@ -179,7 +179,11 @@ def _active_discovery_rank_key(
     )
     smart_money_inflow = metrics.flows.foreign + metrics.flows.institution > 0
     recommended = metrics.ai_grade in {"STRONG_RECOMMEND", "RECOMMEND"}
+    expired_spike = any(
+        "원시세 복귀형 급등 소멸" in risk for risk in metrics.risks
+    )
     return (
+        not expired_spike,
         actual_10pct_reached,
         lower_zone,
         target_above_current,

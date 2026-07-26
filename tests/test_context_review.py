@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from danta.dashboard.demo import demo_report
-from danta.dashboard.models import DashboardReport
+from danta.dashboard.models import ChartBar, DashboardReport
 from danta.services.ai_review import apply_ai_review
 from danta.services.context_review import (
     CollectedNews,
     ContextSnapshot,
+    _is_expired_spike_reversion,
     _NaverBoardParser,
     build_context_review,
 )
@@ -62,7 +64,7 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
     validated = DashboardReport.model_validate(reviewed_report.model_dump())
 
     assert len(review.candidates) == 50
-    assert review.model_id == "agent-context-review-v4-period-lower-entry-priority"
+    assert review.model_id == "agent-context-review-v5-expired-spike-gate"
     assert all(set(candidate.windows) == {"7", "14", "21"} for candidate in review.candidates)
     assert all(candidate.context_status == "READY" for candidate in review.candidates)
     assert all(len(candidate.news) == 1 for candidate in validated.candidates)
@@ -71,3 +73,51 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
         for candidate in validated.candidates
     )
     assert all(candidate.discussion_url is not None for candidate in validated.candidates)
+
+
+def test_expired_spike_reversion_requires_peak_and_falling_upper_regime() -> None:
+    metrics = demo_report().candidates[0].windows["21"]
+    decaying_bars = []
+    stable_bars = []
+    for day in range(1, 22):
+        date = f"202607{day:02d}"
+        decaying_high = (
+            Decimal("150")
+            if day <= 7
+            else Decimal("125")
+            if day <= 14
+            else Decimal("108")
+        )
+        stable_high = Decimal("115")
+        decaying_bars.append(
+            ChartBar(
+                trading_date=date,
+                bucket="09",
+                open=Decimal("100"),
+                high=decaying_high,
+                low=Decimal("98"),
+                close=Decimal("102"),
+                volume=Decimal("1000"),
+            )
+        )
+        stable_bars.append(
+            ChartBar(
+                trading_date=date,
+                bucket="09",
+                open=Decimal("100"),
+                high=stable_high,
+                low=Decimal("98"),
+                close=Decimal("102"),
+                volume=Decimal("1000"),
+            )
+        )
+
+    decaying = metrics.model_copy(
+        update={"return_pct": Decimal("2"), "chart_bars": decaying_bars}
+    )
+    stable = metrics.model_copy(
+        update={"return_pct": Decimal("2"), "chart_bars": stable_bars}
+    )
+
+    assert _is_expired_spike_reversion(decaying)
+    assert not _is_expired_spike_reversion(stable)

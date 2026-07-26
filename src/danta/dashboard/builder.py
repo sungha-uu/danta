@@ -53,6 +53,10 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
                 ten_pct_evidence
                 and current_in_lower_zone
                 and metrics.target_price_10pct > candidate.current_price
+                and not any(
+                    "원시세 복귀형 급등 소멸" in risk
+                    for risk in metrics.risks
+                )
             )
             if metrics.rank is not None:
                 (eligible_ranks if qualifies else ineligible_ranks).append(metrics.rank)
