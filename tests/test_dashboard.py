@@ -167,8 +167,11 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "modal-price-tick" in html
     assert "modal-date-tick" in html
     assert "modal-current-line" in html
-    assert "현재가+10%" in html
-    assert "modal-current-label" not in html
+    assert "상단(현재가+10%)" in html
+    assert ">하단</text>" in html
+    assert ">현재가</text>" in html
+    assert "modal-current-label" in html
+    assert 'text-anchor="end"' in html
     assert "target15" not in html
     assert "현재가 ${won.format(" in html
     assert 'id="chartModalSummary"' in html
@@ -176,7 +179,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "<small>저 ${won.format(n(bar.low))} · 고 ${won.format(n(bar.high))}</small>" in html
     assert "분봉 준비 시 첫 60분봉 종가" in html
     assert (
-        ".modal-current-line { stroke: #111827; stroke-width: 1.2; "
+        ".modal-current-line { stroke: #111827; stroke-width: .8; "
         "stroke-dasharray: 6 4; }"
     ) in html
     assert "연구용 · 주문 불가" in html

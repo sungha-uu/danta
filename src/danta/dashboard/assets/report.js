@@ -281,8 +281,9 @@
       <line class="modal-target-line" x1="${padLeft}" y1="${targetY}" x2="${width - padRight}" y2="${targetY}"></line>
       <line class="modal-lower-line" x1="${padLeft}" y1="${lowerY}" x2="${width - padRight}" y2="${lowerY}"></line>
       <line class="modal-current-line" x1="${padLeft}" y1="${currentY}" x2="${width - padRight}" y2="${currentY}"></line>
-      <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.max(12, targetY - 4)}">현재가+10%</text>
-      <text class="modal-reference-label" x="${padLeft + 5}" y="${Math.min(plotBottom - 3, lowerY + 13)}">하단</text>
+      <text class="modal-reference-label modal-target-label" x="${width - padRight - 5}" y="${Math.min(plotBottom - 3, targetY + 13)}" text-anchor="end">상단(현재가+10%)</text>
+      <text class="modal-reference-label modal-lower-label" x="${width - padRight - 5}" y="${Math.min(plotBottom - 3, lowerY + 13)}" text-anchor="end">하단</text>
+      <text class="modal-reference-label modal-current-label" x="${width - padRight - 5}" y="${Math.max(padTop + 9, currentY - 4)}" text-anchor="end">현재가</text>
       <polyline class="modal-price-line" points="${points}"></polyline>
     </svg>`;
   }
