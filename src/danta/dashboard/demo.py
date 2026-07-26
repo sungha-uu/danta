@@ -180,6 +180,7 @@ def _window(
         lower_contact_count=contacts,
         target_reach_count=reaches,
         target_pending_count=pending,
+        target_expired_count=0,
         breakdown_risk_pct=min(Decimal(8 + rank * 2), Decimal("78")),
         quant_score=Decimal(96 - rank * 1.25),
         ai_score=Decimal(94 - rank * 1.1 if rank <= 10 else 60),

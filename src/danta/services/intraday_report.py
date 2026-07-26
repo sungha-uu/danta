@@ -741,6 +741,11 @@ def _ready_window_metrics(
         lower_contact_count=analysis.lower_contacts,
         target_reach_count=analysis.target_reaches,
         target_pending_count=analysis.target_pending,
+        target_expired_count=(
+            analysis.lower_contacts
+            - analysis.target_reaches
+            - analysis.target_pending
+        ),
         breakdown_risk_pct=risk.quantize(Decimal("0.01")),
         quant_score=score,
         ai_score=score,

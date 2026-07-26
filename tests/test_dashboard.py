@@ -38,7 +38,9 @@ def test_demo_report_has_thirty_ranked_and_graded_candidates_for_every_window() 
         assert all(len(item.chart_bars) == len(item.closes) for item in metrics)
         assert all(
             item.lower_contact_count
-            == item.target_reach_count + item.target_pending_count
+            == item.target_reach_count
+            + item.target_pending_count
+            + item.target_expired_count
             for item in metrics
         )
 
@@ -80,8 +82,9 @@ def test_warming_window_requires_incomplete_structure_days() -> None:
             "lower_trend",
             "target_price_10pct",
             "lower_contact_count",
-            "target_reach_count",
-            "target_pending_count",
+                "target_reach_count",
+                "target_pending_count",
+                "target_expired_count",
             "breakdown_risk_pct",
             "quant_score",
             "ai_score",

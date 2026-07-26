@@ -214,6 +214,7 @@ def _metrics(
         lower_contact_count=lower_contacts,
         target_reach_count=target_reaches,
         target_pending_count=target_pending,
+        target_expired_count=0,
         breakdown_risk_pct=_round(risk),
         quant_score=_round(quant_score),
         ai_score=_round(quant_score),

@@ -75,6 +75,7 @@ class WindowMetrics(BaseModel):
     lower_contact_count: int | None = Field(default=None, ge=0)
     target_reach_count: int | None = Field(default=None, ge=0)
     target_pending_count: int | None = Field(default=None, ge=0, le=1)
+    target_expired_count: int | None = Field(default=None, ge=0)
     breakdown_risk_pct: Decimal | None = Field(default=None, ge=0, le=100)
     quant_score: Decimal | None = Field(default=None, ge=0, le=100)
     ai_score: Decimal | None = Field(default=None, ge=0, le=100)
@@ -118,6 +119,7 @@ class WindowMetrics(BaseModel):
             self.lower_contact_count,
             self.target_reach_count,
             self.target_pending_count,
+            self.target_expired_count,
             self.breakdown_risk_pct,
             self.quant_score,
             self.ai_score,
@@ -137,10 +139,17 @@ class WindowMetrics(BaseModel):
                 self.lower_contact_count is None
                 or self.target_reach_count is None
                 or self.target_pending_count is None
+                or self.target_expired_count is None
                 or self.lower_contact_count
-                != self.target_reach_count + self.target_pending_count
+                != (
+                    self.target_reach_count
+                    + self.target_pending_count
+                    + self.target_expired_count
+                )
             ):
-                raise ValueError("lower contacts must equal reached plus pending episodes")
+                raise ValueError(
+                    "lower contacts must equal reached plus pending plus expired episodes"
+                )
             if len(self.closes) < 2:
                 raise ValueError("READY structure must include chart closes")
             if len(self.chart_bars) != len(self.closes):

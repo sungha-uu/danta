@@ -74,5 +74,7 @@ def test_target_reach_episodes_are_internally_consistent() -> None:
             metrics.box_low * Decimal("1.10")
         ).quantize(Decimal("0.01"))
         assert metrics.lower_contact_count == (
-            metrics.target_reach_count + metrics.target_pending_count
+            metrics.target_reach_count
+            + metrics.target_pending_count
+            + metrics.target_expired_count
         )
