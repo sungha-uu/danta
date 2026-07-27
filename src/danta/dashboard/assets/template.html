@@ -68,13 +68,13 @@
           <table class="report-table comprehensive">
             <thead>
               <tr>
-                <th class="sticky-select">선택</th><th class="sticky-rank">순위</th><th class="sticky-name">종목명</th>
+                <th class="sticky-select">선택</th><th class="sticky-rank rank-reset"><button type="button" data-rank-reset title="공식 순위 1위부터 복원">순위</button></th><th class="sticky-name">종목명</th>
                 <th id="reviewGradeHeader">AI 등급</th><th>현재가</th><th title="분봉 준비 시 첫 60분봉 종가, 준비 중에는 첫 거래일 종가 대비 현재가 변화율">기간수익률</th><th title="선택 기간 실제 최고가 대비 현재가의 등락률">기간고점 대비</th><th>가격 흐름</th>
                 <th title="선택 기간의 박스 하단 가격">기간 최저가</th><th title="기간 최저가에서 10% 상승한 목표 가격">+10% 목표가</th><th title="선택 기간의 박스 상단 가격">기간 최고가</th>
-                <th>현재 위치</th><th title="첫 거래일 저가 대비 마지막 거래일 저가의 방향">하단 방향</th>
-                <th title="1분봉 비중복 상승 구간의 평균 저점 대비 고점 상승률">반복 상승폭</th><th title="저점에서 6% 이상 상승한 비중복 구간 수">반복 횟수</th><th title="각 저점에서 최초 6% 상승까지 걸린 평균 거래시간">도달시간</th>
-                <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th>외국인+기관 수급강도(%)</th>
-                <th>정량점수</th><th id="reviewScoreHeader">AI점수</th><th id="reviewCommentHeader">AI 코멘트</th>
+                <th>현재 위치</th><th class="sortable-column" data-sort-key="lowerTrend" title="첫 거래일 저가 대비 마지막 거래일 저가의 변화율"><button type="button">상승세 <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="sortable-column" data-sort-key="averageUpSwing" title="1분봉 비중복 상승 구간의 평균 저점 대비 고점 상승률"><button type="button">반복 상승폭 <span class="sort-indicator" aria-hidden="true"></span></button></th><th class="sortable-column" data-sort-key="upSwingCount" title="저점에서 6% 이상 상승한 비중복 구간 수"><button type="button">반복 횟수 <span class="sort-indicator" aria-hidden="true"></span></button></th><th title="각 저점에서 최초 6% 상승까지 걸린 평균 거래시간">도달시간</th>
+                <th>개인(순매수억)</th><th>외국인(순매수억)</th><th>기관(순매수억)</th><th>금융투자(순매수억)</th><th>연기금(순매수억)</th><th class="sortable-column compact-header" data-sort-key="flowStrength"><button type="button">외국인+기관<br>수급강도(%) <span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="sortable-column" data-sort-key="quantScore"><button type="button">정량점수 <span class="sort-indicator" aria-hidden="true"></span></button></th><th id="reviewScoreHeader" class="sortable-column" data-sort-key="agentScore"><button type="button"><span class="sort-label">에이전트 점수</span> <span class="sort-indicator" aria-hidden="true"></span></button></th><th id="reviewCommentHeader">AI 코멘트</th>
                 <th>최신 뉴스</th><th>종목토론</th><th>차트보기</th>
               </tr>
             </thead>

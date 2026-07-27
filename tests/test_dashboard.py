@@ -185,7 +185,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
         "+10% 목표가",
         "기간 최고가",
         "현재 위치",
-        "하단 방향",
+        "상승세",
         "반복 상승폭",
         "반복 횟수",
         "도달시간",
@@ -199,7 +199,20 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "저점 반등<br>" not in html
     assert "도달일수<br>" not in html
     assert ">기간고점 대비<" in html
-    assert "하단 방향" in html
+    assert "하단 방향" not in header_html
+    assert "상승세" in header_html
+    assert header_html.count('data-sort-key="') == 6
+    for sort_key in (
+        "lowerTrend",
+        "averageUpSwing",
+        "upSwingCount",
+        "flowStrength",
+        "quantScore",
+        "agentScore",
+    ):
+        assert f'data-sort-key="{sort_key}"' in header_html
+    assert 'data-rank-reset' in header_html
+    assert "외국인+기관<br>수급강도(%)" in header_html
     assert "하단 진입권" in html
     assert "상단권" in html
     assert "왕복</th>" not in html
@@ -228,8 +241,11 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "target15" not in html
     assert "현재가 ${won.format(" in html
     assert 'id="chartModalSummary"' in html
-    assert "<small>량 ${won.format(n(bar.volume))} · 시 ${won.format(n(bar.open))}</small>" in html
-    assert "<small>저 ${won.format(n(bar.low))} · 고 ${won.format(n(bar.high))}</small>" in html
+    assert "<small>량 ${won.format(n(bar.volume))}" not in html
+    assert "<small>저 ${won.format(n(bar.low))}" not in html
+    assert "state.sortDirection === \"asc\"" in html
+    assert "return baseRank(a) - baseRank(b)" in html
+    assert 'state.sortKey = null' in html
     assert "분봉 준비 시 첫 60분봉 종가" in html
     assert (
         ".modal-current-line { stroke: #111827; stroke-width: .8; "
@@ -263,7 +279,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "기관(순매수억)" in html
     assert "금융투자(순매수억)" in html
     assert "연기금(순매수억)" in html
-    assert "외국인+기관 수급강도(%)" in html
+    assert "외국인+기관<br>수급강도(%)" in html
     assert 'id="flowOnly"' not in html
     assert "외국인+기관 순유입" not in html
     assert "DANTA ENTRY_MANDATE" in html

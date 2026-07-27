@@ -15,6 +15,8 @@
   const state = {
     window: $(".window-picker button.active")?.dataset.window || "14",
     query: "",
+    sortKey: null,
+    sortDirection: null,
   };
   const selectionKey = `danta-watch-draft:v3:${report.data_as_of}`;
   const selection = new Map();
@@ -35,9 +37,30 @@
   })[char]);
   const n = (value) => Number(value);
   const metric = (candidate) => candidate.windows[state.window];
-  const ranked = () => [...candidates].sort(
-    (a, b) => (metric(a).rank ?? 999) - (metric(b).rank ?? 999),
-  );
+  const baseRank = (candidate) => candidate.windows["14"]?.rank ?? metric(candidate).rank ?? 999;
+  const sortValue = (candidate) => {
+    const item = metric(candidate);
+    return ({
+      lowerTrend: item.lower_trend_pct,
+      averageUpSwing: item.average_up_swing_pct,
+      upSwingCount: item.up_swing_count,
+      flowStrength: item.flows?.strength_pct,
+      quantScore: item.quant_score,
+      agentScore: item.ai_score,
+    })[state.sortKey];
+  };
+  const ranked = () => [...candidates].sort((a, b) => {
+    if (!state.sortKey || !state.sortDirection) return baseRank(a) - baseRank(b);
+    const rawA = sortValue(a);
+    const rawB = sortValue(b);
+    const missingA = rawA == null || rawA === "" || !Number.isFinite(Number(rawA));
+    const missingB = rawB == null || rawB === "" || !Number.isFinite(Number(rawB));
+    if (missingA !== missingB) return missingA ? 1 : -1;
+    if (missingA && missingB) return baseRank(a) - baseRank(b);
+    const difference = Number(rawA) - Number(rawB);
+    if (difference !== 0) return state.sortDirection === "asc" ? difference : -difference;
+    return baseRank(a) - baseRank(b);
+  });
   const gradeLabel = (grade) => ({
     STRONG_RECOMMEND: "적극 추천", RECOMMEND: "추천",
     NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
@@ -313,7 +336,19 @@
       </tr>`;
     }).join("");
     bindSelectionInputs();
-    bindChartButtons();
+  }
+
+  function renderSortHeaders() {
+    $$("[data-sort-key]").forEach((header) => {
+      const active = header.dataset.sortKey === state.sortKey && state.sortDirection;
+      header.classList.toggle("sort-active", Boolean(active));
+      header.setAttribute(
+        "aria-sort",
+        !active ? "none" : state.sortDirection === "asc" ? "ascending" : "descending",
+      );
+      const indicator = header.querySelector(".sort-indicator");
+      if (indicator) indicator.textContent = !active ? "" : state.sortDirection === "asc" ? "↑" : "↓";
+    });
   }
 
   function expandedPlot(item, name, currentPrice) {
@@ -391,7 +426,7 @@
       item.average_time_to_6pct_hours == null
         ? "표본 없음"
         : `${one.format(n(item.average_time_to_6pct_hours))}시간`
-    } · 하단 ${item.lower_trend}`;
+    } · 상승세 ${item.lower_trend}`;
     $("#chartModalPlot").innerHTML = expandedPlot(item, candidate.name, candidate.current_price);
     const buckets = [...new Set(item.chart_bars.map((bar) => bar.bucket))].sort();
     const dates = [...new Set(item.chart_bars.map((bar) => bar.trading_date))].sort();
@@ -409,8 +444,6 @@
           if (!bar) return '<td class="empty-bar">-</td>';
           return `<td class="hour-bar-cell">
             <strong>${won.format(n(bar.close))}</strong>
-            <small>량 ${won.format(n(bar.volume))} · 시 ${won.format(n(bar.open))}</small>
-            <small>저 ${won.format(n(bar.low))} · 고 ${won.format(n(bar.high))}</small>
           </td>`;
         }).join("")}
       </tr>`).join("");
@@ -422,12 +455,6 @@
   function closeChartModal() {
     $("#chartModal").hidden = true;
     document.body.classList.remove("modal-open");
-  }
-
-  function bindChartButtons() {
-    $$(".spark-button").forEach((button) => button.addEventListener(
-      "click", () => openChartModal(button.dataset.chartCode),
-    ));
   }
 
   function bindSelectionInputs() {
@@ -582,7 +609,31 @@
   function renderAll() {
     renderRanking();
     renderSelectionTray();
+    renderSortHeaders();
   }
+
+  $$("[data-sort-key] button").forEach((button) => button.addEventListener("click", () => {
+    const key = button.closest("[data-sort-key]").dataset.sortKey;
+    if (state.sortKey !== key) {
+      state.sortKey = key;
+      state.sortDirection = "asc";
+    } else if (state.sortDirection === "asc") {
+      state.sortDirection = "desc";
+    } else {
+      state.sortKey = null;
+      state.sortDirection = null;
+    }
+    renderAll();
+  }));
+  $("[data-rank-reset]").addEventListener("click", () => {
+    state.sortKey = null;
+    state.sortDirection = null;
+    renderAll();
+  });
+  $("#rankingBody").addEventListener("click", (event) => {
+    const button = event.target.closest(".spark-button");
+    if (button) openChartModal(button.dataset.chartCode);
+  });
 
   $$(".window-picker button").forEach((button) => button.addEventListener("click", () => {
     state.window = button.dataset.window;
@@ -680,14 +731,14 @@
     }
     $("#recommendFilterLabel").textContent = "정량 추천 이상";
     $("#reviewGradeHeader").textContent = "정량 등급";
-    $("#reviewScoreHeader").textContent = "검토점수";
+    $("#reviewScoreHeader .sort-label").textContent = "검토점수";
     $("#reviewCommentHeader").textContent = "정량 코멘트";
   }
   if (agentContextReview) {
     $("#analysisDescription").textContent = "200개 정량 순위와 상위 50개의 수급·뉴스·공시·종목토론 AI 심층검토입니다.";
     $("#recommendFilterLabel").textContent = "에이전트 추천 이상";
     $("#reviewGradeHeader").textContent = "에이전트 등급";
-    $("#reviewScoreHeader").textContent = "에이전트 점수";
+    $("#reviewScoreHeader .sort-label").textContent = "에이전트 점수";
     $("#reviewCommentHeader").textContent = "에이전트 코멘트";
   }
   renderAll();
