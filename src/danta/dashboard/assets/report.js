@@ -735,7 +735,7 @@
     $("#reviewCommentHeader").textContent = "정량 코멘트";
   }
   if (agentContextReview) {
-    $("#analysisDescription").textContent = "200개 정량 순위와 상위 50개의 수급·뉴스·공시·종목토론 AI 심층검토입니다.";
+    $("#analysisDescription").textContent = "박스 하단 접촉 후 3거래일 이내 실제 +10% 도달 자격을 통과한 공식 후보 전체의 수급·뉴스·공시·종목토론 검토입니다.";
     $("#recommendFilterLabel").textContent = "에이전트 추천 이상";
     $("#reviewGradeHeader").textContent = "에이전트 등급";
     $("#reviewScoreHeader .sort-label").textContent = "에이전트 점수";

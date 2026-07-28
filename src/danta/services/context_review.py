@@ -472,7 +472,40 @@ def _grade(score: Decimal) -> str:
     return "STRONG_NOT_RECOMMEND"
 
 
+def _qualified_grade(
+    score: Decimal,
+    *,
+    candidate_price: Decimal,
+    metrics: WindowMetrics,
+    expired_spike_reversion: bool,
+) -> str:
+    current_10pct_threshold = (
+        Decimal("1") / Decimal("1.10") - Decimal("1")
+    ) * Decimal("100")
+    qualified = (
+        (metrics.target_reach_count or 0) >= 1
+        and metrics.position_pct is not None
+        and metrics.position_pct <= Decimal("35")
+        and metrics.current_vs_window_high_pct is not None
+        and metrics.current_vs_window_high_pct <= current_10pct_threshold
+        and metrics.target_price_10pct is not None
+        and metrics.target_price_10pct > candidate_price
+        and not expired_spike_reversion
+    )
+    if qualified:
+        return _grade(score)
+    return "NOT_RECOMMEND" if score >= Decimal("45") else "STRONG_NOT_RECOMMEND"
+
+
 EXPIRED_SPIKE_RISK = "21일 원시세 복귀형 급등 소멸"
+FINANCIAL_RISK_LABELS = {
+    "REQUIRED_ACCOUNTS_MISSING": "필수 재무계정 결측",
+    "NEGATIVE_EQUITY": "자본잠식 또는 음의 자본",
+    "OPERATING_LOSS": "최근 누적 영업손실",
+    "NET_LOSS": "최근 누적 순손실",
+    "HIGH_DEBT_RATIO": "부채비율 300% 이상",
+    "LOW_CURRENT_RATIO": "유동비율 70% 미만",
+}
 
 
 def _percentile(values: list[Decimal], ratio: Decimal) -> Decimal:
@@ -516,6 +549,33 @@ def _is_expired_spike_reversion(metrics: WindowMetrics) -> bool:
     )
 
 
+def _financial_context(candidate: object) -> tuple[Decimal, str, list[str]]:
+    snapshot = getattr(candidate, "fundamentals", None)
+    if snapshot is None:
+        return Decimal("0"), "재무 스냅샷 없음", ["재무 스냅샷 미수집"]
+    flags = list(snapshot.risk_flags)
+    penalty = Decimal("0")
+    if "NEGATIVE_EQUITY" in flags:
+        penalty -= Decimal("20")
+    if "OPERATING_LOSS" in flags:
+        penalty -= Decimal("8")
+    if "NET_LOSS" in flags:
+        penalty -= Decimal("4")
+    if "HIGH_DEBT_RATIO" in flags:
+        penalty -= Decimal("4")
+    if "LOW_CURRENT_RATIO" in flags:
+        penalty -= Decimal("3")
+    penalty = max(Decimal("-25"), penalty)
+    report_text = (
+        f"{snapshot.business_year}년 {snapshot.report_name} "
+        f"{snapshot.statement_type}"
+    )
+    if not flags:
+        return penalty, f"{report_text} 기준 치명 재무 플래그 없음", []
+    labels = [FINANCIAL_RISK_LABELS.get(flag, flag) for flag in flags]
+    return penalty, f"{report_text} · {', '.join(labels)}", labels
+
+
 def build_context_review(
     report: DashboardReport,
     snapshots: dict[str, ContextSnapshot],
@@ -526,9 +586,12 @@ def build_context_review(
     review_targets = sorted(
         report.candidates,
         key=lambda candidate: candidate.windows["14"].rank or 999,
-    )[:50]
+    )
     for candidate in review_targets:
         snapshot = snapshots[candidate.code]
+        financial_adjustment, financial_text, financial_risks = _financial_context(
+            candidate
+        )
         expired_spike_reversion = _is_expired_spike_reversion(
             candidate.windows["21"]
         )
@@ -564,7 +627,12 @@ def build_context_review(
                 if flow_strength < 0
                 else Decimal("0")
             )
-            score = metrics.quant_score + flow_adjustment + news_adjustment
+            score = (
+                metrics.quant_score
+                + flow_adjustment
+                + news_adjustment
+                + financial_adjustment
+            )
             score = max(Decimal("0"), min(Decimal("100"), score))
             flow_text = (
                 "외국인·기관 순유입"
@@ -597,23 +665,37 @@ def build_context_review(
                 else "최신 뉴스 수집 실패"
             )
             window_reviews[key] = AiWindowReview(
-                ai_grade=_grade(score),  # type: ignore[arg-type]
+                ai_grade=_qualified_grade(
+                    score,
+                    candidate_price=candidate.current_price,
+                    metrics=metrics,
+                    expired_spike_reversion=expired_spike_reversion,
+                ),  # type: ignore[arg-type]
                 ai_score=int(score.quantize(Decimal("1"))),
                 ai_comment=(
                     f"{metrics.days}일 기준 {gate_text}, {flow_text} 강도 "
                     f"{flow_strength.quantize(Decimal('0.1'))}%, {news_text}. "
+                    f"{financial_text}. "
                     f"{opportunity_text}"
                 ),
                 reasons=[
                     gate_text,
                     f"{flow_text} {flow_strength.quantize(Decimal('0.1'))}%",
                     news_text,
+                    financial_text,
                 ],
-                risks=[
-                    "토론은 비신뢰 참고 신호",
-                    "뉴스 제목 감성은 사건 사실·가격 반영 여부 추가 확인 필요",
-                    *([EXPIRED_SPIKE_RISK] if expired_spike_reversion else []),
-                ],
+                risks=(
+                    [
+                        "토론은 비신뢰 참고 신호",
+                        "뉴스 제목 감성은 사건 사실·가격 반영 여부 추가 확인 필요",
+                        *(
+                            [EXPIRED_SPIKE_RISK]
+                            if expired_spike_reversion
+                            else []
+                        ),
+                        *financial_risks,
+                    ][:5]
+                ),
             )
         reviews.append(
             AiCandidateReview(
@@ -636,8 +718,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v7-top50-repeat-rise-flow-news-dart",
-        prompt_version="repeat-rise-top50-flow-news-dart-v7-20260727",
+        model_id="agent-context-review-v8-official-all-flow-news-dart-fundamental",
+        prompt_version="official-all-flow-news-dart-fundamental-v8-20260728",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

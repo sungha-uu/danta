@@ -1441,17 +1441,33 @@ def build_intraday_report(
             f"{len(complete_symbols)}/{len(candidates)} complete. "
             f"missing: {', '.join(missing[:10])}"
         )
-    selected_symbols = [
+    ranked_symbols = [
         item.symbol
         for item in _score_all(
             [analyses_by_window[14][symbol] for symbol in complete_symbols],
             candidate_map,
         )
     ]
-    if len(selected_symbols) < 200:
+    if len(ranked_symbols) < 200:
         raise CandidateReportError(
-            f"only {len(selected_symbols)} symbols were available for "
-            "the 200-name public ranking"
+            f"only {len(ranked_symbols)} symbols were available for "
+            "the 200-name quantitative universe"
+        )
+    selected_symbols = [
+        symbol
+        for symbol in ranked_symbols
+        if (
+            analyses_by_window[14][symbol].position <= Decimal("35")
+            and analyses_by_window[14][symbol].target_reaches >= 1
+            and analyses_by_window[14][symbol].current_to_window_high
+            >= Decimal("10")
+            and analyses_by_window[14][symbol].target_price
+            > analyses_by_window[14][symbol].hourly_closes[-1]
+        )
+    ][:30]
+    if not selected_symbols:
+        raise CandidateReportError(
+            "no symbol passed the official lower-zone and actual +10% gate"
         )
     fixed_ranks = {
         symbol: rank for rank, symbol in enumerate(selected_symbols, start=1)
@@ -1515,7 +1531,7 @@ def build_intraday_report(
             "6% 이상 비중복 반복 상승 연구 기준선"
         ),
         calculation_version=(
-            "intraday-repeat-rise-v11-top200-fixed14-public-200-ai-review-50-"
+            "intraday-actual-10pct-gate-v12-top200-official30-all-reviewed-"
             "kospi-market-cap-top200-v1"
         ),
         strategy_status="RESEARCH_ONLY",

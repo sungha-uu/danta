@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -32,7 +33,12 @@ from danta.services.candidate_validation import (
     CandidateValidationError,
     validate_candidate_quotes,
 )
+from danta.services.close_prefetch import run_close_prefetch
 from danta.services.context_review import PublicContextCollector, build_context_review
+from danta.services.daily_operations import (
+    DailyOperationError,
+    run_scheduled_refresh,
+)
 from danta.services.daily_pipeline import run_daily_pipeline
 from danta.services.intraday_report import (
     MinuteBarStore,
@@ -206,7 +212,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     cycle = subparsers.add_parser(
         "daily-cycle",
-        help="run the complete local KOSPI 200, top-50 review, dashboard cycle",
+        help="run KOSPI 200, official max-30 review, and dashboard cycle",
     )
     cycle.add_argument("--data-root", type=Path, default=Path("data/intraday/1m"))
     cycle.add_argument(
@@ -226,6 +232,18 @@ def _parser() -> argparse.ArgumentParser:
         "--context-cache", type=Path, default=Path("data/public-context")
     )
     cycle.add_argument("--use-context-cache", action="store_true")
+    scheduled = subparsers.add_parser(
+        "scheduled-refresh",
+        help="run the idempotent 16:00 market-close refresh and Pages publish",
+    )
+    scheduled.add_argument("--force", action="store_true")
+    scheduled.add_argument("--no-publish", action="store_true")
+    scheduled.add_argument("--no-notify", action="store_true")
+    prefetch = subparsers.add_parser(
+        "close-prefetch",
+        help="prefetch the completed regular-session minute bars after 15:30",
+    )
+    prefetch.add_argument("--force", action="store_true")
     campaign = subparsers.add_parser(
         "paper-campaign",
         help="run the isolated one-share Samsung/SK hynix paper lifecycle campaign",
@@ -261,6 +279,50 @@ async def _doctor(live: bool, symbol: str) -> int:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "close-prefetch":
+        try:
+            prefetch_result = asyncio.run(
+                run_close_prefetch(
+                    load_settings(),
+                    force=args.force,
+                    progress=lambda message: print(message, flush=True),
+                )
+            )
+        except (
+            ValueError,
+            RuntimeError,
+            KrxDataError,
+            KisApiError,
+            CandidateReportError,
+        ) as exc:
+            print(f"close prefetch failed: {exc}", file=sys.stderr)
+            raise SystemExit(15) from None
+        print(json.dumps(asdict(prefetch_result), ensure_ascii=False, indent=2))
+        return
+    if args.command == "scheduled-refresh":
+        try:
+            scheduled_result = asyncio.run(
+                run_scheduled_refresh(
+                    load_settings(),
+                    force=args.force,
+                    publish=not args.no_publish,
+                    notify=not args.no_notify,
+                    progress=lambda message: print(message, flush=True),
+                )
+            )
+        except (
+            DailyOperationError,
+            ValueError,
+            RuntimeError,
+            KrxDataError,
+            KisApiError,
+            CandidateReportError,
+            NotificationError,
+        ) as exc:
+            print(f"scheduled refresh failed: {exc}", file=sys.stderr)
+            raise SystemExit(14) from None
+        print(json.dumps(asdict(scheduled_result), ensure_ascii=False, indent=2))
+        return
     if args.command == "assure":
         try:
             assurance_report = build_assurance_report(
@@ -276,7 +338,7 @@ def main() -> None:
         raise SystemExit(0 if assurance_report.ready_for_new_paper_entries else 12)
     if args.command == "daily-cycle":
         try:
-            result = asyncio.run(
+            daily_result = asyncio.run(
                 run_daily_pipeline(
                     load_settings(),
                     data_root=args.data_root,
@@ -298,8 +360,9 @@ def main() -> None:
             print(f"daily cycle failed: {exc}", file=sys.stderr)
             raise SystemExit(13) from None
         print(
-            f"daily cycle completed: {result.candidate_count} candidates, "
-            f"{result.deep_review_count} context reviews, {result.dashboard_path}"
+            f"daily cycle completed: {daily_result.candidate_count} candidates, "
+            f"{daily_result.deep_review_count} context reviews, "
+            f"{daily_result.dashboard_path}"
         )
         return
     if args.command == "paper-campaign":

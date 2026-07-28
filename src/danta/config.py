@@ -39,6 +39,15 @@ class AppSettings(BaseModel):
     maximum_managed_symbols: int = Field(default=3, ge=1, le=20)
     order_poll_interval_seconds: Decimal = Field(default=Decimal("2.0"), ge=Decimal("1"))
     market_data_stale_seconds: int = Field(default=10, ge=2, le=60)
+    fundamental_snapshot_path: Path = Path("data/fundamentals/latest.json")
+    dart_corp_code_cache_path: Path = Path(
+        "data/public-context/dart-corp-codes.json"
+    )
+    daily_run_root: Path = Path("data/daily-runs")
+    dashboard_publish_repo: Path = Path("../danta_report")
+    dashboard_public_url: str = "https://sungha-uu.github.io/danta_report/"
+    daily_publish_enabled: bool = True
+    daily_notify_enabled: bool = True
 
     @model_validator(mode="after")
     def enforce_immutable_safety_policy(self) -> AppSettings:

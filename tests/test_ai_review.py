@@ -41,7 +41,7 @@ def test_ai_review_requires_complete_candidate_coverage() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="fixed 14-day top 50"):
+    with pytest.raises(ValueError, match="every official candidate"):
         apply_ai_review(report, review)
 
 

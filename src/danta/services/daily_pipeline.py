@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import httpx
+
+from danta.adapters.dart.financials import OpenDartFinancialClient
 from danta.adapters.kis.client import KisClient
 from danta.adapters.krx.client import PykrxMarketDataClient
 from danta.config import (
@@ -15,8 +18,15 @@ from danta.config import (
     load_krx_environment,
 )
 from danta.dashboard.builder import build_dashboard
+from danta.domain.fundamentals import FundamentalSnapshotBatch
 from danta.services.ai_review import apply_ai_review
 from danta.services.context_review import PublicContextCollector, build_context_review
+from danta.services.fundamental_snapshot import (
+    attach_fundamentals,
+    load_fundamental_batch,
+    refresh_fundamental_snapshots,
+    report_candidates_for,
+)
 from danta.services.intraday_report import (
     MinuteBarStore,
     backfill_minute_bars,
@@ -32,6 +42,8 @@ class DailyPipelineResult:
     candidate_count: int
     deep_review_count: int
     data_as_of: datetime
+    fundamental_snapshot_count: int
+    fundamental_unavailable_count: int
 
 
 async def run_daily_pipeline(
@@ -45,7 +57,7 @@ async def run_daily_pipeline(
     refresh_context: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> DailyPipelineResult:
-    """Run the local, resumable KOSPI 200 -> quant 200 -> context top 50 cycle."""
+    """Run KOSPI 200 -> official +10% gate (max 30) -> full context review."""
     emit = progress if progress is not None else lambda _message: None
     load_krx_environment(settings)
     emit("collecting KRX 21-trading-day dataset")
@@ -53,6 +65,36 @@ async def run_daily_pipeline(
     universe = market_cap_top_universe(dataset, limit=200)
     if len(universe) != 200:
         raise RuntimeError(f"expected 200 market-cap symbols, got {len(universe)}")
+    emit("refreshing independent Open DART financial snapshots")
+    try:
+        fundamentals = await refresh_fundamental_snapshots(
+            OpenDartFinancialClient(
+                load_dart_api_key(settings),
+                corp_code_cache_path=settings.dart_corp_code_cache_path,
+            ),
+            [(item.symbol, item.name) for item in universe],
+            output_path=settings.fundamental_snapshot_path,
+            as_of=dataset.trading_dates[-1],
+            progress=emit,
+        )
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError) as exc:
+        emit(f"financial snapshot degraded: {type(exc).__name__}: {exc}")
+        existing = load_fundamental_batch(settings.fundamental_snapshot_path)
+        if existing is not None:
+            fundamentals = existing
+        else:
+            target_year, target_code = report_candidates_for(
+                dataset.trading_dates[-1]
+            )[0]
+            fundamentals = FundamentalSnapshotBatch(
+                generated_at=datetime.now().astimezone(),
+                target_business_year=target_year,
+                target_report_code=target_code,  # type: ignore[arg-type]
+                requested_symbols=tuple(item.symbol for item in universe),
+                snapshots=(),
+                unavailable_symbols=tuple(item.symbol for item in universe),
+                provider_errors=(f"{type(exc).__name__}: {exc}",),
+            )
     credentials = load_kis_credentials(settings)
     store = MinuteBarStore(data_root)
     async with KisClient(
@@ -67,19 +109,22 @@ async def run_daily_pipeline(
             window_days=21,
             progress=emit,
         )
-    quantitative = build_intraday_report(dataset, universe, store)
-    if len(quantitative.candidates) != 200:
-        raise RuntimeError("quantitative report did not preserve the 200-symbol universe")
-    top_50 = sorted(
+    quantitative = attach_fundamentals(
+        build_intraday_report(dataset, universe, store),
+        fundamentals,
+    )
+    if len(quantitative.candidates) > 30:
+        raise RuntimeError("official candidate report exceeded 30 symbols")
+    official_candidates = sorted(
         quantitative.candidates,
         key=lambda candidate: candidate.windows["14"].rank or 999,
-    )[:50]
-    emit("collecting news, DART disclosures, and discussions for fixed top 50")
+    )
+    emit("collecting news, DART disclosures, and discussions for all candidates")
     snapshots = await PublicContextCollector(
         context_cache_root,
         dart_api_key=load_dart_api_key(settings),
     ).collect(
-        [(candidate.code, candidate.name) for candidate in top_50],
+        [(candidate.code, candidate.name) for candidate in official_candidates],
         refresh=refresh_context,
     )
     review = build_context_review(
@@ -97,6 +142,8 @@ async def run_daily_pipeline(
         candidate_count=len(reviewed.candidates),
         deep_review_count=len(review.candidates),
         data_as_of=reviewed.data_as_of,
+        fundamental_snapshot_count=len(fundamentals.snapshots),
+        fundamental_unavailable_count=len(fundamentals.unavailable_symbols),
     )
 
 

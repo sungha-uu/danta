@@ -62,8 +62,9 @@ flowchart LR
 | --- | --- |
 | `provider-doctor` | KIS 실전·모의 인증, 계좌, REST, WebSocket, TR·호출한도 진단 |
 | 시장데이터 수집기 | 종목·수급·공시·일봉 보조자료와 정규장 1분봉 원본의 증분 수집·품질 검사 |
+| 재무 스냅샷 수집기 | Open DART 다중회사 주요계정으로 최소 재무항목을 독립 수집하고 파생 비율·위험 플래그·접수번호를 버전 저장 |
 | 봉 집계기 | 1분봉 원본에서 재현 가능한 5·10·30·60분봉 OHLCV 생성 |
-| 후보·AI 엔진 | 공개 검토군 50개 전체의 기간별 AI 등급·설명·위험·버전과 자격 게이트 통과·미달 사유 저장 |
+| 후보·AI 엔진 | 시총 상위 200개 내부 계산, +10% 자격 게이트 통과 공식 후보 최대 30개와 전 후보 AI 등급·설명·위험·버전 저장 |
 | 운영 오케스트레이터 | [`TRADING_ORCHESTRATOR.md`](TRADING_ORCHESTRATOR.md)에 따라 종목별 actor 생성·복구·중지, 계좌 자금 예약, 주문 우선순위와 진입/보호 작업 분리 |
 | 실시간 모니터 | 현재 승인된 최대 3개, 향후 검증된 `N`개 종목의 체결·호가·1분/5분 상태를 비동기 actor로 계산 |
 | 승인 게이트웨이 | 사용자 진입 위임 검증과 일회용·만료형 주문 범위 |
@@ -73,6 +74,8 @@ flowchart LR
 | 이벤트 버스·Outbox | 워커·AI·대시보드 간 내구성 있는 이벤트 전달과 재처리 |
 | 알림·대시보드 | SMTP 큐와 정제된 정적 페이지 |
 | 정적 리포트 빌더 | +10% 자격 게이트를 통과한 공식 후보 최대 30개 공개 DTO 검증, 7·14·21일 지표와 자체 차트 생성 |
+
+재무 스냅샷은 `financial_statement_analysis-main`의 Excel이나 내부 모듈을 읽지 않는다. `domain/fundamentals.py`가 공급자 비의존 계약과 파생 산식을 소유하고, `adapters/dart/financials.py`가 Open DART 응답을 내부 계정으로 변환하며, `services/fundamental_snapshot.py`가 시총 상위 200개 갱신·캐시·보고서 결합을 담당한다. 재무 결측은 가격·분봉 파이프라인의 폴백 값으로 채우지 않는다.
 
 권장 스택은 Python 3.11+, FastAPI, Pydantic, SQLAlchemy 2, Alembic, PostgreSQL, asyncio/httpx/WebSocket, pytest/hypothesis, 구조화 로그다.
 

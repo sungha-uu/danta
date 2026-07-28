@@ -13,5 +13,12 @@
   "stop_loss_pct": "7.0",
   "stop_sell_requires_confirmation": false,
   "paper_order_execution_enabled": false,
-  "real_order_execution_enabled": false
+  "real_order_execution_enabled": false,
+  "fundamental_snapshot_path": "data/fundamentals/latest.json",
+  "dart_corp_code_cache_path": "data/public-context/dart-corp-codes.json",
+  "daily_run_root": "data/daily-runs",
+  "dashboard_publish_repo": "../danta_report",
+  "dashboard_public_url": "https://sungha-uu.github.io/danta_report/",
+  "daily_publish_enabled": true,
+  "daily_notify_enabled": true
 }

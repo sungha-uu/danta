@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
+from danta.domain.fundamentals import FundamentalSnapshot
+
 WindowKey = Literal["7", "14", "21"]
 CANDIDATE_COUNT = 200
 EXTENDED_WATCHLIST_COUNT = 0
@@ -233,6 +235,7 @@ class CandidateView(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     sector: str = Field(min_length=1, max_length=80)
     current_price: Decimal = Field(gt=0)
+    fundamentals: FundamentalSnapshot | None = None
     windows: dict[WindowKey, WindowMetrics]
     news: list[NewsItem] = Field(max_length=5)
     discussion_summary: str = Field(max_length=500)
@@ -279,6 +282,11 @@ class DashboardReport(BaseModel):
 
     @model_validator(mode="after")
     def validate_candidate_set(self) -> DashboardReport:
+        if (
+            self.calculation_version.startswith("intraday-actual-10pct-gate-v12")
+            and len(self.candidates) > 30
+        ):
+            raise ValueError("actual +10% gate v12 reports allow at most 30 candidates")
         if (
             self.calculation_version.startswith("intraday-repeat-rise-v11")
             and len(self.candidates) != CANDIDATE_COUNT

@@ -74,7 +74,7 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
         and candidate.windows["14"].rank <= 50
     }
     if set(review_map) != review_target_codes:
-        raise ValueError("AI review must cover the fixed 14-day top 50 exactly once")
+        raise ValueError("AI review must cover every official candidate exactly once")
 
     candidates = []
     for candidate in report.candidates:

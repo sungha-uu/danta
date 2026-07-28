@@ -58,7 +58,7 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
                     for risk in metrics.risks
                 )
             )
-            if metrics.rank is not None:
+            if window == "14" and metrics.rank is not None:
                 (eligible_ranks if qualifies else ineligible_ranks).append(metrics.rank)
             if metrics.ai_grade in RECOMMENDED_GRADES and not qualifies:
                 errors.append(
