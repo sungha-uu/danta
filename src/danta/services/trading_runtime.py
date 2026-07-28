@@ -76,6 +76,9 @@ class TradingRuntimeCore:
         self.submitted: dict[str, SubmittedOrder] = {}
         self.order_number_to_key: dict[str, str] = {}
         self.cancel_requested: set[str] = set()
+        self.cancel_completed: set[str] = set()
+        self.pending_buy_cancel_reason: dict[str, str] = {}
+        self.entry_attempts: dict[str, int] = {}
         self.box_valid: dict[str, bool] = {}
         self.market_risk = MarketRisk.NORMAL
         self.market_stress_score = Decimal("0")
@@ -96,6 +99,7 @@ class TradingRuntimeCore:
             for selection in mandate.selections
         }
         self.box_valid = {selection.symbol: True for selection in mandate.selections}
+        self.entry_attempts = {selection.symbol: 0 for selection in mandate.selections}
         return plans
 
     def set_market_guard(
@@ -123,6 +127,7 @@ class TradingRuntimeCore:
         if symbol not in self.box_valid:
             raise ValueError("symbol is outside the active mandate")
         self.box_valid[symbol] = False
+        self.pending_buy_cancel_reason[symbol] = "BOX_INVALIDATED"
 
     def cancellation_required(self, status: KisOrderStatus) -> bool:
         key = self.order_number_to_key.get(status.broker_order_no)
@@ -131,12 +136,49 @@ class TradingRuntimeCore:
         intent = self.submitted[key].intent
         return (
             intent.side is IntentSide.BUY
-            and not self.box_valid.get(intent.symbol, False)
+            and (
+                not self.box_valid.get(intent.symbol, False)
+                or intent.symbol in self.pending_buy_cancel_reason
+            )
             and status.remaining_quantity > 0
         )
 
     def record_cancellation_requested(self, broker_order_no: str) -> None:
         self.cancel_requested.add(broker_order_no)
+
+    async def finalize_buy_cancellation(self, status: KisOrderStatus) -> bool:
+        if (
+            status.broker_order_no not in self.cancel_requested
+            or status.broker_order_no in self.cancel_completed
+            or status.remaining_quantity > 0
+            or status.filled_quantity >= status.ordered_quantity
+        ):
+            return False
+        key = self.order_number_to_key.get(status.broker_order_no)
+        if key is None:
+            return False
+        submitted = self.submitted[key]
+        intent = submitted.intent
+        if intent.side is not IntentSide.BUY:
+            return False
+        await self.orchestrator.capital_allocator.release(
+            f"{intent.idempotency_key}:CAPITAL"
+        )
+        await self.orchestrator.scheduler.forget(intent.idempotency_key)
+        session = self.orchestrator.sessions[intent.symbol]
+        session.active_order_key = None
+        self.cancel_completed.add(status.broker_order_no)
+        self.pending_buy_cancel_reason.pop(intent.symbol, None)
+        if self.positions.get(intent.symbol) is not None:
+            session.state = SymbolState.POSITION_OPEN
+        elif not self.box_valid.get(intent.symbol, False):
+            session.state = SymbolState.INVALIDATED
+        else:
+            self.entry_attempts[intent.symbol] = (
+                self.entry_attempts.get(intent.symbol, 0) + 1
+            )
+            session.state = SymbolState.WATCHING_ENTRY
+        return True
 
     async def process_event(
         self, event: RealtimeEvent, *, now: datetime | None = None
@@ -156,7 +198,11 @@ class TradingRuntimeCore:
             data_fresh=True,
         )
         session = self.orchestrator.sessions[event.symbol]
-        if session.state is SymbolState.WATCHING_ENTRY:
+        if session.state in {
+            SymbolState.WATCHING_ENTRY,
+            SymbolState.BUY_PENDING,
+            SymbolState.PARTIALLY_FILLED,
+        }:
             mandate = self._require_mandate()
             entry_decision = evaluate_entry(
                 snapshot,
@@ -167,11 +213,22 @@ class TradingRuntimeCore:
                     max_age_seconds=self.entry_policy.max_snapshot_age_seconds,
                 ),
             )
-            return await self.orchestrator.handle_entry_decision(
-                mandate_id=mandate.command_id,
-                decision=entry_decision,
-                created_at=observed_now,
-            )
+            if session.state is SymbolState.WATCHING_ENTRY:
+                return await self.orchestrator.handle_entry_decision(
+                    mandate_id=mandate.command_id,
+                    decision=entry_decision,
+                    created_at=observed_now,
+                    attempt=self.entry_attempts.get(event.symbol, 0),
+                )
+            if entry_decision.action.value != "SUBMIT_LIMIT_BUY":
+                reason = (
+                    entry_decision.reason_codes[0]
+                    if entry_decision.reason_codes
+                    else "ENTRY_CONDITION_DETERIORATED"
+                )
+                self.pending_buy_cancel_reason[event.symbol] = reason
+                if entry_decision.action.value == "INVALIDATE_MANDATE":
+                    self.box_valid[event.symbol] = False
         position = self.positions.get(event.symbol)
         if position is None or position.quantity <= 0:
             return None

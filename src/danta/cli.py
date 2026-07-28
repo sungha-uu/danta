@@ -231,7 +231,6 @@ def _parser() -> argparse.ArgumentParser:
         help="run the isolated one-share Samsung/SK hynix paper lifecycle campaign",
     )
     campaign.add_argument("--execute", action="store_true")
-    campaign.add_argument("--fill-timeout-seconds", type=int, default=90)
     campaign.add_argument("--monitor-seconds", type=int, default=30)
     campaign.add_argument(
         "--output",
@@ -314,7 +313,6 @@ def main() -> None:
                     Path("config/trading_policies.paper.json")
                 ),
                 output=args.output,
-                fill_timeout_seconds=args.fill_timeout_seconds,
                 monitor_seconds=args.monitor_seconds,
             )
             results = asyncio.run(

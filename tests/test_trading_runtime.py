@@ -5,8 +5,9 @@ from danta.adapters.kis.client import KisOrderStatus
 from danta.adapters.kis.realtime import OrderBookTick, TradeTick
 from danta.domain.entry import EntryPolicy
 from danta.domain.mandate import EntryMandate
+from danta.domain.market import MarketRisk
 from danta.domain.risk import ExitPolicy
-from danta.domain.trading_session import IntentSide
+from danta.domain.trading_session import IntentSide, SymbolState
 from danta.services.capital_allocator import CapitalAllocator
 from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.trading_orchestrator import TradingOrchestrator
@@ -208,6 +209,138 @@ async def test_invalidated_box_requests_buy_remainder_cancel() -> None:
     assert core.cancellation_required(status)
     core.record_cancellation_requested("200")
     assert not core.cancellation_required(status)
+
+
+async def test_deteriorated_pending_buy_cancels_and_rearms_at_lower_price() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1000000)
+    now = datetime.now(UTC)
+    first = await core.process_event(trade(99000, now), now=now)
+    assert first is not None
+    assert first.idempotency_key.endswith(":A0")
+    core.record_submission(
+        first,
+        type(
+            "Execution",
+            (),
+            {
+                "idempotency_key": first.idempotency_key,
+                "broker_order_no": "300",
+                "status": "SUBMITTED",
+            },
+        )(),
+    )
+
+    core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("0.9"))
+    assert await core.process_event(trade(98000, now), now=now) is None
+    open_status = KisOrderStatus(
+        broker_order_no="300",
+        original_order_no="",
+        symbol="005930",
+        side="BUY",
+        ordered_quantity=10,
+        filled_quantity=0,
+        remaining_quantity=10,
+        order_price=99000,
+        average_fill_price=Decimal("0"),
+        order_time="090001",
+        branch_no="1",
+    )
+    assert core.cancellation_required(open_status)
+    core.record_cancellation_requested("300")
+    cancelled_status = KisOrderStatus(
+        broker_order_no="300",
+        original_order_no="",
+        symbol="005930",
+        side="BUY",
+        ordered_quantity=10,
+        filled_quantity=0,
+        remaining_quantity=0,
+        order_price=99000,
+        average_fill_price=Decimal("0"),
+        order_time="090001",
+        branch_no="1",
+    )
+    assert await core.finalize_buy_cancellation(cancelled_status)
+    assert orchestrator.sessions["005930"].state is SymbolState.WATCHING_ENTRY
+
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
+    second = await core.process_event(trade(97000, now), now=now)
+    assert second is not None
+    assert second.limit_price == 97000
+    assert second.idempotency_key.endswith(":A1")
+    assert second.idempotency_key != first.idempotency_key
+
+
+async def test_partial_fill_cancel_keeps_position_and_does_not_rearm() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1000000)
+    now = datetime.now(UTC)
+    buy = await core.process_event(trade(99000, now), now=now)
+    assert buy is not None
+    core.record_submission(
+        buy,
+        type(
+            "Execution",
+            (),
+            {
+                "idempotency_key": buy.idempotency_key,
+                "broker_order_no": "400",
+                "status": "SUBMITTED",
+            },
+        )(),
+    )
+    partial = KisOrderStatus(
+        broker_order_no="400",
+        original_order_no="",
+        symbol="005930",
+        side="BUY",
+        ordered_quantity=10,
+        filled_quantity=2,
+        remaining_quantity=8,
+        order_price=99000,
+        average_fill_price=Decimal("99000"),
+        order_time="090001",
+        branch_no="1",
+    )
+    assert core.apply_order_status(partial, observed_at=now) == 2
+    core.invalidate_box("005930")
+    assert core.cancellation_required(partial)
+    core.record_cancellation_requested("400")
+    cancelled = KisOrderStatus(
+        broker_order_no="400",
+        original_order_no="",
+        symbol="005930",
+        side="BUY",
+        ordered_quantity=10,
+        filled_quantity=2,
+        remaining_quantity=0,
+        order_price=99000,
+        average_fill_price=Decimal("99000"),
+        order_time="090001",
+        branch_no="1",
+    )
+    assert await core.finalize_buy_cancellation(cancelled)
+    assert core.positions["005930"].quantity == 2
+    assert orchestrator.sessions["005930"].state is SymbolState.POSITION_OPEN
 
 
 async def test_rest_watchdog_hard_stops_without_realtime_tick() -> None:

@@ -257,18 +257,32 @@ class PaperTradingApplication:
                 delta = core.apply_order_status(
                     status, observed_at=datetime.now(UTC)
                 )
+                if submitted.intent.side.value == "BUY":
+                    if delta > 0:
+                        reservation_id = f"{submitted.intent.idempotency_key}:CAPITAL"
+                        await core.orchestrator.capital_allocator.consume_partial(
+                            reservation_id,
+                            amount=submitted.last_fill_value,
+                        )
+                        if status.remaining_quantity == 0:
+                            await core.orchestrator.capital_allocator.release(
+                                reservation_id
+                            )
+                    cancellation_finalized = await core.finalize_buy_cancellation(
+                        status
+                    )
+                    if cancellation_finalized:
+                        await repository.audit(
+                            "BUY_REMAINDER_CANCEL_CONFIRMED",
+                            correlation_id=self.mandate.command_id,
+                            payload={
+                                "symbol": status.symbol,
+                                "original_order_no": status.broker_order_no,
+                                "filled_quantity": status.filled_quantity,
+                            },
+                        )
                 if delta <= 0:
                     continue
-                if submitted.intent.side.value == "BUY":
-                    reservation_id = f"{submitted.intent.idempotency_key}:CAPITAL"
-                    await core.orchestrator.capital_allocator.consume_partial(
-                        reservation_id,
-                        amount=submitted.last_fill_value,
-                    )
-                    if status.remaining_quantity == 0:
-                        await core.orchestrator.capital_allocator.release(
-                            reservation_id
-                        )
                 position = core.positions.get(status.symbol)
                 if position is None:
                     await repository.close_position(

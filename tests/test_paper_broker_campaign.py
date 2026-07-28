@@ -20,6 +20,7 @@ class FakeCampaignBroker:
         self.price = price
         self.orders: list[dict[str, Any]] = []
         self.cancellations: list[dict[str, Any]] = []
+        self.status_batches: list[list[KisOrderStatus]] = []
 
     async def current_price(self, symbol: str) -> Quote:
         return Quote(symbol=symbol, price=self.price, change_rate=None, raw_timestamp=None)
@@ -39,6 +40,9 @@ class FakeCampaignBroker:
             order_time="120100",
             branch_no="00000",
         )
+
+    async def daily_order_statuses(self, **_: Any) -> list[KisOrderStatus]:
+        return self.status_batches.pop(0)
 
 
 def _campaign(tmp_path: Path) -> PaperBrokerCampaign:
@@ -102,7 +106,7 @@ async def test_campaign_step_round_trips_one_share_and_normalizes_tick(
         remaining=0,
         price=221_500,
     )
-    campaign._wait_for_terminal_or_timeout = AsyncMock(return_value=buy)  # type: ignore[method-assign]
+    campaign._wait_for_terminal = AsyncMock(return_value=buy)  # type: ignore[method-assign]
     campaign._monitor_position = AsyncMock(  # type: ignore[method-assign]
         return_value=("CAMPAIGN_FORCED_EXIT", 17)
     )
@@ -136,7 +140,37 @@ async def test_campaign_step_round_trips_one_share_and_normalizes_tick(
 
 
 @pytest.mark.asyncio
-async def test_campaign_step_cancels_unfilled_limit_order(tmp_path: Path) -> None:
+async def test_campaign_does_not_cancel_order_on_elapsed_time(tmp_path: Path) -> None:
+    campaign = _campaign(tmp_path)
+    broker = FakeCampaignBroker()
+    open_order = _status(
+        order_no="order-1",
+        side="BUY",
+        filled=0,
+        remaining=0,
+        price=220_000,
+    )
+    campaign._wait_for_terminal = AsyncMock(  # type: ignore[method-assign]
+        return_value=open_order
+    )
+
+    result = await campaign._run_step(  # type: ignore[arg-type]
+        broker,
+        symbol="005930",
+        discount=Decimal("0.5"),
+        trading_date="20260728",
+    )
+
+    assert result.status == "NOT_FILLED_CANCELLED_OR_EXPIRED"
+    assert result.target_price == 220_000
+    assert broker.cancellations == []
+
+
+@pytest.mark.asyncio
+async def test_campaign_waits_for_broker_terminal_state_without_elapsed_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     campaign = _campaign(tmp_path)
     broker = FakeCampaignBroker()
     open_order = _status(
@@ -146,27 +180,26 @@ async def test_campaign_step_cancels_unfilled_limit_order(tmp_path: Path) -> Non
         remaining=1,
         price=220_000,
     )
-    campaign._wait_for_terminal_or_timeout = AsyncMock(  # type: ignore[method-assign]
-        return_value=open_order
+    filled_order = _status(
+        order_no="order-1",
+        side="BUY",
+        filled=1,
+        remaining=0,
+        price=220_000,
     )
-    campaign._wait_until_no_open_order = AsyncMock()  # type: ignore[method-assign]
+    broker.status_batches = [[open_order], [open_order], [filled_order]]
+    sleep = AsyncMock()
+    monkeypatch.setattr("danta.services.paper_broker_campaign.asyncio.sleep", sleep)
 
-    result = await campaign._run_step(  # type: ignore[arg-type]
+    result = await campaign._wait_for_terminal(  # type: ignore[arg-type]
         broker,
-        symbol="005930",
-        discount=Decimal("0.5"),
         trading_date="20260728",
+        order_no="order-1",
+        symbol="005930",
     )
 
-    assert result.status == "NOT_FILLED_CANCELLED"
-    assert result.target_price == 220_000
-    assert broker.cancellations == [
-        {
-            "broker_order_no": "order-1",
-            "branch_no": "00000",
-            "quantity": 1,
-        }
-    ]
+    assert result.filled_quantity == 1
+    assert sleep.await_count == 2
 
 
 def test_campaign_rejects_production_environment(tmp_path: Path) -> None:

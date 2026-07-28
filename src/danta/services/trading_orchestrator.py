@@ -84,7 +84,10 @@ class TradingOrchestrator:
         mandate_id: str,
         decision: EntryDecision,
         created_at: datetime,
+        attempt: int = 0,
     ) -> OrderIntent | None:
+        if attempt < 0:
+            raise ValueError("entry attempt must not be negative")
         if self.state is not OrchestratorState.RUNNING:
             return None
         key = (mandate_id, decision.symbol)
@@ -101,7 +104,8 @@ class TradingOrchestrator:
             return None
         if decision.limit_price is None or decision.limit_price > plan.target_price:
             raise ValueError("entry decision violates maximum buy price")
-        reservation_id = f"{plan.idempotency_key}:CAPITAL"
+        attempt_key = f"{plan.idempotency_key}:A{attempt}"
+        reservation_id = f"{attempt_key}:CAPITAL"
         amount = plan.quantity * decision.limit_price
         await self.capital_allocator.reserve(
             mandate_id=mandate_id,
@@ -110,7 +114,7 @@ class TradingOrchestrator:
             reservation_id=reservation_id,
         )
         intent = OrderIntent(
-            idempotency_key=plan.idempotency_key,
+            idempotency_key=attempt_key,
             symbol=plan.symbol,
             generation=session.generation,
             side=IntentSide.BUY,

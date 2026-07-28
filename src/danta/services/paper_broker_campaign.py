@@ -44,7 +44,6 @@ class PaperBrokerCampaign:
         credentials: KisCredentials,
         policies: TradingPolicyRegistry,
         output: Path,
-        fill_timeout_seconds: int = 90,
         monitor_seconds: int = 30,
     ) -> None:
         if settings.environment is not TradingEnvironment.PAPER:
@@ -53,13 +52,12 @@ class PaperBrokerCampaign:
             raise PermissionError("campaign credentials must be paper")
         if not settings.paper_order_execution_enabled:
             raise PermissionError("paper order execution gate is closed")
-        if fill_timeout_seconds < 10 or monitor_seconds < 5:
-            raise ValueError("campaign timeouts are too short")
+        if monitor_seconds < 5:
+            raise ValueError("campaign monitoring duration is too short")
         self.settings = settings
         self.credentials = credentials
         self.policies = policies
         self.output = output
-        self.fill_timeout_seconds = fill_timeout_seconds
         self.monitor_seconds = monitor_seconds
 
     async def run(
@@ -117,39 +115,19 @@ class PaperBrokerCampaign:
             order_type="LIMIT",
             limit_price=target,
         )
-        status = await self._wait_for_terminal_or_timeout(
+        status = await self._wait_for_terminal(
             broker,
             trading_date=trading_date,
             order_no=receipt.broker_order_no,
             symbol=symbol,
         )
-        if status is None or status.filled_quantity == 0:
-            if status is not None and status.remaining_quantity > 0:
-                await broker.cancel_cash_order(
-                    broker_order_no=status.broker_order_no,
-                    branch_no=status.branch_no or receipt.branch_no,
-                    quantity=status.remaining_quantity,
-                )
-            elif status is None:
-                if not receipt.branch_no:
-                    raise RuntimeError("cannot safely cancel an unconfirmed paper order")
-                await broker.cancel_cash_order(
-                    broker_order_no=receipt.broker_order_no,
-                    branch_no=receipt.branch_no,
-                    quantity=1,
-                )
-            await self._wait_until_no_open_order(
-                broker,
-                trading_date=trading_date,
-                order_no=receipt.broker_order_no,
-                symbol=symbol,
-            )
+        if status.filled_quantity == 0:
             return CampaignStepResult(
                 symbol=symbol,
                 discount_pct=str(discount),
                 reference_price=quote.price,
                 target_price=target,
-                status="NOT_FILLED_CANCELLED",
+                status="NOT_FILLED_CANCELLED_OR_EXPIRED",
                 buy_order_no=receipt.broker_order_no,
                 sell_order_no=None,
                 buy_fill_price=None,
@@ -256,17 +234,15 @@ class PaperBrokerCampaign:
         finally:
             await realtime.close()
 
-    async def _wait_for_terminal_or_timeout(
+    async def _wait_for_terminal(
         self,
         broker: KisClient,
         *,
         trading_date: str,
         order_no: str,
         symbol: str,
-    ) -> KisOrderStatus | None:
-        deadline = asyncio.get_running_loop().time() + self.fill_timeout_seconds
-        latest: KisOrderStatus | None = None
-        while asyncio.get_running_loop().time() < deadline:
+    ) -> KisOrderStatus:
+        while True:
             statuses = await broker.daily_order_statuses(
                 trading_date=trading_date,
                 symbol=symbol,
@@ -274,10 +250,9 @@ class PaperBrokerCampaign:
             )
             if statuses:
                 latest = statuses[0]
-                if latest.remaining_quantity == 0 or latest.filled_quantity > 0:
+                if latest.remaining_quantity == 0:
                     return latest
             await asyncio.sleep(2)
-        return latest
 
     async def _wait_for_fill(
         self,
@@ -287,35 +262,15 @@ class PaperBrokerCampaign:
         order_no: str,
         symbol: str,
     ) -> KisOrderStatus:
-        status = await self._wait_for_terminal_or_timeout(
+        status = await self._wait_for_terminal(
             broker,
             trading_date=trading_date,
             order_no=order_no,
             symbol=symbol,
         )
-        if status is None or status.filled_quantity != 1:
+        if status.filled_quantity != 1:
             raise RuntimeError("forced paper sell was not fully filled")
         return status
-
-    async def _wait_until_no_open_order(
-        self,
-        broker: KisClient,
-        *,
-        trading_date: str,
-        order_no: str,
-        symbol: str,
-    ) -> None:
-        deadline = asyncio.get_running_loop().time() + 30
-        while asyncio.get_running_loop().time() < deadline:
-            statuses = await broker.daily_order_statuses(
-                trading_date=trading_date,
-                symbol=symbol,
-                broker_order_no=order_no,
-            )
-            if statuses and statuses[0].remaining_quantity == 0:
-                return
-            await asyncio.sleep(2)
-        raise RuntimeError("paper order cancellation was not confirmed")
 
     def _append(self, result: CampaignStepResult) -> None:
         self.output.parent.mkdir(parents=True, exist_ok=True)
