@@ -922,6 +922,23 @@ def _intraday_period_return(
     ).quantize(Decimal("0.01"))
 
 
+def _visible_period_values(
+    analysis: _Analyzed,
+) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
+    low = min(bar.low for bar in analysis.hour_bars)
+    high = max(bar.high for bar in analysis.hour_bars)
+    current = analysis.hourly_closes[-1]
+    width = high - low
+    if width <= 0:
+        raise CandidateReportError(
+            f"{analysis.symbol} has no visible intraday price range"
+        )
+    position = (current - low) / width * HUNDRED
+    amplitude = width / ((high + low) / Decimal("2")) * HUNDRED
+    target = low * Decimal("1.10")
+    return low, high, position, amplitude, target
+
+
 def _grade(score: Decimal) -> AiGrade:
     if score >= Decimal("75"):
         return "STRONG_RECOMMEND"
@@ -1202,7 +1219,13 @@ def _ready_window_metrics(
     if analysis.active is None:
         raise CandidateReportError("intraday READY metrics require active box analysis")
     current_price = analysis.hourly_closes[-1]
-    actual_window_high = max(bar.high for bar in analysis.hour_bars)
+    (
+        actual_window_low,
+        actual_window_high,
+        actual_position,
+        actual_amplitude,
+        actual_target,
+    ) = _visible_period_values(analysis)
     current_vs_high = min(
         Decimal("0"),
         (current_price / actual_window_high - Decimal("1")) * HUNDRED,
@@ -1225,7 +1248,7 @@ def _ready_window_metrics(
     score = analysis.score.quantize(Decimal("0.01"))
     grade = _setup_grade(
         score,
-        analysis.position,
+        actual_position,
         analysis.lower_trend,
         (
             analysis.target_reaches
@@ -1233,7 +1256,7 @@ def _ready_window_metrics(
             else 0
         ),
     )
-    if analysis.target_price <= current_price:
+    if actual_target <= current_price:
         grade = (
             "NOT_RECOMMEND"
             if score >= Decimal("45")
@@ -1257,10 +1280,10 @@ def _ready_window_metrics(
         structure_status="READY",
         structure_completed_days=days,
         rank=rank,
-        box_low=analysis.low.quantize(Decimal("0.01")),
-        box_high=analysis.high.quantize(Decimal("0.01")),
-        amplitude_pct=analysis.amplitude.quantize(Decimal("0.01")),
-        position_pct=analysis.position.quantize(Decimal("0.01")),
+        box_low=actual_window_low.quantize(Decimal("0.01")),
+        box_high=actual_window_high.quantize(Decimal("0.01")),
+        amplitude_pct=actual_amplitude.quantize(Decimal("0.01")),
+        position_pct=actual_position.quantize(Decimal("0.01")),
         average_up_swing_pct=analysis.average_up_swing.quantize(Decimal("0.01")),
         up_swing_count=analysis.up_swing_count,
         average_time_to_6pct_hours=(
@@ -1297,7 +1320,9 @@ def _ready_window_metrics(
         return_pct=period_return,
         average_trading_value_billion=average_value,
         volume_ratio=volume_ratio,
-        target_price_10pct=analysis.target_price.quantize(Decimal("0.01")),
+        target_price_10pct=(
+            actual_target
+        ).quantize(Decimal("0.01")),
         lower_contact_count=analysis.lower_contacts,
         target_reach_count=analysis.target_reaches,
         target_pending_count=analysis.target_pending,
@@ -1459,11 +1484,12 @@ def build_intraday_report(
         symbol
         for symbol in ranked_symbols
         if (
-            analyses_by_window[14][symbol].position <= Decimal("35")
+            _visible_period_values(analyses_by_window[14][symbol])[2]
+            <= Decimal("35")
             and analyses_by_window[14][symbol].target_reaches >= 1
             and analyses_by_window[14][symbol].current_to_window_high
             >= Decimal("10")
-            and analyses_by_window[14][symbol].target_price
+            and _visible_period_values(analyses_by_window[14][symbol])[4]
             > analyses_by_window[14][symbol].hourly_closes[-1]
         )
     ][:30]
@@ -1533,7 +1559,7 @@ def build_intraday_report(
             "6% 이상 비중복 반복 상승 연구 기준선"
         ),
         calculation_version=(
-            "intraday-actual-10pct-gate-v12-top200-official30-all-reviewed-"
+            "intraday-actual-10pct-gate-v13-visible-extrema-top200-official30-all-reviewed-"
             "kospi-market-cap-top200-v1"
         ),
         strategy_status=strategy_status,

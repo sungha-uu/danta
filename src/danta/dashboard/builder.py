@@ -15,7 +15,11 @@ RECOMMENDED_GRADES = {"STRONG_RECOMMEND", "RECOMMEND"}
 def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
     if not any(
         version in report.calculation_version
-        for version in ("actual-10pct-gate", "period-lower-entry-gate")
+        for version in (
+            "actual-10pct-gate",
+            "actual-extrema-10pct-gate",
+            "period-lower-entry-gate",
+        )
     ):
         return
     errors: list[str] = []
@@ -37,6 +41,8 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
                 errors.append(f"{window}d {candidate.code} missing +10% audit fields")
                 continue
             actual_high = max(bar.high for bar in metrics.chart_bars)
+            actual_low = min(bar.low for bar in metrics.chart_bars)
+            last_close = metrics.chart_bars[-1].close
             current_target = candidate.current_price * TEN_PCT
             entry_target = metrics.box_low * TEN_PCT
             target_consistent = abs(metrics.target_price_10pct - entry_target) <= Decimal("0.02")
@@ -78,6 +84,22 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
             if not target_consistent:
                 errors.append(
                     f"{window}d {candidate.code} +10% target price mismatch"
+                )
+            if abs(metrics.box_low - actual_low) > Decimal("0.02"):
+                errors.append(
+                    f"{window}d {candidate.code} period-low mismatch"
+                )
+            if abs(metrics.box_high - actual_high) > Decimal("0.02"):
+                errors.append(
+                    f"{window}d {candidate.code} period-high mismatch"
+                )
+            if not metrics.box_low <= candidate.current_price <= metrics.box_high:
+                errors.append(
+                    f"{window}d {candidate.code} current price outside period range"
+                )
+            if abs(candidate.current_price - last_close) > Decimal("0.02"):
+                errors.append(
+                    f"{window}d {candidate.code} current price is not latest chart close"
                 )
             expected_position = (
                 (candidate.current_price - metrics.box_low)

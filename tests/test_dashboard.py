@@ -81,6 +81,60 @@ def test_actual_ten_pct_dashboard_blocks_false_recommendations() -> None:
         )
 
 
+def test_dashboard_blocks_period_extrema_and_current_price_mismatch() -> None:
+    report = demo_report().model_copy(
+        update={
+            "calculation_version": (
+                "intraday-actual-10pct-gate-v13-visible-extrema-test"
+            )
+        }
+    )
+    candidate = report.candidates[0]
+    metrics = candidate.windows["7"]
+    actual_low = min(bar.low for bar in metrics.chart_bars)
+    broken_metrics = metrics.model_copy(
+        update={
+            "box_low": actual_low + Decimal("1"),
+            "target_price_10pct": (actual_low + Decimal("1")) * Decimal("1.10"),
+        }
+    )
+    broken_report = report.model_copy(
+        update={
+            "candidates": [
+                candidate.model_copy(
+                    update={
+                        "windows": {
+                            **candidate.windows,
+                            "7": broken_metrics,
+                        }
+                    }
+                ),
+                *report.candidates[1:],
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="period-low mismatch"):
+        _validate_actual_ten_pct_dashboard(broken_report)
+
+    outside_candidate = candidate.model_copy(
+        update={
+            "current_price": metrics.box_low - Decimal("1"),
+        }
+    )
+    outside_report = report.model_copy(
+        update={
+            "candidates": [
+                outside_candidate,
+                *report.candidates[1:],
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="current price outside period range"):
+        _validate_actual_ten_pct_dashboard(outside_report)
+
+
 def test_active_report_requires_intraday_source_and_approved_analysis_bar() -> None:
     payload = demo_report().model_dump(mode="json")
     payload["strategy_status"] = "ACTIVE"
