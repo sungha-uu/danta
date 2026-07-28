@@ -72,14 +72,15 @@ def test_strong_sell_pressure_waits_even_below_user_maximum() -> None:
     assert decision.limit_price is None
 
 
-def test_box_invalidation_cancels_cheaper_entry() -> None:
+def test_box_break_is_reference_only_for_entry() -> None:
     decision = evaluate_entry(
         _snapshot(last_price=65000, best_bid=64900, best_ask=65000, box_valid=False),
         maximum_price=70000,
         policy=_policy(),
         snapshot_is_fresh=True,
     )
-    assert decision.action is EntryAction.INVALIDATE_MANDATE
+    assert decision.action is EntryAction.SUBMIT_LIMIT_BUY
+    assert decision.limit_price == 65000
 
 
 def test_unapproved_policy_and_risk_off_block_entries() -> None:

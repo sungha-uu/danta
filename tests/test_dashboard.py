@@ -290,7 +290,7 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "minimumFractionDigits: 1" in html
     assert "Math.floor((100 / selection.size) * 10) / 10" in html
     assert "KIS_ORDERABLE_CASH" in html
-    assert "UNTIL_FILLED_OR_BOX_INVALIDATED" in html
+    assert "UNTIL_FILLED_OR_USER_CANCELLED" in html
     assert "hard_stop_pct: -7.0" in html
     assert "profit_policy: ACTIVE_VERSIONED_LOCAL_ENGINE" in html
     assert "profit_arm_pct" not in html

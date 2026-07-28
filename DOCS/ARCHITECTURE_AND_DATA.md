@@ -144,7 +144,7 @@ domain <- application <- adapters <- entrypoints
 | `candidate_window_metrics` | 후보별 7·14·21일 박스·진폭·위치·수급·차트 입력 |
 | `candidate_publications` | 정제된 공개 DTO 해시·생성시각·배포상태·Pages URL |
 | `user_comments`, `remote_directives`, `watch_selections` | 대시보드 코멘트, Codex 지시 ID, 사용자 지정 1~3개 |
-| `entry_mandates` | 종목·목표가·사용자 배정률·계좌모드·박스 유효조건·정책버전 승인 |
+| `entry_mandates` | 종목·목표가·사용자 배정률·계좌모드·정책버전·사용자 취소 상태 |
 | `ai_policy_decisions` | 유효기간이 있는 AI `ALLOW/BLOCK`·근거·입력 해시 |
 | `order_intents`, `broker_orders`, `fills` | 주문 의도·KIS 주문·체결 |
 | `positions`, `risk_events` | 포지션 세대와 손절·익절 판단 |

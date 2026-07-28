@@ -17,8 +17,8 @@ total_allocation_pct: 100.0
 unallocated_cash_pct: 0.0
 selected_symbol_count: 3
 entry_trigger: LAST_PRICE_LTE_TARGET
-validity_policy: UNTIL_FILLED_OR_BOX_INVALIDATED
-partial_fill_policy: PROTECT_FILLED_CANCEL_REMAINDER_ON_INVALIDATION
+validity_policy: UNTIL_FILLED_OR_USER_CANCELLED
+partial_fill_policy: PROTECT_FILLED_CANCEL_REMAINDER_ON_SAFETY_DETERIORATION
 duplicate_guard: INTERNAL_ON_INGEST
 hard_stop_pct: -7.0
 profit_policy: ACTIVE_VERSIONED_LOCAL_ENGINE

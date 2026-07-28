@@ -432,3 +432,41 @@ async def test_expired_token_refreshes_once_for_safe_get(
     assert quote.price == 250000
     assert token_calls == 2
     assert quote_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_transient_disconnect_retries_safe_get_once(
+    credentials: KisCredentials,
+) -> None:
+    quote_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal quote_calls
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(
+                200,
+                json={"access_token": "token", "expires_in": 3600},
+            )
+        quote_calls += 1
+        if quote_calls == 1:
+            raise httpx.RemoteProtocolError(
+                "server disconnected",
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": {"stck_prpr": "250000", "prdy_ctrt": "1.2"},
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    client._minimum_rest_interval = 0
+    try:
+        quote = await client.current_price("005930")
+    finally:
+        await client.close()
+
+    assert quote.price == 250000
+    assert quote_calls == 2

@@ -42,8 +42,10 @@ class EntryMandate(BaseModel):
     unallocated_cash_pct: Decimal = Field(ge=0, lt=100)
     selected_symbol_count: int = Field(ge=1, le=3)
     entry_trigger: Literal["LAST_PRICE_LTE_TARGET"]
-    validity_policy: Literal["UNTIL_FILLED_OR_BOX_INVALIDATED"]
-    partial_fill_policy: Literal["PROTECT_FILLED_CANCEL_REMAINDER_ON_INVALIDATION"]
+    validity_policy: Literal["UNTIL_FILLED_OR_USER_CANCELLED"]
+    partial_fill_policy: Literal[
+        "PROTECT_FILLED_CANCEL_REMAINDER_ON_SAFETY_DETERIORATION"
+    ]
     duplicate_guard: Literal["INTERNAL_ON_INGEST"]
     hard_stop_pct: Decimal
     profit_policy: Literal["ACTIVE_VERSIONED_LOCAL_ENGINE"]

@@ -553,20 +553,29 @@ class KisClient:
                 wait_seconds = self._minimum_rest_interval - elapsed
                 if wait_seconds > 0:
                     await asyncio.sleep(wait_seconds)
-                response = await self._client.request(
-                    method,
-                    path,
-                    params=params,
-                    json=json_body,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "appkey": self.credentials.app_key.get_secret_value(),
-                        "appsecret": self.credentials.app_secret.get_secret_value(),
-                        "tr_id": tr_id,
-                        "custtype": "P",
-                        "Content-Type": "application/json",
-                    },
-                )
+                try:
+                    response = await self._client.request(
+                        method,
+                        path,
+                        params=params,
+                        json=json_body,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "appkey": self.credentials.app_key.get_secret_value(),
+                            "appsecret": self.credentials.app_secret.get_secret_value(),
+                            "tr_id": tr_id,
+                            "custtype": "P",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                except httpx.RequestError as exc:
+                    if attempt == 0 and method == "GET":
+                        continue
+                    if method == "GET":
+                        raise KisApiError(
+                            f"KIS GET request failed after retry: {path}"
+                        ) from exc
+                    raise
                 self._last_rest_request_at = time.monotonic()
             try:
                 raw_body = response.json()

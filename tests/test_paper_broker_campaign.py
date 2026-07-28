@@ -202,6 +202,51 @@ async def test_campaign_waits_for_broker_terminal_state_without_elapsed_timeout(
     assert sleep.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_campaign_cancels_unfilled_buy_at_regular_session_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    campaign = _campaign(tmp_path)
+    broker = FakeCampaignBroker()
+    open_order = _status(
+        order_no="order-1",
+        side="BUY",
+        filled=0,
+        remaining=1,
+        price=220_000,
+    )
+    cancelled_order = _status(
+        order_no="order-1",
+        side="BUY",
+        filled=0,
+        remaining=0,
+        price=220_000,
+    )
+    broker.status_batches = [[open_order], [cancelled_order]]
+    monkeypatch.setattr(campaign, "_regular_session_closed", lambda: True)
+    monkeypatch.setattr(
+        "danta.services.paper_broker_campaign.asyncio.sleep", AsyncMock()
+    )
+
+    result = await campaign._wait_for_terminal(  # type: ignore[arg-type]
+        broker,
+        trading_date="20260728",
+        order_no="order-1",
+        symbol="005930",
+    )
+
+    assert result.remaining_quantity == 0
+    assert campaign._session_closed_orders == {"order-1"}
+    assert broker.cancellations == [
+        {
+            "broker_order_no": "order-1",
+            "branch_no": "00000",
+            "quantity": 1,
+        }
+    ]
+
+
 def test_campaign_rejects_production_environment(tmp_path: Path) -> None:
     credentials = KisCredentials(
         environment=TradingEnvironment.PROD,

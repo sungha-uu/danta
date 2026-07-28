@@ -127,7 +127,6 @@ class TradingRuntimeCore:
         if symbol not in self.box_valid:
             raise ValueError("symbol is outside the active mandate")
         self.box_valid[symbol] = False
-        self.pending_buy_cancel_reason[symbol] = "BOX_INVALIDATED"
 
     def cancellation_required(self, status: KisOrderStatus) -> bool:
         key = self.order_number_to_key.get(status.broker_order_no)
@@ -136,15 +135,19 @@ class TradingRuntimeCore:
         intent = self.submitted[key].intent
         return (
             intent.side is IntentSide.BUY
-            and (
-                not self.box_valid.get(intent.symbol, False)
-                or intent.symbol in self.pending_buy_cancel_reason
-            )
+            and intent.symbol in self.pending_buy_cancel_reason
             and status.remaining_quantity > 0
         )
 
     def record_cancellation_requested(self, broker_order_no: str) -> None:
         self.cancel_requested.add(broker_order_no)
+
+    def request_buy_reprice(self, symbol: str, *, reason: str) -> None:
+        if symbol not in self.plans:
+            raise ValueError("symbol is outside the active mandate")
+        if not reason:
+            raise ValueError("buy reprice reason is required")
+        self.pending_buy_cancel_reason[symbol] = reason
 
     async def finalize_buy_cancellation(self, status: KisOrderStatus) -> bool:
         if (
@@ -171,8 +174,6 @@ class TradingRuntimeCore:
         self.pending_buy_cancel_reason.pop(intent.symbol, None)
         if self.positions.get(intent.symbol) is not None:
             session.state = SymbolState.POSITION_OPEN
-        elif not self.box_valid.get(intent.symbol, False):
-            session.state = SymbolState.INVALIDATED
         else:
             self.entry_attempts[intent.symbol] = (
                 self.entry_attempts.get(intent.symbol, 0) + 1
@@ -226,9 +227,7 @@ class TradingRuntimeCore:
                     if entry_decision.reason_codes
                     else "ENTRY_CONDITION_DETERIORATED"
                 )
-                self.pending_buy_cancel_reason[event.symbol] = reason
-                if entry_decision.action.value == "INVALIDATE_MANDATE":
-                    self.box_valid[event.symbol] = False
+                self.request_buy_reprice(event.symbol, reason=reason)
         position = self.positions.get(event.symbol)
         if position is None or position.quantity <= 0:
             return None

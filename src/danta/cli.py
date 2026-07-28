@@ -232,6 +232,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     campaign.add_argument("--execute", action="store_true")
     campaign.add_argument("--monitor-seconds", type=int, default=30)
+    campaign.add_argument("--start-discount", type=Decimal, default=Decimal("0"))
+    campaign.add_argument("--end-discount", type=Decimal, default=Decimal("0.5"))
     campaign.add_argument(
         "--output",
         type=Path,
@@ -305,6 +307,16 @@ def main() -> None:
             print("paper campaign validated no action; pass --execute to submit paper orders")
             return
         try:
+            if (
+                args.start_discount < 0
+                or args.end_discount > Decimal("0.5")
+                or args.start_discount > args.end_discount
+                or args.start_discount % Decimal("0.1") != 0
+                or args.end_discount % Decimal("0.1") != 0
+            ):
+                raise ValueError(
+                    "paper campaign discounts must be 0.1% steps between 0% and 0.5%"
+                )
             settings = load_settings()
             campaign = PaperBrokerCampaign(
                 settings=settings,
@@ -319,7 +331,11 @@ def main() -> None:
                 campaign.run(
                     symbols=("000660", "005930"),
                     discounts=tuple(
-                        Decimal(index) / Decimal("10") for index in range(11)
+                        Decimal(index) / Decimal("10")
+                        for index in range(
+                            int(args.start_discount * 10),
+                            int(args.end_discount * 10) + 1,
+                        )
                     ),
                 )
             )

@@ -85,14 +85,6 @@ def evaluate_entry(
             None,
             ("MARKET_RISK_OFF",),
         )
-    if not snapshot.box_valid:
-        return EntryDecision(
-            snapshot.symbol,
-            EntryAction.INVALIDATE_MANDATE,
-            policy.version,
-            None,
-            ("BOX_INVALIDATED",),
-        )
     if snapshot.best_ask is None:
         return EntryDecision(
             snapshot.symbol,

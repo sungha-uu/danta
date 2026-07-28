@@ -124,7 +124,7 @@ STOP_SELL_REQUIRE_CONFIRMATION=false
 - 박스·날짜별 일중 진폭·저점 이후 반등·+5%·+10%·+15% 목표 도달·효율성
 - 평균가·호가 단위·비용
 - -7% 경계와 수익보호선 단조 증가
-- 승인 박스 유효조건·사용자 배정률·목표가·위험 한도
+- 사용자 승인·배정률·목표가·위험 한도
 - 사용자 승인 없는 매수 의도 0건
 - 동일 포지션 청산 중복 0건
 - 미래 데이터 제거 시 과거 결과 불변
@@ -210,6 +210,7 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 .\.venv\Scripts\danta.exe paper-trade --mandate .\private\ENTRY_MANDATE.yaml
 $env:DANTA_PAPER_ORDER_EXECUTION_ENABLED='true'
 .\.venv\Scripts\danta.exe paper-campaign --execute
+.\.venv\Scripts\danta.exe paper-campaign --execute --start-discount 0.1 --end-discount 0.5
 ```
 
 - 첫 번째 doctor는 자격증명 형식과 안전정책만 검사한다.
@@ -224,10 +225,14 @@ $env:DANTA_PAPER_ORDER_EXECUTION_ENABLED='true'
   설정의 `paper_order_execution_enabled=true`, 모의 자격증명, 최신 DB 마이그레이션,
   유효한 승인문, `--execute`가 모두 있어야 시작한다.
 - `paper-campaign`은 전용 빈 모의계좌에서만 삼성전자·SK하이닉스 각 1주를
-  현재가와 `-0.1%`~`-1.0%` 목표가로 순차 시험하는 제한된 브로커 수명주기 도구다.
+  현재가와 `-0.1%`~`-0.5%` 목표가로 순차 시험하는 제한된 브로커 수명주기 도구다.
   지정가 주문은 임의 시간제한 없이 브로커가 체결·취소·만료 중 하나의 최종 상태를
   반환할 때까지 추적하고, 체결 주문은 30초 실시간 감시 후 다음 시험을 위해 시장가로
-  청산한다. 따라서 가격이 도달하지 않으면 캠페인이 장 종료까지 진행되지 않을 수 있다.
+  청산한다. 가격이 정규장 15:30 종료까지 도달하지 않으면 당일 주문을 안전 취소하고 남은
+  구간을 제출하지 않은 채 종료한다. 이는 경과시간 취소가 아니라 일 주문의 세션
+  경계를 반영한 것이며, 미완료 구간은 다음 거래일에 명시적으로 재개한다.
+  연결 중단 뒤 계좌 대조가 끝났다면 `--start-discount`와 `--end-discount`로 미완료
+  0.1% 단위 구간만 재개할 수 있다.
   환경변수 게이트는 해당 프로세스에만 열며
   `config/app.json`의 기본 잠금은 변경하지 않는다.
 - 캠페인 JSONL에는 주문번호가 포함될 수 있으므로 `data/paper-campaign/` 밖이나
@@ -252,4 +257,4 @@ $env:DANTA_PAPER_ORDER_EXECUTION_ENABLED='true'
 
 단계가 뒤로 진행되어도 앞 단계의 데이터 품질 검사를 생략하지 않는다. 실제 데이터가 일부만 채워진 보고서는 데모가 아니더라도 해당 공급자 미연결 상태를 명시한다.
 
-KIS 주문 어댑터 계약은 주문가능조회와 현금주문까지 미리 구현할 수 있지만, 기본 생성자는 주문 제출을 거부한다. `paper_order_execution_enabled`, 검증된 `ENTRY_MANDATE`, 영속 멱등키, 활성 관찰 종목, 박스 유효성 검사를 모두 통과한 전용 실행기만 주문 제출이 허용된 KIS 클라이언트를 만들 수 있다. 실전 환경 주문은 Phase 0 잠금이 해제되기 전에는 클라이언트 수준에서도 거부한다.
+KIS 주문 어댑터 계약은 주문가능조회와 현금주문까지 미리 구현할 수 있지만, 기본 생성자는 주문 제출을 거부한다. `paper_order_execution_enabled`, 검증된 `ENTRY_MANDATE`, 영속 멱등키, 활성 관찰 종목, 시장·데이터·계좌 안전검사를 모두 통과한 전용 실행기만 주문 제출이 허용된 KIS 클라이언트를 만들 수 있다. 박스 이탈은 참고 신호이지 승인 취소 게이트가 아니다. 실전 환경 주문은 Phase 0 잠금이 해제되기 전에는 클라이언트 수준에서도 거부한다.

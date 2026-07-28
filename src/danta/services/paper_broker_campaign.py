@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from danta.adapters.kis.client import KisClient, KisOrderStatus
 from danta.adapters.kis.realtime import KisRealtimeClient
@@ -15,6 +16,9 @@ from danta.domain.price_tick import floor_kospi_price
 from danta.domain.risk import PositionRiskSnapshot, evaluate_exit
 from danta.services.market_signal import RollingMarketSignal
 from danta.services.policy_registry import TradingPolicyRegistry
+
+SEOUL = ZoneInfo("Asia/Seoul")
+REGULAR_SESSION_END = time(15, 30)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +63,7 @@ class PaperBrokerCampaign:
         self.policies = policies
         self.output = output
         self.monitor_seconds = monitor_seconds
+        self._session_closed_orders: set[str] = set()
 
     async def run(
         self,
@@ -93,6 +98,8 @@ class PaperBrokerCampaign:
                     self._append(result)
                     if await broker.positions():
                         raise RuntimeError("campaign failed to flatten after a step")
+                    if result.status == "NOT_FILLED_SESSION_CLOSED":
+                        return results
         return results
 
     async def _run_step(
@@ -127,7 +134,11 @@ class PaperBrokerCampaign:
                 discount_pct=str(discount),
                 reference_price=quote.price,
                 target_price=target,
-                status="NOT_FILLED_CANCELLED_OR_EXPIRED",
+                status=(
+                    "NOT_FILLED_SESSION_CLOSED"
+                    if receipt.broker_order_no in self._session_closed_orders
+                    else "NOT_FILLED_CANCELLED_OR_EXPIRED"
+                ),
                 buy_order_no=receipt.broker_order_no,
                 sell_order_no=None,
                 buy_fill_price=None,
@@ -242,6 +253,7 @@ class PaperBrokerCampaign:
         order_no: str,
         symbol: str,
     ) -> KisOrderStatus:
+        session_close_cancel_requested = False
         while True:
             statuses = await broker.daily_order_statuses(
                 trading_date=trading_date,
@@ -252,7 +264,24 @@ class PaperBrokerCampaign:
                 latest = statuses[0]
                 if latest.remaining_quantity == 0:
                     return latest
+                if (
+                    latest.side == "BUY"
+                    and self._regular_session_closed()
+                    and not session_close_cancel_requested
+                ):
+                    await broker.cancel_cash_order(
+                        broker_order_no=latest.broker_order_no,
+                        branch_no=latest.branch_no,
+                        quantity=latest.remaining_quantity,
+                    )
+                    self._session_closed_orders.add(latest.broker_order_no)
+                    session_close_cancel_requested = True
             await asyncio.sleep(2)
+
+    @staticmethod
+    def _regular_session_closed() -> bool:
+        now = datetime.now(SEOUL)
+        return now.weekday() < 5 and now.time() >= REGULAR_SESSION_END
 
     async def _wait_for_fill(
         self,

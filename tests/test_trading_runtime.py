@@ -27,8 +27,10 @@ def mandate() -> EntryMandate:
             "unallocated_cash_pct": "0.0",
             "selected_symbol_count": 1,
             "entry_trigger": "LAST_PRICE_LTE_TARGET",
-            "validity_policy": "UNTIL_FILLED_OR_BOX_INVALIDATED",
-            "partial_fill_policy": "PROTECT_FILLED_CANCEL_REMAINDER_ON_INVALIDATION",
+            "validity_policy": "UNTIL_FILLED_OR_USER_CANCELLED",
+            "partial_fill_policy": (
+                "PROTECT_FILLED_CANCEL_REMAINDER_ON_SAFETY_DETERIORATION"
+            ),
             "duplicate_guard": "INTERNAL_ON_INGEST",
             "hard_stop_pct": "-7.0",
             "profit_policy": "ACTIVE_VERSIONED_LOCAL_ENGINE",
@@ -165,7 +167,7 @@ async def test_runtime_enters_tracks_fill_and_hard_stops() -> None:
     assert sell.cause == "HARD_STOP_MINUS_7"
 
 
-async def test_invalidated_box_requests_buy_remainder_cancel() -> None:
+async def test_box_break_does_not_cancel_pending_entry_approval() -> None:
     orchestrator = TradingOrchestrator(
         capital_allocator=CapitalAllocator(),
         scheduler=PriorityIntentScheduler(),
@@ -199,15 +201,13 @@ async def test_invalidated_box_requests_buy_remainder_cancel() -> None:
         symbol="005930",
         side="BUY",
         ordered_quantity=10,
-        filled_quantity=2,
-        remaining_quantity=8,
+        filled_quantity=0,
+        remaining_quantity=10,
         order_price=99000,
-        average_fill_price=Decimal("99000"),
+        average_fill_price=Decimal("0"),
         order_time="090001",
         branch_no="1",
     )
-    assert core.cancellation_required(status)
-    core.record_cancellation_requested("200")
     assert not core.cancellation_required(status)
 
 
@@ -322,7 +322,7 @@ async def test_partial_fill_cancel_keeps_position_and_does_not_rearm() -> None:
         branch_no="1",
     )
     assert core.apply_order_status(partial, observed_at=now) == 2
-    core.invalidate_box("005930")
+    core.request_buy_reprice("005930", reason="SELL_PRESSURE_STRONG")
     assert core.cancellation_required(partial)
     core.record_cancellation_requested("400")
     cancelled = KisOrderStatus(
