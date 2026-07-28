@@ -109,6 +109,21 @@ domain <- application <- adapters <- entrypoints
 
 현재 `domain/risk.py`의 평균 체결가·`-7%` 가격·발동 함수는 순수 핵심으로 유지한다. 단계형 방어 로직을 구현할 때 파일 하나가 비대해지면 동일 공개 API를 유지한 `domain/risk/` 패키지로 분리한다. 호출자는 내부 파일이 아니라 `RiskEngine.evaluate(snapshot) -> ExitDecision` 계약에만 의존한다.
 
+### 자동매수 모듈 경계
+
+자동매수도 후보 선정·대시보드·자동매도 스크립트에 섞지 않는다. 상세 정책은 [`ENTRY_AND_BUY.md`](ENTRY_AND_BUY.md)를 단일 기준으로 삼는다.
+
+| 위치 | 책임 | 금지 |
+| --- | --- | --- |
+| `domain/entry.py` 또는 향후 `domain/entry/` 패키지 | 최대 매수가, 순수 게이트·점수·상태전이, `EntryDecision` | KIS 호출, DB, 이메일 |
+| `services/entry_engine.py` | 종목별 시간창·진입 상태, 정책 실행, 재시작 복구 | 브로커 원시 필드 직접 해석 |
+| `adapters/kis/realtime.py` | KIS 체결·호가·시장 이벤트를 내부 모델로 변환 | 진입 정책 판단 |
+| `services/market_regime_guard.py` | 시장·업종 위험과 신규매수 차단 | 개별 주문 직접 제출 |
+| `services/order_manager.py` | 멱등 `EntryIntent`, 상한 이하 지정가·부분체결·취소·잔고 대조 | 전략 임계값 변경 |
+| `services/entry_replay.py` | 실제 장중 사례를 같은 진입정책 버전으로 재생·비교 | 실계좌 주문 |
+
+호출자는 `EntryEngine.evaluate(snapshot, mandate, policy) -> EntryDecision` 계약에만 의존한다. 자동매수와 자동매도는 주문 관리자·시장 위험 가드·내부 시장 스냅샷을 공유하지만 정책 상태는 분리한다.
+
 ## 5. 핵심 데이터
 
 | 테이블 | 역할 |

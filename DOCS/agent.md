@@ -2,8 +2,8 @@
 
 - 상태: 활성 최상위 기준
 - 활성 브로커: 한국투자증권 Open API(KIS)
-- 문서 구조: 12개 카테고리, 13개 활성 기준 문서
-- 갱신 기준일: 2026-07-26
+- 문서 구조: 14개 카테고리, 14개 활성 기준 문서
+- 갱신 기준일: 2026-07-28
 
 ## 1. 프로젝트 정의
 
@@ -16,6 +16,7 @@
 | 카테고리 | 기준 문서 | 내용 |
 | --- | --- | --- |
 | 제품 | [`PRODUCT_AND_WORKFLOW.md`](PRODUCT_AND_WORKFLOW.md) | 목적, 계좌 역할, 전체 시퀀스, 매수 승인 |
+| 진입 | [`ENTRY_AND_BUY.md`](ENTRY_AND_BUY.md) | 최대 매수가, 낙하 대기, 안정화·매수세 확인, 지정가 주문 |
 | 전략 | [`CANDIDATE_AND_MONITORING.md`](CANDIDATE_AND_MONITORING.md) | 시총 상위 200개 공개 정량 순위, 상위 50개 AI 심층검토, 실시간 감시 |
 | 위험 | [`EXIT_AND_RISK.md`](EXIT_AND_RISK.md) | -7% 손절, 적응형 익절, 시간·계좌 한도 |
 | 성과 개선 | [`PROFITABILITY_IMPROVEMENT.md`](PROFITABILITY_IMPROVEMENT.md) | 모의투자 성과 진단, 개선 실험, 익절 로직 검토·승격 |
@@ -37,11 +38,12 @@
 
 1. [`EXIT_AND_RISK.md`](EXIT_AND_RISK.md)의 -7% 손절과 계좌 위험
 2. [`PRODUCT_AND_WORKFLOW.md`](PRODUCT_AND_WORKFLOW.md)의 사용자 승인과 상태 전환
-3. [`CANDIDATE_AND_MONITORING.md`](CANDIDATE_AND_MONITORING.md)의 후보·감시 규칙
-4. [`PROFITABILITY_IMPROVEMENT.md`](PROFITABILITY_IMPROVEMENT.md)의 성과 개선·실험 규칙
-5. 아키텍처·연동·운영·품질·문제해결·개발·보안 문서
-6. 상세 개발 명세
-7. 보관 문서
+3. [`ENTRY_AND_BUY.md`](ENTRY_AND_BUY.md)의 최대 매수가와 자동진입 규칙
+4. [`CANDIDATE_AND_MONITORING.md`](CANDIDATE_AND_MONITORING.md)의 후보·감시 규칙
+5. [`PROFITABILITY_IMPROVEMENT.md`](PROFITABILITY_IMPROVEMENT.md)의 성과 개선·실험 규칙
+6. 아키텍처·연동·운영·품질·문제해결·개발·보안 문서
+7. 상세 개발 명세
+8. 보관 문서
 
 상세 명세가 상위 기준 문서와 다르면 상위 기준을 따르고 상세 명세를 즉시 수정한다.
 
@@ -62,6 +64,7 @@
 - 사용자가 1~3개를 지정하기 전에는 집중 감시하지 않는다.
 - 사용자 승인 없는 자율 매수와 물타기는 금지한다.
 - 사용자가 대시보드에서 1~3개 종목과 진입 목표가를 정하고 생성된 `ENTRY_MANDATE` 승인문을 Android Codex에 붙여넣으면 현재 잠긴 계좌 모드에서 자동 진입 위임이 성립한다.
+- 진입 목표가는 즉시 체결 명령이 아니라 절대 초과할 수 없는 최대 매수가다. 가격 도달 뒤 매도 압력이 강하면 기다리고 하락 안정·매수세 회복이 확인된 때에만 같은 가격 이하의 지정가로 매수하며, 박스·시장·승인이 무효화되면 더 낮은 가격이어도 주문하지 않는다.
 - 주문가능현금 배정률은 1종목 100.0%, 2종목 각 50.0%, 3종목 각 33.3%를 기본값으로 자동 입력하되 사용자가 종목별 비율을 소수점 한 자리까지 수정할 수 있다. 합계는 100% 이하여야 하며 3종목 기본값의 미배정 0.1%를 포함한 잔여분은 현금으로 유지한다. 실제 수량은 KIS 주문가능현금·호가단위·비용을 반영한 최대 정수 수량이다.
 - 종목 선택·목표가 입력만으로는 진입 위임이 성립하지 않으며 `ENTRY_MANDATE` 승인문을 Codex에 전달해야 한다.
 - GitHub Pages 코멘트는 분석 메모이며, Android Codex의 사용자 지시를 PC 에이전트가 확인한 뒤에만 로컬 작업을 시작한다.
