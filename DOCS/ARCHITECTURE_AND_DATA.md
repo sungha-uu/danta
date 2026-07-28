@@ -25,6 +25,7 @@ flowchart LR
       REVIEW["AI 검토기"]
       ORCH["운영 오케스트레이터"]
       MON["종목별 비동기 모니터"]
+      ENTRY["진입 엔진"]
       OMS["주문·포지션 관리자"]
       RISK["위험 엔진"]
       REGIME["시장위험 가드"]
@@ -44,9 +45,11 @@ flowchart LR
     API --> ORCH
     DB --> ORCH --> MON
     KIS <--> MON
-    MON --> BUS --> RISK --> OMS
-    RISK --> REGIME --> ORCH
-    API --> OMS
+    MON --> BUS
+    BUS --> ENTRY --> ORCH
+    BUS --> RISK --> ORCH
+    REGIME --> ORCH
+    ORCH --> OMS
     OMS <--> KIS
     OMS --> DB
     DB --> NOTI --> SMTP
@@ -61,8 +64,8 @@ flowchart LR
 | 시장데이터 수집기 | 종목·수급·공시·일봉 보조자료와 정규장 1분봉 원본의 증분 수집·품질 검사 |
 | 봉 집계기 | 1분봉 원본에서 재현 가능한 5·10·30·60분봉 OHLCV 생성 |
 | 후보·AI 엔진 | 공개 검토군 50개 전체의 기간별 AI 등급·설명·위험·버전과 자격 게이트 통과·미달 사유 저장 |
-| 운영 오케스트레이터 | 종목별 상태머신 생성·복구·중지, 진입/보호 작업 분리 |
-| 실시간 모니터 | 지정 1~3개 체결·호가·1분/5분 상태를 비동기 태스크로 계산 |
+| 운영 오케스트레이터 | [`TRADING_ORCHESTRATOR.md`](TRADING_ORCHESTRATOR.md)에 따라 종목별 actor 생성·복구·중지, 계좌 자금 예약, 주문 우선순위와 진입/보호 작업 분리 |
+| 실시간 모니터 | 현재 승인된 최대 3개, 향후 검증된 `N`개 종목의 체결·호가·1분/5분 상태를 비동기 actor로 계산 |
 | 승인 게이트웨이 | 사용자 진입 위임 검증과 일회용·만료형 주문 범위 |
 | 주문 관리자 | 주문·정정·취소·체결·잔고 대조 |
 | 위험 엔진 | -7% 손절, 적응형 익절, 시간·계좌 한도 |
@@ -123,6 +126,10 @@ domain <- application <- adapters <- entrypoints
 | `services/entry_replay.py` | 실제 장중 사례를 같은 진입정책 버전으로 재생·비교 | 실계좌 주문 |
 
 호출자는 `EntryEngine.evaluate(snapshot, mandate, policy) -> EntryDecision` 계약에만 의존한다. 자동매수와 자동매도는 주문 관리자·시장 위험 가드·내부 시장 스냅샷을 공유하지만 정책 상태는 분리한다.
+
+### 다종목 실행 코어
+
+자동매수·자동매도 엔진 위의 중앙 조정 계층은 [`TRADING_ORCHESTRATOR.md`](TRADING_ORCHESTRATOR.md)를 단일 기준으로 삼는다. 종목별 `SymbolActor`가 순수 결정을 만들고 `TradingOrchestrator`가 계좌 자금·시장 위험·주문 충돌·우선순위를 판정해 중앙 `OrderManager`로 전달한다. 현재 3개 제한은 승인 정책이며 코드 구조의 고정 배열 크기가 아니다.
 
 ## 5. 핵심 데이터
 

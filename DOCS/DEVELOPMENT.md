@@ -58,6 +58,7 @@ Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성
 
 - `ENTRY_MANDATE`, AI 정책·정량신호 교집합, 모의 주문·체결
 - 중앙 주문 관리자, 호출 제한기, 주문 멱등성
+- [`TRADING_ORCHESTRATOR.md`](TRADING_ORCHESTRATOR.md)의 다종목 actor·자금 예약·매도 우선 큐·재시작 복구
 - 평균가·포지션 세대·-7% 손절
 - 부분체결·타임아웃·재시작·대조
 
