@@ -1400,6 +1400,8 @@ def build_intraday_report(
     dataset: MarketDataset,
     candidates: list[PrefilterCandidate],
     store: MinuteBarStore,
+    *,
+    strategy_status: Literal["RESEARCH_ONLY", "ACTIVE"] = "RESEARCH_ONLY",
 ) -> DashboardReport:
     candidate_map = {item.symbol: item for item in candidates}
     analyses_by_window: dict[int, dict[str, _Analyzed]] = {}
@@ -1534,7 +1536,7 @@ def build_intraday_report(
             "intraday-actual-10pct-gate-v12-top200-official30-all-reviewed-"
             "kospi-market-cap-top200-v1"
         ),
-        strategy_status="RESEARCH_ONLY",
+        strategy_status=strategy_status,
         source_bar_interval_minutes=1,
         analysis_bar_interval_minutes=60,
         model_id="quant-intraday-baseline-no-llm",

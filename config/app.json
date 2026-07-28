@@ -12,7 +12,7 @@
   "auto_stop_sell_enabled": true,
   "stop_loss_pct": "7.0",
   "stop_sell_requires_confirmation": false,
-  "paper_order_execution_enabled": false,
+  "paper_order_execution_enabled": true,
   "real_order_execution_enabled": false,
   "fundamental_snapshot_path": "data/fundamentals/latest.json",
   "dart_corp_code_cache_path": "data/public-context/dart-corp-codes.json",

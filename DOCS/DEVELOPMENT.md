@@ -24,7 +24,9 @@ Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성
 모의주문 경로는 `ENTRY_MANDATE` 검증, 중앙 자금 예약, 진입·청산 엔진,
 우선순위 주문 큐, SQL 멱등 원장, KIS 모의 현금주문·취소·체결조회,
 부분체결 포지션 보호, DB/KIS 시작 대조, WebSocket 감시와 독립 REST `-7%`
-감시까지 연결했다. 기본 설정의 `paper_order_execution_enabled=false`는 유지한다.
+감시까지 연결했다. 2026-07-28 사전 보증과 KIS 모의 실연결 진단 통과 후
+`paper_order_execution_enabled=true`로 전환했으며, 사용자 승인문과 `--execute`
+이중 게이트를 유지한다. `real_order_execution_enabled=false`는 계속 고정한다.
 코드 구현 완료와 모의 운용 승격은 별개이며, 아래 장애 시나리오의 실제 KIS 증거가
 없으면 `PAPER_READY` 또는 실전 가능으로 판정하지 않는다.
 

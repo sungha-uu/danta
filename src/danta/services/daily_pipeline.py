@@ -13,6 +13,7 @@ from danta.adapters.kis.client import KisClient
 from danta.adapters.krx.client import PykrxMarketDataClient
 from danta.config import (
     AppSettings,
+    TradingEnvironment,
     load_dart_api_key,
     load_kis_credentials,
     load_krx_environment,
@@ -110,7 +111,17 @@ async def run_daily_pipeline(
             progress=emit,
         )
     quantitative = attach_fundamentals(
-        build_intraday_report(dataset, universe, store),
+        build_intraday_report(
+            dataset,
+            universe,
+            store,
+            strategy_status=(
+                "ACTIVE"
+                if settings.environment is TradingEnvironment.PAPER
+                and settings.paper_order_execution_enabled
+                else "RESEARCH_ONLY"
+            ),
+        ),
         fundamentals,
     )
     if len(quantitative.candidates) > 30:
