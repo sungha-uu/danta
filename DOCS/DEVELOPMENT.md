@@ -2,7 +2,7 @@
 
 ## 0. 현재 구현 상태
 
-2026-07-26 기준 Phase 0A 기본 골격을 구현했다.
+2026-07-28 기준 데이터·분석 경로와 모의주문 실행 후보판을 구현했다.
 
 - `src/danta`: FastAPI, 설정, 도메인, 포트, KIS 어댑터, 서비스, DB
 - `config/app.json`: 모의투자 기본 환경과 불변 안전정책
@@ -21,7 +21,22 @@
 
 Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성전자 현재가, 잔고, WebSocket 접속키를 확인했고 주문은 호출하지 않았다. 비민감 결과는 `data/provider_capability_snapshot.json`에 저장한다.
 
-현재 주문 실행 포트는 정의했지만 실제 매수·매도 제출은 의도적으로 연결하지 않았다. 모의 주문도 승인·멱등성·잔고복구 구현과 테스트가 끝난 뒤 활성화한다.
+모의주문 경로는 `ENTRY_MANDATE` 검증, 중앙 자금 예약, 진입·청산 엔진,
+우선순위 주문 큐, SQL 멱등 원장, KIS 모의 현금주문·취소·체결조회,
+부분체결 포지션 보호, DB/KIS 시작 대조, WebSocket 감시와 독립 REST `-7%`
+감시까지 연결했다. 기본 설정의 `paper_order_execution_enabled=false`는 유지한다.
+코드 구현 완료와 모의 운용 승격은 별개이며, 아래 장애 시나리오의 실제 KIS 증거가
+없으면 `PAPER_READY` 또는 실전 가능으로 판정하지 않는다.
+
+현재 자동화 구성:
+
+- `daily-cycle`: KOSPI 시총 상위 200개, 21일 1분봉 증분 수집, 14일 고정 순위,
+  상위 50개 뉴스·DART·토론 컨텍스트 검토, 정적 대시보드 생성
+- `paper-trade`: 승인문과 버전 정책을 받아 최대 N개 구조로 실행하되 현재 설정 한도는 3개
+- `TradingRuntimeCore`: 체결·10호가 신호, 최대 매수가 이하 안정화 진입,
+  적응형 보호청산과 불변 `-7%` 손절
+- `OrderManager`/`SqlOrderJournal`: 주문 멱등성, 제출 상태 영속화, 미체결 잔량 취소
+- `assure`: 신규 모의매수 허용 여부를 기계 판독 가능한 JSON으로 출력
 
 현재 대시보드는 결정적 데모 데이터로 UI·스키마·기간 전환을 검증하는 단계다. 실제 KIS·KRX·뉴스·수급 수집기와 연결되기 전에는 화면에 `DEMO DATA`를 표시한다.
 
@@ -190,6 +205,9 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 .\.venv\Scripts\danta.exe dashboard --input data\candidate_public_report.json --output dashboard\dist
 .\.venv\Scripts\danta.exe daily-report
 .\.venv\Scripts\danta.exe intraday-report
+.\.venv\Scripts\danta.exe daily-cycle
+.\.venv\Scripts\danta.exe assure
+.\.venv\Scripts\danta.exe paper-trade --mandate .\private\ENTRY_MANDATE.yaml
 ```
 
 - 첫 번째 doctor는 자격증명 형식과 안전정책만 검사한다.
@@ -200,6 +218,11 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 - 대시보드 `--demo`와 `--input`은 동시에 사용할 수 없으며, 입력 JSON은 적격 후보 전부의 기간별 AI 4단계 등급과 코멘트를 반드시 가져야 한다.
 - `daily-report`는 KRX 자격정보를 Git 제외 파일에서 읽고 KOSPI 실제 후보 JSON과 정적 대시보드를 함께 원자적으로 생성한다. 기본 동작으로 후보 30개의 KIS 현재가를 교차검증하며 2% 초과 불일치, 수급 그룹 누락, 일별 전 종목 스냅샷 불완전 시 이전 보고서를 덮어쓰지 않는다. 데이터 공급자 장애 조사 때만 `--skip-kis-validation`으로 명시적인 미검증 오프라인 보고서를 만들 수 있다.
 - `intraday-report`는 `kospi-market-cap-top200-v1`을 적용하고 최근 21거래일 KIS 1분봉을 종목·거래일 파일로 원자 저장한다. 재실행 시 정규장 커버리지 검증을 통과한 파일을 건너뛰고 미완료 구간부터 재개하며, 완료 후 200개 전체의 7·14·21일 분석을 `50/30/20`으로 합성해 정량 상위 50개를 공개 검토군으로 생성한다.
+- `paper-trade`는 `--execute`가 없으면 승인문·정책만 검증하고 종료한다. 실제 모의주문은
+  설정의 `paper_order_execution_enabled=true`, 모의 자격증명, 최신 DB 마이그레이션,
+  유효한 승인문, `--execute`가 모두 있어야 시작한다.
+- `assure` 종료코드가 0이 아니면 신규 모의매수를 시작하지 않는다. 보호 경로의 검증과
+  신규매수 허용은 별도 상태다.
 
 기본 로컬 DB는 빠른 테스트를 위해 SQLite를 사용한다. PostgreSQL 통합 검증은 `docker compose up -d postgres` 후 `DANTA_DATABASE_URL`을 주입해서 수행한다.
 

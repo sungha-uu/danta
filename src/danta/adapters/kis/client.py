@@ -24,6 +24,8 @@ MINUTE_DAILY_CHART_PATH = (
 BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 ORDERABLE_PATH = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
 CASH_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
+DAILY_ORDER_PATH = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+REVISE_CANCEL_PATH = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
 
 
 class KisApiError(RuntimeError):
@@ -68,6 +70,22 @@ class OrderableCash:
 class CashOrderReceipt:
     broker_order_no: str
     order_time: str
+    branch_no: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class KisOrderStatus:
+    broker_order_no: str
+    original_order_no: str
+    symbol: str
+    side: str
+    ordered_quantity: int
+    filled_quantity: int
+    remaining_quantity: int
+    order_price: int
+    average_fill_price: Decimal
+    order_time: str
+    branch_no: str
 
 
 class KisClient:
@@ -411,6 +429,112 @@ class KisClient:
         return CashOrderReceipt(
             broker_order_no=str(output["ODNO"]),
             order_time=str(output.get("ORD_TMD", "")),
+            branch_no=str(output.get("KRX_FWDG_ORD_ORGNO", "")),
+        )
+
+    async def daily_order_statuses(
+        self,
+        *,
+        trading_date: str,
+        symbol: str = "",
+        broker_order_no: str = "",
+    ) -> list[KisOrderStatus]:
+        self._validate_date(trading_date)
+        if symbol:
+            self._validate_symbol(symbol)
+        tr_id = (
+            "VTTC0081R"
+            if self.credentials.environment is TradingEnvironment.PAPER
+            else "TTTC0081R"
+        )
+        body = await self._authorized_request(
+            "GET",
+            DAILY_ORDER_PATH,
+            tr_id=tr_id,
+            params={
+                "CANO": self.credentials.account_no,
+                "ACNT_PRDT_CD": self.credentials.product_code,
+                "INQR_STRT_DT": trading_date,
+                "INQR_END_DT": trading_date,
+                "SLL_BUY_DVSN_CD": "00",
+                "PDNO": symbol,
+                "CCLD_DVSN": "00",
+                "INQR_DVSN": "00",
+                "INQR_DVSN_3": "00",
+                "ORD_GNO_BRNO": "",
+                "ODNO": broker_order_no,
+                "INQR_DVSN_1": "",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+                "EXCG_ID_DVSN_CD": "KRX",
+            },
+        )
+        rows = body.get("output1", [])
+        if not isinstance(rows, list):
+            raise KisApiError("KIS daily order response output1 is invalid")
+        result: list[KisOrderStatus] = []
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("odno"):
+                continue
+            side_name = str(row.get("sll_buy_dvsn_cd_name", ""))
+            side = "BUY" if "매수" in side_name else "SELL"
+            result.append(
+                KisOrderStatus(
+                    broker_order_no=str(row["odno"]),
+                    original_order_no=str(row.get("orgn_odno", "")),
+                    symbol=str(row.get("pdno", "")),
+                    side=side,
+                    ordered_quantity=int(row.get("ord_qty", "0") or "0"),
+                    filled_quantity=int(row.get("tot_ccld_qty", "0") or "0"),
+                    remaining_quantity=int(row.get("rmn_qty", "0") or "0"),
+                    order_price=int(row.get("ord_unpr", "0") or "0"),
+                    average_fill_price=Decimal(str(row.get("avg_prvs", "0") or "0")),
+                    order_time=str(row.get("ord_tmd", "")),
+                    branch_no=str(row.get("ord_gno_brno", "")),
+                )
+            )
+        return result
+
+    async def cancel_cash_order(
+        self,
+        *,
+        broker_order_no: str,
+        branch_no: str,
+        quantity: int,
+    ) -> CashOrderReceipt:
+        if not self._order_submission_enabled:
+            raise PermissionError("KIS order submission is locked")
+        if self.credentials.environment is TradingEnvironment.PROD:
+            raise PermissionError("KIS production order submission is locked during Phase 0")
+        if not broker_order_no or not branch_no:
+            raise ValueError("broker_order_no and branch_no are required")
+        if quantity <= 0:
+            raise ValueError("quantity must be positive")
+        body = await self._authorized_request(
+            "POST",
+            REVISE_CANCEL_PATH,
+            tr_id="VTTC0013U",
+            json_body={
+                "CANO": self.credentials.account_no,
+                "ACNT_PRDT_CD": self.credentials.product_code,
+                "KRX_FWDG_ORD_ORGNO": branch_no,
+                "ORGN_ODNO": broker_order_no,
+                "ORD_DVSN": "00",
+                "RVSE_CNCL_DVSN_CD": "02",
+                "ORD_QTY": str(quantity),
+                "ORD_UNPR": "0",
+                "QTY_ALL_ORD_YN": "Y",
+                "EXCG_ID_DVSN_CD": "KRX",
+                "CNDT_PRIC": "",
+            },
+        )
+        output = body.get("output")
+        if not isinstance(output, dict) or not output.get("ODNO"):
+            raise KisApiError("KIS cancel response did not include an order number")
+        return CashOrderReceipt(
+            broker_order_no=str(output["ODNO"]),
+            order_time=str(output.get("ORD_TMD", "")),
+            branch_no=str(output.get("KRX_FWDG_ORD_ORGNO", branch_no)),
         )
 
     async def _authorized_request(

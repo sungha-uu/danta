@@ -36,6 +36,9 @@ class AppSettings(BaseModel):
     stop_sell_requires_confirmation: bool = False
     paper_order_execution_enabled: bool = False
     real_order_execution_enabled: bool = False
+    maximum_managed_symbols: int = Field(default=3, ge=1, le=20)
+    order_poll_interval_seconds: Decimal = Field(default=Decimal("2.0"), ge=Decimal("1"))
+    market_data_stale_seconds: int = Field(default=10, ge=2, le=60)
 
     @model_validator(mode="after")
     def enforce_immutable_safety_policy(self) -> AppSettings:

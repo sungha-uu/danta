@@ -28,11 +28,16 @@ class OrderIntentModel(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(String(160), unique=True)
-    approval_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     symbol: Mapped[str] = mapped_column(String(12), index=True)
     side: Mapped[str] = mapped_column(String(8))
     cause: Mapped[str] = mapped_column(String(32))
     quantity: Mapped[int] = mapped_column(Integer)
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+    priority: Mapped[int] = mapped_column(Integer, default=50)
+    order_type: Mapped[str] = mapped_column(String(16), default="MARKET")
+    limit_price: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    policy_version: Mapped[str] = mapped_column(String(64), default="unknown")
     status: Mapped[str] = mapped_column(String(24))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

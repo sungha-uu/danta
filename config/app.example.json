@@ -13,5 +13,8 @@
   "stop_loss_pct": "7.0",
   "stop_sell_requires_confirmation": false,
   "paper_order_execution_enabled": false,
-  "real_order_execution_enabled": false
+  "real_order_execution_enabled": false,
+  "maximum_managed_symbols": 3,
+  "order_poll_interval_seconds": "2.0",
+  "market_data_stale_seconds": 10
 }

@@ -23,14 +23,17 @@ from danta.config import (
 from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
 from danta.dashboard.models import DashboardReport
+from danta.domain.mandate import parse_entry_mandate
 from danta.services.active_box_walk_forward import run_active_box_walk_forward
 from danta.services.ai_review import apply_ai_review, load_ai_review
+from danta.services.assurance import build_assurance_report, write_assurance_report
 from danta.services.candidate_report import CandidateReportError, build_quant_report
 from danta.services.candidate_validation import (
     CandidateValidationError,
     validate_candidate_quotes,
 )
 from danta.services.context_review import PublicContextCollector, build_context_review
+from danta.services.daily_pipeline import run_daily_pipeline
 from danta.services.intraday_report import (
     MinuteBarStore,
     backfill_minute_bars,
@@ -38,6 +41,8 @@ from danta.services.intraday_report import (
     market_cap_top_universe,
 )
 from danta.services.notifier import NotificationError, SmtpNotifier
+from danta.services.paper_trading_application import PaperTradingApplication
+from danta.services.policy_registry import load_policy_registry
 from danta.services.provider_doctor import KisProviderDoctor
 
 
@@ -169,6 +174,57 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("dashboard/dist"),
     )
     context_review.add_argument("--refresh", action="store_true")
+    paper = subparsers.add_parser(
+        "paper-trade",
+        help="run the approved KIS paper execution runtime",
+    )
+    paper.add_argument("--mandate", type=Path, required=True)
+    paper.add_argument(
+        "--policies",
+        type=Path,
+        default=Path("config/trading_policies.paper.json"),
+    )
+    paper.add_argument(
+        "--execute",
+        action="store_true",
+        help="required second gate; without it only validates inputs",
+    )
+    assurance = subparsers.add_parser(
+        "assure",
+        help="write the machine-readable paper readiness report",
+    )
+    assurance.add_argument(
+        "--policies",
+        type=Path,
+        default=Path("config/trading_policies.paper.json"),
+    )
+    assurance.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/assurance/latest.json"),
+    )
+    cycle = subparsers.add_parser(
+        "daily-cycle",
+        help="run the complete local KOSPI 200, top-50 review, dashboard cycle",
+    )
+    cycle.add_argument("--data-root", type=Path, default=Path("data/intraday/1m"))
+    cycle.add_argument(
+        "--report-output",
+        type=Path,
+        default=Path("data/candidate_intraday_public_report.json"),
+    )
+    cycle.add_argument(
+        "--review-output",
+        type=Path,
+        default=Path("data/context-review-latest.json"),
+    )
+    cycle.add_argument(
+        "--dashboard-output", type=Path, default=Path("dashboard/dist")
+    )
+    cycle.add_argument(
+        "--context-cache", type=Path, default=Path("data/public-context")
+    )
+    cycle.add_argument("--use-context-cache", action="store_true")
     return parser
 
 
@@ -191,6 +247,70 @@ async def _doctor(live: bool, symbol: str) -> int:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "assure":
+        try:
+            assurance_report = build_assurance_report(
+                load_settings(),
+                load_policy_registry(args.policies),
+                project_root=Path.cwd(),
+            )
+            write_assurance_report(assurance_report, args.output)
+        except (OSError, ValueError, ValidationError) as exc:
+            print(f"assurance failed: {exc}", file=sys.stderr)
+            raise SystemExit(11) from None
+        print(json.dumps(assurance_report.as_dict(), ensure_ascii=False, indent=2))
+        raise SystemExit(0 if assurance_report.ready_for_new_paper_entries else 12)
+    if args.command == "daily-cycle":
+        try:
+            result = asyncio.run(
+                run_daily_pipeline(
+                    load_settings(),
+                    data_root=args.data_root,
+                    report_output=args.report_output,
+                    review_output=args.review_output,
+                    dashboard_output=args.dashboard_output,
+                    context_cache_root=args.context_cache,
+                    refresh_context=not args.use_context_cache,
+                    progress=lambda message: print(message, flush=True),
+                )
+            )
+        except (
+            ValueError,
+            RuntimeError,
+            KrxDataError,
+            KisApiError,
+            CandidateReportError,
+        ) as exc:
+            print(f"daily cycle failed: {exc}", file=sys.stderr)
+            raise SystemExit(13) from None
+        print(
+            f"daily cycle completed: {result.candidate_count} candidates, "
+            f"{result.deep_review_count} context reviews, {result.dashboard_path}"
+        )
+        return
+    if args.command == "paper-trade":
+        try:
+            settings = load_settings()
+            mandate = parse_entry_mandate(args.mandate.read_text(encoding="utf-8"))
+            policies = load_policy_registry(args.policies)
+            credentials = load_kis_credentials(settings)
+            if not args.execute:
+                print(
+                    "paper runtime inputs are valid; no order was sent. "
+                    "Pass --execute to start the long-running runtime."
+                )
+                return
+            application = PaperTradingApplication(
+                settings=settings,
+                credentials=credentials,
+                mandate=mandate,
+                policies=policies,
+            )
+            asyncio.run(application.run())
+        except (OSError, ValueError, ValidationError, PermissionError, KisApiError) as exc:
+            print(f"paper runtime refused to start: {exc}", file=sys.stderr)
+            raise SystemExit(10) from None
+        return
     if args.command == "doctor":
         try:
             raise SystemExit(asyncio.run(_doctor(args.live, args.symbol)))

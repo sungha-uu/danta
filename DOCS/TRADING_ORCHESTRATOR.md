@@ -4,7 +4,20 @@
 - 기준 모듈명: `TradingOrchestrator`
 - 현재 운용 한도: 사용자 승인 종목 최대 3개
 - 확장 목표: 동일 계좌에서 설정·검증된 임의 개수 `N`개 종목
-- 현재 단계: 설계 완료, 모의투자 구현 전
+- 현재 단계: 모의 실행 후보판 구현 완료, KIS 모의 장애 검증 전
+
+구현 매핑은 다음과 같다.
+
+- 중앙 코어: `src/danta/services/trading_orchestrator.py`
+- 실시간 실행: `src/danta/services/trading_runtime.py`
+- KIS 모의 조립: `src/danta/services/paper_trading_application.py`
+- 종목 actor: `src/danta/services/symbol_actor.py`
+- 자금·우선순위: `capital_allocator.py`, `priority_intent_scheduler.py`
+- 주문·영속성·복구: `order_manager.py`, `sql_order_journal.py`,
+  `runtime_repository.py`, `reconciliation.py`
+
+아직 실제 KIS 모의계좌에서 주문 응답 유실, PC 강제종료, 거래정지, 하한가,
+부분체결 후 재시작을 통과하지 않았으므로 실전 승격 상태가 아니다.
 
 ## 1. 역할
 

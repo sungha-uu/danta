@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -260,6 +261,98 @@ async def test_enabled_paper_limit_buy_maps_official_order_contract(
         await client.close()
 
     assert receipt.broker_order_no == "0000123456"
+
+
+async def test_daily_order_status_maps_reconciliation_fields(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "token",
+                    "access_token_token_expired": "2099-01-01 00:00:00",
+                },
+            )
+        assert request.url.path.endswith("/inquire-daily-ccld")
+        assert request.headers["tr_id"] == "VTTC0081R"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output1": [
+                    {
+                        "odno": "12345",
+                        "orgn_odno": "",
+                        "pdno": "005930",
+                        "sll_buy_dvsn_cd_name": "현금매수",
+                        "ord_qty": "10",
+                        "tot_ccld_qty": "4",
+                        "rmn_qty": "6",
+                        "ord_unpr": "70000",
+                        "avg_prvs": "69950",
+                        "ord_tmd": "101010",
+                        "ord_gno_brno": "06010",
+                    }
+                ],
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        statuses = await client.daily_order_statuses(
+            trading_date="20260728", symbol="005930"
+        )
+    finally:
+        await client.close()
+    assert statuses[0].filled_quantity == 4
+    assert statuses[0].remaining_quantity == 6
+    assert statuses[0].average_fill_price == Decimal("69950")
+    assert statuses[0].side == "BUY"
+
+
+async def test_cancel_order_uses_official_paper_contract(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "token",
+                    "access_token_token_expired": "2099-01-01 00:00:00",
+                },
+            )
+        assert request.url.path.endswith("/order-rvsecncl")
+        assert request.headers["tr_id"] == "VTTC0013U"
+        body = json.loads(request.content)
+        assert body["RVSE_CNCL_DVSN_CD"] == "02"
+        assert body["QTY_ALL_ORD_YN"] == "Y"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output": {
+                    "ODNO": "54321",
+                    "ORD_TMD": "101111",
+                    "KRX_FWDG_ORD_ORGNO": "06010",
+                },
+            },
+        )
+
+    client = KisClient(
+        credentials,
+        transport=httpx.MockTransport(handler),
+        order_submission_enabled=True,
+    )
+    try:
+        receipt = await client.cancel_cash_order(
+            broker_order_no="12345", branch_no="06010", quantity=6
+        )
+    finally:
+        await client.close()
+    assert receipt.broker_order_no == "54321"
 
 
 @pytest.mark.asyncio

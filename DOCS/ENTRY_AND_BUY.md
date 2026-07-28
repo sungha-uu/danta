@@ -1,7 +1,7 @@
 # 자동매수 알고리즘
 
 - 문서 등급: 활성 진입 기준
-- 현재 단계: `entry-engine-v0` 설계, 모의투자 구현 전
+- 현재 단계: `entry-stabilization-paper-v1` 구현, 모의 체결 검증 전
 - 적용 우선순위: 사용자 `ENTRY_MANDATE` 범위 안에서만 동작
 - 실시간 실행 주체: 버전이 고정된 로컬 Python 엔진
 
