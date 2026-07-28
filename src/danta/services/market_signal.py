@@ -37,8 +37,12 @@ class RollingMarketSignal:
             raise ValueError("event symbol does not match signal state")
         if isinstance(event, TradeTick):
             self._trades.append(event)
-        else:
+        elif isinstance(event, OrderBookTick):
             self._orderbook = event
+
+    @property
+    def trade_count(self) -> int:
+        return len(self._trades)
 
     @property
     def ready(self) -> bool:

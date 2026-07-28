@@ -8,6 +8,7 @@ from typing import cast
 from pydantic import BaseModel, Field, model_validator
 
 from danta.domain.entry import EntryPolicy
+from danta.domain.premarket import PremarketPolicy
 from danta.domain.risk import ExitPolicy
 
 
@@ -61,17 +62,46 @@ class ExitPolicyConfig(BaseModel):
         )
 
 
+class PremarketPolicyConfig(BaseModel):
+    version: str
+    approved_for_paper: bool = False
+    minimum_nxt_trade_samples: int = Field(gt=0)
+    maximum_snapshot_age_seconds: int = Field(gt=0)
+    early_loss_pct: Decimal
+    strong_loss_pct: Decimal
+    sell_pressure_threshold: Decimal = Field(ge=0, le=1)
+    market_stress_threshold: Decimal = Field(ge=0, le=1)
+
+    def to_domain(self) -> PremarketPolicy:
+        return PremarketPolicy(
+            version=self.version,
+            approved=self.approved_for_paper,
+            minimum_nxt_trade_samples=self.minimum_nxt_trade_samples,
+            maximum_snapshot_age_seconds=self.maximum_snapshot_age_seconds,
+            early_loss_pct=self.early_loss_pct,
+            strong_loss_pct=self.strong_loss_pct,
+            sell_pressure_threshold=self.sell_pressure_threshold,
+            market_stress_threshold=self.market_stress_threshold,
+        )
+
+
 class TradingPolicyRegistry(BaseModel):
     schema_version: str
     entry: EntryPolicyConfig
     exit: ExitPolicyConfig
+    premarket: PremarketPolicyConfig
 
     @model_validator(mode="after")
     def require_unique_versions(self) -> TradingPolicyRegistry:
         if not self.schema_version.strip():
             raise ValueError("schema_version is required")
-        if self.entry.version == self.exit.version:
-            raise ValueError("entry and exit policy versions must be distinct")
+        versions = {
+            self.entry.version,
+            self.exit.version,
+            self.premarket.version,
+        }
+        if len(versions) != 3:
+            raise ValueError("entry, exit, and premarket versions must be distinct")
         return self
 
 

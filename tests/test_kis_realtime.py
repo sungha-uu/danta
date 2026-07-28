@@ -2,10 +2,17 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from danta.adapters.kis.realtime import (
+    EXPECTED_TRADE_COLUMNS,
+    EXPECTED_TRADE_TR_ID,
+    NXT_ORDERBOOK_COLUMNS,
+    NXT_ORDERBOOK_TR_ID,
+    NXT_TRADE_TR_ID,
     ORDERBOOK_COLUMNS,
     ORDERBOOK_TR_ID,
     TRADE_COLUMNS,
     TRADE_TR_ID,
+    ExpectedPriceTick,
+    MarketVenue,
     OrderBookTick,
     TradeTick,
     parse_realtime_message,
@@ -58,6 +65,7 @@ def test_trade_and_orderbook_frames_map_official_columns() -> None:
             bid_quantity=200,
             total_ask_quantity=1000,
             total_bid_quantity=1200,
+            change_rate=Decimal("0"),
         )
     ]
 
@@ -113,3 +121,69 @@ def test_rolling_signal_builds_normalized_snapshot() -> None:
     assert snapshot.symbol == "005930"
     assert Decimal("0") <= snapshot.sell_pressure_score <= Decimal("1")
     assert Decimal("0") <= snapshot.buy_recovery_score <= Decimal("1")
+
+
+def test_nxt_trade_and_orderbook_frames_preserve_venue() -> None:
+    observed_at = datetime.now(UTC)
+    trade = parse_realtime_message(
+        _frame(
+            NXT_TRADE_TR_ID,
+            TRADE_COLUMNS,
+            [
+                {
+                    "symbol": "000660",
+                    "price": "1800000",
+                    "change_rate": "-3.25",
+                    "ask1": "1801000",
+                    "bid1": "1800000",
+                    "trade_strength": "72.1",
+                }
+            ],
+        ),
+        received_at=observed_at,
+    )[0]
+    assert isinstance(trade, TradeTick)
+    assert trade.venue is MarketVenue.NXT
+    assert trade.change_rate == Decimal("-3.25")
+
+    row = {"symbol": "000660"}
+    for index in range(1, 11):
+        row[f"ask{index}"] = str(1800000 + index * 1000)
+        row[f"bid{index}"] = str(1801000 - index * 1000)
+    book = parse_realtime_message(
+        _frame(NXT_ORDERBOOK_TR_ID, NXT_ORDERBOOK_COLUMNS, [row]),
+        received_at=observed_at,
+    )[0]
+    assert isinstance(book, OrderBookTick)
+    assert book.venue is MarketVenue.NXT
+
+
+def test_krx_expected_price_frame_maps_official_contract() -> None:
+    observed_at = datetime.now(UTC)
+    event = parse_realtime_message(
+        _frame(
+            EXPECTED_TRADE_TR_ID,
+            EXPECTED_TRADE_COLUMNS,
+            [
+                {
+                    "symbol": "005930",
+                    "price": "240000",
+                    "change_rate": "-4.0",
+                    "ask1": "240500",
+                    "bid1": "240000",
+                    "accumulated_volume": "12345",
+                }
+            ],
+        ),
+        received_at=observed_at,
+    )[0]
+    assert event == ExpectedPriceTick(
+        symbol="005930",
+        observed_at=observed_at,
+        expected_price=240000,
+        best_ask=240500,
+        best_bid=240000,
+        expected_volume=12345,
+        change_rate=Decimal("-4.0"),
+        venue=MarketVenue.KRX,
+    )

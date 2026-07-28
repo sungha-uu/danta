@@ -126,3 +126,6 @@
 - 외부 API: `provider_capability_snapshot`, 공식 문서 확인일
 
 기능은 코드, 정상·경계·장애 테스트, 설정, 로그·메트릭, 문서, 모의 검증, 품질 체크 증거가 모두 있어야 완료다. 미정 값은 숨기지 않고 `TBD`로 남기며 실계좌에서는 시작을 차단한다.
+# 2026-07-28 활성 문서 추가
+
+- 익일 보유종목 보호 기준: [`NXT_OVERNIGHT_PROTECTION.md`](NXT_OVERNIGHT_PROTECTION.md)

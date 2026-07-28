@@ -411,3 +411,10 @@ src/danta/
 8. 향후 종목 수 확대는 측정된 안전 용량과 사용자 승인으로 별도 승격
 
 초기 구현의 완료 기준은 “여러 종목을 동시에 감시한다”가 아니라 **동시 사건에서도 자금 초과·중복 주문·보호 공백이 없고 재시작 후 KIS 상태로 복구된다**는 증거다.
+# NXT 장전 보호 연동
+
+전일 보유종목 보호는
+[`NXT_OVERNIGHT_PROTECTION.md`](NXT_OVERNIGHT_PROTECTION.md)를 따른다.
+장전 모듈은 주문을 직접 전송하지 않고 09시 이후 `ExitDecision`만 기존
+우선순위 큐에 전달한다. `HARD_STOP`은 P0, `EARLY_DEFENSE/STRONG_DEFENSE`는
+보호매도 우선순위이며 BUY 의도는 허용하지 않는다.

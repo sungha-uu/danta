@@ -49,6 +49,29 @@ async def test_paper_client_uses_vts_and_maps_quote(credentials: KisCredentials)
 
 
 @pytest.mark.asyncio
+async def test_current_price_supports_nxt_market_division(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.url.params["FID_COND_MRKT_DIV_CODE"] == "NX"
+        return httpx.Response(
+            200,
+            json={"rt_cd": "0", "output": {"stck_prpr": "81200", "prdy_ctrt": "-1.2"}},
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        quote = await client.current_price("005930", market_division="NX")
+        with pytest.raises(ValueError, match="J, NX, or UN"):
+            await client.current_price("005930", market_division="INVALID")
+    finally:
+        await client.close()
+    assert quote.change_rate == Decimal("-1.2")
+
+
+@pytest.mark.asyncio
 async def test_invalid_symbol_never_calls_network(credentials: KisCredentials) -> None:
     client = KisClient(credentials, transport=httpx.MockTransport(lambda _: None))
     try:

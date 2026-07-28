@@ -170,13 +170,22 @@ class KisClient:
             raise KisApiError("KIS WebSocket response did not include approval_key")
         return approval_key
 
-    async def current_price(self, symbol: str) -> Quote:
+    async def current_price(
+        self,
+        symbol: str,
+        *,
+        market_division: str = "J",
+    ) -> Quote:
         self._validate_symbol(symbol)
+        self._validate_market_division(market_division)
         body = await self._authorized_request(
             "GET",
             PRICE_PATH,
             tr_id="FHKST01010100",
-            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol},
+            params={
+                "FID_COND_MRKT_DIV_CODE": market_division,
+                "FID_INPUT_ISCD": symbol,
+            },
         )
         output = body.get("output")
         if not isinstance(output, dict):
@@ -665,3 +674,8 @@ class KisClient:
     def _validate_date(value: str) -> None:
         if len(value) != 8 or not value.isdigit():
             raise ValueError("KIS date must use YYYYMMDD")
+
+    @staticmethod
+    def _validate_market_division(value: str) -> None:
+        if value not in {"J", "NX", "UN"}:
+            raise ValueError("market division must be J, NX, or UN")
