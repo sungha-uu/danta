@@ -96,6 +96,12 @@ def load_settings() -> AppSettings:
     data = _read_json(path)
     if database_url := os.getenv("DANTA_DATABASE_URL"):
         data["database_url"] = database_url
+    if paper_execution := os.getenv("DANTA_PAPER_ORDER_EXECUTION_ENABLED"):
+        data["paper_order_execution_enabled"] = paper_execution.lower() in {
+            "1",
+            "true",
+            "yes",
+        }
     return AppSettings.model_validate(data)
 
 

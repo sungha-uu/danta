@@ -41,6 +41,7 @@ from danta.services.intraday_report import (
     market_cap_top_universe,
 )
 from danta.services.notifier import NotificationError, SmtpNotifier
+from danta.services.paper_broker_campaign import PaperBrokerCampaign
 from danta.services.paper_trading_application import PaperTradingApplication
 from danta.services.policy_registry import load_policy_registry
 from danta.services.provider_doctor import KisProviderDoctor
@@ -225,6 +226,18 @@ def _parser() -> argparse.ArgumentParser:
         "--context-cache", type=Path, default=Path("data/public-context")
     )
     cycle.add_argument("--use-context-cache", action="store_true")
+    campaign = subparsers.add_parser(
+        "paper-campaign",
+        help="run the isolated one-share Samsung/SK hynix paper lifecycle campaign",
+    )
+    campaign.add_argument("--execute", action="store_true")
+    campaign.add_argument("--fill-timeout-seconds", type=int, default=90)
+    campaign.add_argument("--monitor-seconds", type=int, default=30)
+    campaign.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/paper-campaign/latest.jsonl"),
+    )
     return parser
 
 
@@ -286,6 +299,44 @@ def main() -> None:
         print(
             f"daily cycle completed: {result.candidate_count} candidates, "
             f"{result.deep_review_count} context reviews, {result.dashboard_path}"
+        )
+        return
+    if args.command == "paper-campaign":
+        if not args.execute:
+            print("paper campaign validated no action; pass --execute to submit paper orders")
+            return
+        try:
+            settings = load_settings()
+            campaign = PaperBrokerCampaign(
+                settings=settings,
+                credentials=load_kis_credentials(settings),
+                policies=load_policy_registry(
+                    Path("config/trading_policies.paper.json")
+                ),
+                output=args.output,
+                fill_timeout_seconds=args.fill_timeout_seconds,
+                monitor_seconds=args.monitor_seconds,
+            )
+            results = asyncio.run(
+                campaign.run(
+                    symbols=("000660", "005930"),
+                    discounts=tuple(
+                        Decimal(index) / Decimal("10") for index in range(11)
+                    ),
+                )
+            )
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            PermissionError,
+            KisApiError,
+        ) as exc:
+            print(f"paper campaign stopped safely: {exc}", file=sys.stderr)
+            raise SystemExit(14) from None
+        print(
+            f"paper campaign completed: {len(results)} steps, "
+            f"{sum(item.status == 'ROUND_TRIP_FILLED' for item in results)} fills"
         )
         return
     if args.command == "paper-trade":

@@ -208,6 +208,8 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 .\.venv\Scripts\danta.exe daily-cycle
 .\.venv\Scripts\danta.exe assure
 .\.venv\Scripts\danta.exe paper-trade --mandate .\private\ENTRY_MANDATE.yaml
+$env:DANTA_PAPER_ORDER_EXECUTION_ENABLED='true'
+.\.venv\Scripts\danta.exe paper-campaign --execute
 ```
 
 - 첫 번째 doctor는 자격증명 형식과 안전정책만 검사한다.
@@ -221,6 +223,14 @@ KIS 모의 자격증명을 `.secrets/kis/paper.json`에 직접 입력한 뒤:
 - `paper-trade`는 `--execute`가 없으면 승인문·정책만 검증하고 종료한다. 실제 모의주문은
   설정의 `paper_order_execution_enabled=true`, 모의 자격증명, 최신 DB 마이그레이션,
   유효한 승인문, `--execute`가 모두 있어야 시작한다.
+- `paper-campaign`은 전용 빈 모의계좌에서만 삼성전자·SK하이닉스 각 1주를
+  현재가와 `-0.1%`~`-1.0%` 목표가로 순차 시험하는 제한된 브로커 수명주기 도구다.
+  단계별 90초 내 미체결 주문은 취소하고, 체결 주문은 30초 실시간 감시 후 다음 시험을
+  위해 시장가로 청산한다. 환경변수 게이트는 해당 프로세스에만 열며
+  `config/app.json`의 기본 잠금은 변경하지 않는다.
+- 캠페인 JSONL에는 주문번호가 포함될 수 있으므로 `data/paper-campaign/` 밖이나
+  Git·Pages·이메일로 복사하지 않는다. 이 캠페인은 브로커 연결 검증이지
+  진입전략 수익성, -7% 실발동, 부분체결·강제종료 복구의 증거가 아니다.
 - `assure` 종료코드가 0이 아니면 신규 모의매수를 시작하지 않는다. 보호 경로의 검증과
   신규매수 허용은 별도 상태다.
 
