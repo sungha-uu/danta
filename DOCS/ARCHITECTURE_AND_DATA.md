@@ -94,6 +94,21 @@ domain <- application <- adapters <- entrypoints
 - 이메일·GitHub 장애는 주문 엔진을 중단시키지 않는다.
 - AI 프로세스가 종료돼도 열린 포지션의 손절·익절·잔고대조는 계속 실행된다.
 
+### 자동매도 모듈 경계
+
+자동매도는 매수·대시보드·일일 후보 스크립트에 조건문으로 흩어놓지 않는다. 다른 자동화가 재사용할 수 있도록 다음 경계로 분리한다.
+
+| 위치 | 책임 | 금지 |
+| --- | --- | --- |
+| `domain/risk.py` 또는 향후 `domain/risk/` 패키지 | 손익 구간, 순수 점수·상태전이, `ExitDecision` 생성 | KIS 호출, DB, 이메일 |
+| `adapters/kis/realtime.py` | KIS 체결·호가·시장 이벤트를 내부 모델로 변환 | 손절 정책 판단 |
+| `services/risk_engine.py` | 포지션별 상태, 시간창 지표, 정책 호출, 복구 | 브로커 필드 직접 해석 |
+| `services/market_regime_guard.py` | 정상·업종 위험·시장 위험·패닉 판정과 신규매수 차단 | 개별 주문 직접 제출 |
+| `services/order_manager.py` | 멱등 `ExitIntent`, 전량 시장가 주문·부분체결·잔고 대조 | 임의 전략 변경 |
+| `services/risk_replay.py` | 저장된 실제 사례를 같은 정책 버전으로 재생·비교 | 실계좌 주문 |
+
+현재 `domain/risk.py`의 평균 체결가·`-7%` 가격·발동 함수는 순수 핵심으로 유지한다. 단계형 방어 로직을 구현할 때 파일 하나가 비대해지면 동일 공개 API를 유지한 `domain/risk/` 패키지로 분리한다. 호출자는 내부 파일이 아니라 `RiskEngine.evaluate(snapshot) -> ExitDecision` 계약에만 의존한다.
+
 ## 5. 핵심 데이터
 
 | 테이블 | 역할 |
