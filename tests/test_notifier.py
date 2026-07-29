@@ -108,3 +108,50 @@ def test_stage_notification_contains_stage_and_detail(monkeypatch: object) -> No
     plain_body = message.get_body(preferencelist=("plain",))
     assert plain_body is not None
     assert "감사 풀 50종목" in plain_body.get_content()
+
+
+def test_entry_price_notification_is_simple_and_exact(monkeypatch: object) -> None:
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_entry_prices_determined(
+        [("SK하이닉스", 1_450_000), ("삼성전자", 208_500)]
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert message["Subject"] == "지정가격 산정완료."
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert plain_body.get_content().strip() == (
+        "SK하이닉스 1,450,000원\n삼성전자 208,500원"
+    )
+
+
+def test_stop_loss_notification_contains_fill_and_return(monkeypatch: object) -> None:
+    from decimal import Decimal
+
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_stop_loss_completed(
+        [
+            ("SK하이닉스", 1_479_300, Decimal("-6.96")),
+            ("삼성전자", 213_000, Decimal("-6.99")),
+        ]
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert message["Subject"] == "자동손절 체결완료."
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert plain_body.get_content().strip() == (
+        "SK하이닉스 1,479,300원 -7.0%\n삼성전자 213,000원 -7.0%"
+    )

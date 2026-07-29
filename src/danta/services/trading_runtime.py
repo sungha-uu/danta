@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from danta.adapters.kis.client import KisOrderStatus
-from danta.adapters.kis.realtime import RealtimeEvent
+from danta.adapters.kis.realtime import MarketVenue, RealtimeEvent
 from danta.domain.entry import EntryPolicy, evaluate_entry
 from danta.domain.mandate import EntryMandate, PlannedEntry
 from danta.domain.market import MarketRisk
@@ -20,6 +22,23 @@ from danta.services.order_manager import (
     UnknownOrderOutcome,
 )
 from danta.services.trading_orchestrator import TradingOrchestrator
+
+KST = ZoneInfo("Asia/Seoul")
+REGULAR_ENTRY_OPEN = time(9, 0)
+REGULAR_ENTRY_CLOSE = time(15, 30)
+
+
+def regular_entry_session(event: RealtimeEvent, observed_at: datetime) -> bool:
+    """Return whether a realtime event may create a new KRX buy intent."""
+    if observed_at.tzinfo is None:
+        raise ValueError("observed_at must be timezone-aware")
+    if event.venue is not MarketVenue.KRX:
+        return False
+    local = observed_at.astimezone(KST)
+    return (
+        local.weekday() < 5
+        and REGULAR_ENTRY_OPEN <= local.time() < REGULAR_ENTRY_CLOSE
+    )
 
 
 @dataclass(slots=True)
@@ -203,7 +222,7 @@ class TradingRuntimeCore:
             SymbolState.WATCHING_ENTRY,
             SymbolState.BUY_PENDING,
             SymbolState.PARTIALLY_FILLED,
-        }:
+        } and regular_entry_session(event, observed_now):
             mandate = self._require_mandate()
             entry_decision = evaluate_entry(
                 snapshot,
@@ -277,7 +296,7 @@ class TradingRuntimeCore:
         price: int,
         observed_at: datetime,
     ) -> OrderIntent | None:
-        """Independent REST hard-stop path used when WebSocket health is unknown."""
+        """Independent REST loss-floor path used when WebSocket health is unknown."""
         position = self.positions.get(symbol)
         if position is None:
             return None
@@ -306,7 +325,10 @@ class TradingRuntimeCore:
             ),
             policy=self.exit_policy,
         )
-        if "HARD_STOP_MINUS_7" not in decision.reason_codes:
+        if not {
+            "HARD_STOP_MINUS_7",
+            "HARD_DEFENSE_MINUS_5",
+        }.intersection(decision.reason_codes):
             return None
         return await self.orchestrator.handle_exit_decision(
             decision, created_at=observed_at
@@ -376,6 +398,7 @@ class TradingRuntimeCore:
 
 
 OrderPumpErrorSink = Callable[[OrderIntent, BaseException], Awaitable[None]]
+OrderIntentSink = Callable[[OrderIntent], Awaitable[None]]
 
 
 class OrderPump:
@@ -385,16 +408,21 @@ class OrderPump:
         core: TradingRuntimeCore,
         manager: OrderManager,
         on_error: OrderPumpErrorSink | None = None,
+        on_intent_ready: OrderIntentSink | None = None,
     ) -> None:
         self.core = core
         self.manager = manager
         self.on_error = on_error
+        self.on_intent_ready = on_intent_ready
 
     async def run(self) -> None:
         scheduler = self.core.orchestrator.scheduler
         while True:
             intent = await scheduler.get()
             try:
+                if self.on_intent_ready is not None:
+                    with suppress(Exception):
+                        await self.on_intent_ready(intent)
                 try:
                     execution = await self.manager.execute(intent)
                     self.core.record_submission(intent, execution)

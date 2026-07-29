@@ -1482,7 +1482,7 @@ def build_intraday_report(
         )
     selected_symbols = [
         symbol
-        for symbol in ranked_symbols
+        for symbol in ranked_symbols[:50]
         if (
             _visible_period_values(analyses_by_window[14][symbol])[2]
             <= Decimal("35")
@@ -1498,12 +1498,12 @@ def build_intraday_report(
             "no symbol passed the official lower-zone and actual +10% gate"
         )
     fixed_ranks = {
-        symbol: rank for rank, symbol in enumerate(selected_symbols, start=1)
+        symbol: rank for rank, symbol in enumerate(ranked_symbols, start=1)
     }
     for days in WINDOW_DAYS:
         ranks_by_window[days] = fixed_ranks
-    views: list[CandidateView] = []
-    for symbol in selected_symbols:
+    views_by_symbol: dict[str, CandidateView] = {}
+    for symbol in ranked_symbols:
         windows: dict[str, WindowMetrics] = {}
         for days in WINDOW_DAYS:
             analysis = analyses_by_window.get(days, {}).get(symbol)
@@ -1531,8 +1531,7 @@ def build_intraday_report(
             )
         current_price = analyses_by_window[7][symbol].hourly_closes[-1]
         name = candidate_map[symbol].name
-        views.append(
-            CandidateView(
+        views_by_symbol[symbol] = CandidateView(
                 code=symbol,
                 name=name,
                 sector="KOSPI",
@@ -1543,8 +1542,18 @@ def build_intraday_report(
                 naver_url=HttpUrl(
                     f"https://finance.naver.com/item/main.naver?code={symbol}"
                 ),
-            )
         )
+    official_codes = set(selected_symbols)
+    official_views = [
+        views_by_symbol[symbol]
+        for symbol in ranked_symbols
+        if symbol in official_codes
+    ]
+    extended_views = [
+        views_by_symbol[symbol]
+        for symbol in ranked_symbols
+        if symbol not in official_codes
+    ]
     data_date = dataset.trading_dates[-1]
     ready_windows = [
         str(days)
@@ -1559,7 +1568,7 @@ def build_intraday_report(
             "6% 이상 비중복 반복 상승 연구 기준선"
         ),
         calculation_version=(
-            "intraday-actual-10pct-gate-v13-visible-extrema-top200-official30-all-reviewed-"
+            "intraday-actual-10pct-gate-v14-visible-extrema-top200-official30-ai50-"
             "kospi-market-cap-top200-v1"
         ),
         strategy_status=strategy_status,
@@ -1568,6 +1577,6 @@ def build_intraday_report(
         model_id="quant-intraday-baseline-no-llm",
         prompt_version="not-applied",
         is_demo=False,
-        candidates=views,
-        extended_watchlist=[],
+        candidates=official_views,
+        extended_watchlist=extended_views,
     )

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Danta KOSPI 시장 현황</title>
+  <style>
+    :root{font-family:Arial,"Malgun Gothic",sans-serif;color:#172033;background:#eef2f7}
+    *{box-sizing:border-box}body{margin:0}.top{background:#111b2b;color:#fff;padding:22px 28px;display:flex;justify-content:space-between;align-items:center}
+    h1{margin:0;font-size:28px}.stamp{color:#cbd5e1}.wrap{padding:22px;max-width:1500px;margin:auto}
+    .state{padding:16px 20px;border-radius:12px;margin-bottom:16px;background:#fff;border-left:8px solid #64748b}
+    .state.NORMAL{border-color:#15803d}.state.CAUTION{border-color:#d97706}.state.RISK_OFF,.state.PANIC{border-color:#dc2626}
+    .grid{display:grid;grid-template-columns:repeat(4,minmax(210px,1fr));gap:12px}.card{background:#fff;border:1px solid #d7deea;border-radius:12px;padding:17px}
+    .label{color:#64748b;font-size:14px}.value{font-size:27px;font-weight:700;margin-top:8px}.sub{margin-top:7px;color:#64748b;font-size:13px}
+    .flows{margin-top:16px;background:#fff;border:1px solid #d7deea;border-radius:12px;overflow:auto}
+    table{width:100%;border-collapse:collapse;min-width:1050px}th,td{padding:13px 15px;border-bottom:1px solid #e2e8f0;text-align:right}th{background:#2d3e6b;color:#fff}th:first-child,td:first-child{text-align:left}
+    .pos{color:#c62828}.neg{color:#2563b8}.notice{margin-top:12px;color:#64748b;font-size:13px}
+    @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.top{align-items:flex-start;gap:8px;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <header class="top"><h1>Danta KOSPI 시장 현황</h1><div class="stamp" id="stamp">데이터 불러오는 중</div></header>
+  <main class="wrap">
+    <section class="state" id="state"><strong id="stateText">상태 확인 중</strong><div class="sub" id="reasons"></div></section>
+    <section class="grid">
+      <article class="card"><div class="label">KOSPI</div><div class="value" id="kospi">-</div><div class="sub" id="kospiRange"></div></article>
+      <article class="card"><div class="label">시장 폭</div><div class="value" id="breadth">-</div><div class="sub" id="breadthDetail"></div></article>
+      <article class="card"><div class="label">외국인 누적 순매수</div><div class="value" id="foreign">-</div><div class="sub" id="foreignDelta"></div></article>
+      <article class="card"><div class="label">연기금 등 누적 순매수</div><div class="value" id="pension">-</div><div class="sub" id="pensionDelta"></div></article>
+    </section>
+    <section class="flows">
+      <table>
+        <thead><tr><th>구분</th><th>개인</th><th>외국인</th><th>기관</th><th>금융투자</th><th>투신</th><th>연기금 등</th><th>프로그램</th></tr></thead>
+        <tbody><tr><td>누적 순매수(억원)</td><td id="personal"></td><td id="foreignTable"></td><td id="institution"></td><td id="financial"></td><td id="trust"></td><td id="pensionTable"></td><td id="program"></td></tr></tbody>
+      </table>
+    </section>
+    <p class="notice">프로그램 매매는 투자자 분류가 아니라 주문 방식이므로 외국인·기관 금액과 합산하지 않습니다. ‘연기금 등’은 국민연금만의 수치가 아닙니다.</p>
+  </main>
+  <script>
+    const money=(v)=>`${(Number(v||0)/100).toLocaleString("ko-KR",{maximumFractionDigits:1})}억`;
+    const pct=(v)=>`${Number(v||0).toFixed(2)}%`;
+    const tone=(el,v)=>{el.className=Number(v)>=0?"pos":"neg"};
+    async function refresh(){
+      try{
+        const response=await fetch(`data/market-status.json?t=${Date.now()}`,{cache:"no-store"});
+        if(!response.ok) throw new Error(response.status);
+        const d=await response.json(), r=d.risk, k=d.kospi, b=d.breadth, i=d.investor_net_million, x=d.deltas_million;
+        stamp.textContent=`기준 ${new Date(d.observed_at).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"})}`;
+        state.className=`state ${r.level}`; stateText.textContent=`시장 상태: ${r.level}`; reasons.textContent=(r.reason_codes||[]).join(" · ");
+        kospi.textContent=`${Number(k.index).toLocaleString()} (${pct(k.return_pct)})`; tone(kospi,k.return_pct);
+        kospiRange.textContent=`시가 ${Number(k.open).toLocaleString()} · 고가 ${Number(k.high).toLocaleString()} · 저가 ${Number(k.low).toLocaleString()}`;
+        breadth.textContent=`하락 ${(Number(b.declining_ratio)*100).toFixed(1)}%`; breadthDetail.textContent=`상승 ${b.rising} · 보합 ${b.flat} · 하락 ${b.declining}`;
+        foreign.textContent=money(i.foreign); tone(foreign,i.foreign); foreignDelta.textContent=`5분 ${money(x.foreign_5m)} · 15분 ${money(x.foreign_15m)}`;
+        pension.textContent=money(i.pension_fund_etc); tone(pension,i.pension_fund_etc); pensionDelta.textContent=`5분 ${money(x.pension_5m)} · 15분 ${money(x.pension_15m)}`;
+        const fields={personal:i.personal,foreignTable:i.foreign,institution:i.institution,financial:i.financial_investment,trust:i.investment_trust,pensionTable:i.pension_fund_etc,program:d.program_net_million.total};
+        Object.entries(fields).forEach(([id,v])=>{const el=document.getElementById(id);el.textContent=money(v);tone(el,v)});
+      }catch(e){stamp.textContent="시장 데이터 갱신 대기 중";}
+    }
+    refresh();setInterval(refresh,60000);
+  </script>
+</body>
+</html>

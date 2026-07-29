@@ -48,6 +48,17 @@ class AppSettings(BaseModel):
     dashboard_public_url: str = "https://sungha-uu.github.io/danta_report/"
     daily_publish_enabled: bool = True
     daily_notify_enabled: bool = True
+    market_wide_monitor_enabled: bool = True
+    market_wide_poll_interval_seconds: int = Field(default=30, ge=10, le=300)
+    market_pages_publish_enabled: bool = True
+    market_pages_publish_interval_seconds: int = Field(
+        default=300, ge=300, le=3600
+    )
+    market_pages_git_push_enabled: bool = True
+    market_dashboard_publish_repo: Path = Path("../danta_market_status")
+    market_dashboard_public_url: str = (
+        "https://sungha-uu.github.io/danta_market_status/"
+    )
 
     @model_validator(mode="after")
     def enforce_immutable_safety_policy(self) -> AppSettings:

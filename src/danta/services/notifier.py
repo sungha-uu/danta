@@ -3,10 +3,12 @@ from __future__ import annotations
 import smtplib
 import ssl
 from dataclasses import dataclass
+from decimal import Decimal
 from email.message import EmailMessage
 from html import escape
 
 from danta.config import SmtpConfig
+from danta.domain.market_wide import MarketWideRiskLevel
 
 
 class NotificationError(RuntimeError):
@@ -78,6 +80,88 @@ class SmtpNotifier:
             "<p style=\"font-size:12px;color:#657087\">계좌·주문·비밀정보는 포함하지 않습니다.</p>"
             "</body></html>",
             subtype="html",
+        )
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_entry_prices_determined(
+        self,
+        prices: list[tuple[str, int]],
+    ) -> NotificationReceipt:
+        if not prices:
+            raise ValueError("at least one entry price is required")
+        lines: list[str] = []
+        for name, price in prices:
+            if not name.strip():
+                raise ValueError("stock name must not be blank")
+            if price <= 0:
+                raise ValueError("entry price must be positive")
+            lines.append(f"{name.strip()} {price:,}원")
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "지정가격 산정완료."
+        message.set_content("\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_stop_loss_completed(
+        self,
+        trades: list[tuple[str, int, Decimal]],
+    ) -> NotificationReceipt:
+        if not trades:
+            raise ValueError("at least one stop-loss trade is required")
+        lines: list[str] = []
+        for name, price, return_pct in trades:
+            if not name.strip():
+                raise ValueError("stock name must not be blank")
+            if price <= 0:
+                raise ValueError("sell price must be positive")
+            lines.append(
+                f"{name.strip()} {price:,}원 {return_pct.quantize(Decimal('0.1'))}%"
+            )
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "자동손절 체결완료."
+        message.set_content("\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_market_risk_transition(
+        self,
+        *,
+        previous: MarketWideRiskLevel | None,
+        current: MarketWideRiskLevel,
+        kospi_return_pct: Decimal,
+        foreign_net_million: int,
+        institution_net_million: int,
+        pension_net_million: int,
+        program_net_million: int,
+        reasons: tuple[str, ...],
+        dashboard_url: str,
+    ) -> NotificationReceipt:
+        labels = {
+            MarketWideRiskLevel.NORMAL: "정상",
+            MarketWideRiskLevel.CAUTION: "주의",
+            MarketWideRiskLevel.RISK_OFF: "신규매수 중단",
+            MarketWideRiskLevel.PANIC: "시장 비상",
+        }
+        before = "시작" if previous is None else labels[previous]
+        after = labels[current]
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = f"[DANTA][시장위험] {before} → {after}"
+        message.set_content(
+            f"시장 상태: {before} → {after}\n"
+            f"KOSPI: {kospi_return_pct.quantize(Decimal('0.01'))}%\n"
+            f"외국인: {foreign_net_million:,}백만원\n"
+            f"기관: {institution_net_million:,}백만원\n"
+            f"연기금 등: {pension_net_million:,}백만원\n"
+            f"프로그램: {program_net_million:,}백만원\n"
+            f"판정 근거: {', '.join(reasons)}\n"
+            f"시장 현황판: {dashboard_url}\n"
         )
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))

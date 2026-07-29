@@ -10,11 +10,11 @@
     "max_spread_bps": "35"
   },
   "exit": {
-    "version": "exit-defense-profit-paper-v1",
+    "version": "exit-defense-profit-paper-v2-minus5-floor",
     "approved_for_paper": true,
     "early_loss_pct": "-3.0",
     "strong_loss_pct": "-5.0",
-    "early_defense_score": "0.72",
+    "early_defense_score": "0.62",
     "strong_sell_pressure": "0.72",
     "panic_market_stress": "0.75",
     "profit_arm_pct": "5.0",

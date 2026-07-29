@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import JSON, BigInteger, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from danta.db.base import Base
@@ -98,3 +108,46 @@ class AuditLogModel(Base):
     correlation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     payload: Mapped[dict[str, object]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MarketWideSnapshotModel(Base):
+    __tablename__ = "market_wide_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), unique=True, index=True
+    )
+    risk_level: Mapped[str] = mapped_column(String(16), index=True)
+    risk_score: Mapped[Decimal] = mapped_column(Numeric(8, 6))
+    kospi_index: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+    kospi_return_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4))
+    accumulated_trading_value_million: Mapped[int] = mapped_column(BigInteger)
+    rising_issues: Mapped[int] = mapped_column(Integer)
+    flat_issues: Mapped[int] = mapped_column(Integer)
+    declining_issues: Mapped[int] = mapped_column(Integer)
+    personal_net_million: Mapped[int] = mapped_column(BigInteger)
+    foreign_net_million: Mapped[int] = mapped_column(BigInteger)
+    institution_net_million: Mapped[int] = mapped_column(BigInteger)
+    pension_net_million: Mapped[int] = mapped_column(BigInteger)
+    program_net_million: Mapped[int] = mapped_column(BigInteger)
+    provider_complete: Mapped[bool] = mapped_column(Boolean)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON)
+
+
+class MarketInvestorDailyModel(Base):
+    __tablename__ = "market_investor_daily"
+
+    trading_date: Mapped[str] = mapped_column(String(8), primary_key=True)
+    kospi_return_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4))
+    personal_net_million: Mapped[int] = mapped_column(BigInteger)
+    foreign_net_million: Mapped[int] = mapped_column(BigInteger)
+    institution_net_million: Mapped[int] = mapped_column(BigInteger)
+    financial_investment_net_million: Mapped[int] = mapped_column(BigInteger)
+    insurance_net_million: Mapped[int] = mapped_column(BigInteger)
+    investment_trust_net_million: Mapped[int] = mapped_column(BigInteger)
+    private_fund_net_million: Mapped[int] = mapped_column(BigInteger)
+    bank_net_million: Mapped[int] = mapped_column(BigInteger)
+    other_finance_net_million: Mapped[int] = mapped_column(BigInteger)
+    pension_net_million: Mapped[int] = mapped_column(BigInteger)
+    other_corporation_net_million: Mapped[int] = mapped_column(BigInteger)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

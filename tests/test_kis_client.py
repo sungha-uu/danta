@@ -72,6 +72,88 @@ async def test_current_price_supports_nxt_market_division(
 
 
 @pytest.mark.asyncio
+async def test_market_wide_kis_contracts_are_mapped(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        if request.url.path.endswith("/inquire-index-price"):
+            return httpx.Response(
+                200,
+                json={
+                    "rt_cd": "0",
+                    "output": {
+                        "bstp_nmix_prpr": "5000.12",
+                        "bstp_nmix_prdy_ctrt": "-3.20",
+                        "bstp_nmix_oprc": "5150",
+                        "bstp_nmix_hgpr": "5160",
+                        "bstp_nmix_lwpr": "4980",
+                        "acml_tr_pbmn": "30000000",
+                        "ascn_issu_cnt": "100",
+                        "stnr_issu_cnt": "20",
+                        "down_issu_cnt": "800",
+                        "uplm_issu_cnt": "1",
+                        "lslm_issu_cnt": "2",
+                    },
+                },
+            )
+        if request.url.path.endswith("/inquire-investor-time-by-market"):
+            assert request.url.params["FID_INPUT_ISCD"] == "KSP"
+            assert request.url.params["FID_INPUT_ISCD_2"] == "0001"
+            return httpx.Response(
+                200,
+                json={
+                    "rt_cd": "0",
+                    "output": [
+                        {
+                            "prsn_ntby_tr_pbmn": "500000",
+                            "frgn_ntby_tr_pbmn": "-400000",
+                            "orgn_ntby_tr_pbmn": "-100000",
+                            "scrt_ntby_tr_pbmn": "-150000",
+                            "insu_ntby_tr_pbmn": "10000",
+                            "ivtr_ntby_tr_pbmn": "5000",
+                            "pe_fund_ntby_tr_pbmn": "1000",
+                            "bank_ntby_tr_pbmn": "0",
+                            "mrbn_ntby_tr_pbmn": "0",
+                            "fund_ntby_tr_pbmn": "34000",
+                            "etc_corp_ntby_tr_pbmn": "0",
+                        }
+                    ],
+                },
+            )
+        assert request.url.params["EXCH_DIV_CLS_CODE"] == "J"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output1": [
+                    {
+                        "invr_cls_code": "8888",
+                        "arbt_ntby_amt": "-10000",
+                        "nabt_ntby_amt": "-90000",
+                        "all_ntby_amt": "-100000",
+                    }
+                ],
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    client._minimum_rest_interval = 0  # noqa: SLF001
+    try:
+        index = await client.kospi_index_price()
+        investor = await client.kospi_investor_flows()
+        program = await client.kospi_program_flows()
+    finally:
+        await client.close()
+    assert index.return_pct == Decimal("-3.20")
+    assert index.declining_issues == 800
+    assert investor.foreign == -400_000
+    assert investor.pension_fund_etc == 34_000
+    assert program.total == -100_000
+
+
+@pytest.mark.asyncio
 async def test_invalid_symbol_never_calls_network(credentials: KisCredentials) -> None:
     client = KisClient(credentials, transport=httpx.MockTransport(lambda _: None))
     try:

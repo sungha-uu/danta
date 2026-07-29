@@ -207,14 +207,7 @@ def evaluate_exit(snapshot: PositionRiskSnapshot, *, policy: ExitPolicy) -> Exit
             policy.version,
             ("BOX_INVALIDATED",),
         )
-    if (
-        return_pct <= policy.strong_loss_pct
-        and (
-            snapshot.sell_pressure_score >= policy.strong_sell_pressure
-            or snapshot.market_stress_score >= policy.panic_market_stress
-            or snapshot.market_risk is MarketRisk.RISK_OFF
-        )
-    ):
+    if return_pct <= policy.strong_loss_pct:
         return ExitDecision(
             snapshot.symbol,
             snapshot.generation,
@@ -222,14 +215,18 @@ def evaluate_exit(snapshot: PositionRiskSnapshot, *, policy: ExitPolicy) -> Exit
             ExitUrgency.PROTECTIVE,
             snapshot.sellable_quantity,
             policy.version,
-            ("STRONG_DEFENSE",),
+            ("HARD_DEFENSE_MINUS_5",),
         )
-    defense_score = (
-        snapshot.sell_pressure_score
-        + snapshot.weakness_score
-        + snapshot.market_stress_score
-    ) / Decimal("3")
-    if return_pct <= policy.early_loss_pct and defense_score >= policy.early_defense_score:
+    local_defense_score = (
+        snapshot.sell_pressure_score + snapshot.weakness_score
+    ) / Decimal("2")
+    early_defense_triggered = (
+        local_defense_score >= policy.early_defense_score
+        or snapshot.sell_pressure_score >= policy.strong_sell_pressure
+        or snapshot.market_stress_score >= policy.panic_market_stress
+        or snapshot.market_risk is MarketRisk.RISK_OFF
+    )
+    if return_pct <= policy.early_loss_pct and early_defense_triggered:
         return ExitDecision(
             snapshot.symbol,
             snapshot.generation,

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from danta.config import KisCredentials, TradingEnvironment
+from danta.domain.market_wide import DailyMarketFlow, InvestorNetFlow, ProgramNetFlow
 from danta.ports.broker import AccountPosition, Quote
 
 TOKEN_PATH = "/oauth2/tokenP"
@@ -26,6 +27,16 @@ ORDERABLE_PATH = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
 CASH_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
 DAILY_ORDER_PATH = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 REVISE_CANCEL_PATH = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
+INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"
+MARKET_INVESTOR_PATH = (
+    "/uapi/domestic-stock/v1/quotations/inquire-investor-time-by-market"
+)
+PROGRAM_INVESTOR_PATH = (
+    "/uapi/domestic-stock/v1/quotations/investor-program-trade-today"
+)
+DAILY_MARKET_INVESTOR_PATH = (
+    "/uapi/domestic-stock/v1/quotations/inquire-investor-daily-by-market"
+)
 
 
 class KisApiError(RuntimeError):
@@ -86,6 +97,28 @@ class KisOrderStatus:
     average_fill_price: Decimal
     order_time: str
     branch_no: str
+
+
+@dataclass(frozen=True, slots=True)
+class KisIndexPrice:
+    index: Decimal
+    return_pct: Decimal
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    accumulated_trading_value_million: int
+    rising_issues: int
+    flat_issues: int
+    declining_issues: int
+    upper_limit_issues: int
+    lower_limit_issues: int
+
+
+def _response_int(row: dict[str, Any], field: str) -> int:
+    try:
+        return int(row.get(field, "0") or "0")
+    except ValueError as exc:
+        raise KisApiError(f"KIS response contains invalid {field}") from exc
 
 
 class KisClient:
@@ -200,6 +233,182 @@ class KisClient:
             ),
             raw_timestamp=output.get("stck_cntg_hour"),
         )
+
+    async def kospi_index_price(self) -> KisIndexPrice:
+        """Return the KOSPI index and market breadth (official code U/0001)."""
+        body = await self._authorized_request(
+            "GET",
+            INDEX_PRICE_PATH,
+            tr_id="FHPUP02100000",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_ISCD": "0001",
+            },
+        )
+        output = body.get("output")
+        if not isinstance(output, dict):
+            raise KisApiError("KIS index response did not include output")
+        try:
+            return KisIndexPrice(
+                index=Decimal(str(output["bstp_nmix_prpr"])),
+                return_pct=Decimal(str(output["bstp_nmix_prdy_ctrt"])),
+                open=Decimal(str(output["bstp_nmix_oprc"])),
+                high=Decimal(str(output["bstp_nmix_hgpr"])),
+                low=Decimal(str(output["bstp_nmix_lwpr"])),
+                accumulated_trading_value_million=int(
+                    output.get("acml_tr_pbmn", "0") or "0"
+                ),
+                rising_issues=int(output.get("ascn_issu_cnt", "0") or "0"),
+                flat_issues=int(output.get("stnr_issu_cnt", "0") or "0"),
+                declining_issues=int(output.get("down_issu_cnt", "0") or "0"),
+                upper_limit_issues=int(output.get("uplm_issu_cnt", "0") or "0"),
+                lower_limit_issues=int(output.get("lslm_issu_cnt", "0") or "0"),
+            )
+        except (KeyError, ValueError) as exc:
+            raise KisApiError("KIS index response contains invalid values") from exc
+
+    async def kospi_investor_flows(self) -> InvestorNetFlow:
+        """Return cumulative KOSPI investor net trading values in KRW million."""
+        body = await self._authorized_request(
+            "GET",
+            MARKET_INVESTOR_PATH,
+            tr_id="FHPTJ04030000",
+            params={
+                # KSP/0001 is KOSPI composite. The official sample's
+                # 999/S001 pair is stock futures, not the cash KOSPI market.
+                "FID_INPUT_ISCD": "KSP",
+                "FID_INPUT_ISCD_2": "0001",
+            },
+        )
+        rows = body.get("output")
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise KisApiError("KIS market investor response did not include output")
+        row = rows[0]
+
+        def net(prefix: str) -> int:
+            try:
+                return int(row.get(f"{prefix}_ntby_tr_pbmn", "0") or "0")
+            except ValueError as exc:
+                raise KisApiError(
+                    f"KIS market investor response contains invalid {prefix} value"
+                ) from exc
+
+        return InvestorNetFlow(
+            personal=net("prsn"),
+            foreign=net("frgn"),
+            institution=net("orgn"),
+            financial_investment=net("scrt"),
+            insurance=net("insu"),
+            investment_trust=net("ivtr"),
+            private_fund=net("pe_fund"),
+            bank=net("bank"),
+            other_finance=net("mrbn"),
+            pension_fund_etc=net("fund"),
+            other_corporation=net("etc_corp"),
+        )
+
+    async def kospi_program_flows(self) -> ProgramNetFlow:
+        """Return cumulative KOSPI program trading values in KRW million."""
+        body = await self._authorized_request(
+            "GET",
+            PROGRAM_INVESTOR_PATH,
+            tr_id="HHPPG046600C1",
+            params={
+                "MRKT_DIV_CLS_CODE": "1",
+                # Required by the live gateway although omitted by an older sample.
+                "EXCH_DIV_CLS_CODE": "J",
+            },
+        )
+        rows = body.get("output1")
+        if not isinstance(rows, list):
+            raise KisApiError("KIS program response did not include output1")
+        total = next(
+            (
+                row
+                for row in rows
+                if isinstance(row, dict) and str(row.get("invr_cls_code")) == "8888"
+            ),
+            None,
+        )
+        if total is None:
+            raise KisApiError("KIS program response did not include the total row")
+        try:
+            return ProgramNetFlow(
+                arbitrage=int(total.get("arbt_ntby_amt", "0") or "0"),
+                non_arbitrage=int(total.get("nabt_ntby_amt", "0") or "0"),
+                total=int(total.get("all_ntby_amt", "0") or "0"),
+            )
+        except ValueError as exc:
+            raise KisApiError("KIS program response contains invalid values") from exc
+
+    async def kospi_daily_investor_flows(
+        self,
+        *,
+        anchor_date: str,
+        limit: int = 10,
+    ) -> list[DailyMarketFlow]:
+        """Return recent KOSPI daily investor flows for continuity features."""
+        self._validate_date(anchor_date)
+        if limit <= 0 or limit > 300:
+            raise ValueError("limit must be between 1 and 300")
+        body = await self._authorized_request(
+            "GET",
+            DAILY_MARKET_INVESTOR_PATH,
+            tr_id="FHPTJ04040000",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_ISCD": "0001",
+                "FID_INPUT_DATE_1": anchor_date,
+                "FID_INPUT_ISCD_1": "KSP",
+                "FID_INPUT_DATE_2": anchor_date,
+                "FID_INPUT_ISCD_2": "0001",
+            },
+        )
+        rows = body.get("output")
+        if not isinstance(rows, list):
+            raise KisApiError("KIS daily market investor response did not include output")
+        result: list[DailyMarketFlow] = []
+        for row in rows[:limit]:
+            if not isinstance(row, dict) or not row.get("stck_bsop_date"):
+                continue
+
+            try:
+                result.append(
+                    DailyMarketFlow(
+                        trading_date=str(row["stck_bsop_date"]),
+                        kospi_return_pct=Decimal(
+                            str(row.get("bstp_nmix_prdy_ctrt", "0") or "0")
+                        ),
+                        personal=_response_int(row, "prsn_ntby_tr_pbmn"),
+                        foreign=_response_int(row, "frgn_ntby_tr_pbmn"),
+                        institution=_response_int(row, "orgn_ntby_tr_pbmn"),
+                        financial_investment=_response_int(
+                            row, "scrt_ntby_tr_pbmn"
+                        ),
+                        insurance=_response_int(row, "insu_ntby_tr_pbmn"),
+                        investment_trust=_response_int(
+                            row, "ivtr_ntby_tr_pbmn"
+                        ),
+                        private_fund=_response_int(
+                            row, "pe_fund_ntby_tr_pbmn"
+                        ),
+                        bank=_response_int(row, "bank_ntby_tr_pbmn"),
+                        other_finance=_response_int(row, "mrbn_ntby_tr_pbmn"),
+                        pension_fund_etc=_response_int(
+                            row, "fund_ntby_tr_pbmn"
+                        ),
+                        other_corporation=_response_int(
+                            row, "etc_corp_ntby_tr_pbmn"
+                        ),
+                    )
+                )
+            except ValueError as exc:
+                raise KisApiError(
+                    "KIS daily market response contains invalid return"
+                ) from exc
+        if not result:
+            raise KisApiError("KIS daily market investor response contained no rows")
+        return result
 
     async def daily_bars(
         self,

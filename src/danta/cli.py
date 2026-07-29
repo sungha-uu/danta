@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from danta.adapters.kis.client import KisApiError, KisClient
 from danta.adapters.krx.client import KrxDataError, PykrxMarketDataClient
 from danta.config import (
+    TradingEnvironment,
     load_dart_api_key,
     load_kis_credentials,
     load_krx_environment,
@@ -46,6 +47,7 @@ from danta.services.intraday_report import (
     build_intraday_report,
     market_cap_top_universe,
 )
+from danta.services.market_monitor_application import MarketMonitorApplication
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.paper_broker_campaign import PaperBrokerCampaign
 from danta.services.paper_trading_application import PaperTradingApplication
@@ -73,6 +75,11 @@ def _parser() -> argparse.ArgumentParser:
     notify = subparsers.add_parser("notify-report", help="email a published report link")
     notify.add_argument("--url", required=True)
     notify.add_argument("--demo", action="store_true")
+
+    subparsers.add_parser(
+        "market-monitor",
+        help="monitor KOSPI from 08:50 through 15:30 and publish market Pages",
+    )
     notify.add_argument("--stage")
     notify.add_argument("--detail", default="")
 
@@ -212,7 +219,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     cycle = subparsers.add_parser(
         "daily-cycle",
-        help="run KOSPI 200, official max-30 review, and dashboard cycle",
+        help="run KOSPI 200 display, top-50 review, and official max-30 cycle",
     )
     cycle.add_argument("--data-root", type=Path, default=Path("data/intraday/1m"))
     cycle.add_argument(
@@ -279,6 +286,13 @@ async def _doctor(live: bool, symbol: str) -> int:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "market-monitor":
+        try:
+            asyncio.run(MarketMonitorApplication(load_settings()).run_session())
+        except (OSError, RuntimeError, ValueError, KisApiError, NotificationError) as exc:
+            print(f"market monitor failed: {exc}", file=sys.stderr)
+            raise SystemExit(17) from None
+        return
     if args.command == "close-prefetch":
         try:
             prefetch_result = asyncio.run(
@@ -542,7 +556,10 @@ def main() -> None:
                     [
                         (item.code, item.name)
                         for item in sorted(
-                            report.candidates,
+                            [
+                                *report.candidates,
+                                *report.extended_watchlist,
+                            ],
                             key=lambda candidate: (
                                 candidate.windows["14"].rank or 999
                             ),
@@ -697,6 +714,12 @@ def main() -> None:
                 dataset,
                 universe,
                 MinuteBarStore(args.data_root),
+                strategy_status=(
+                    "ACTIVE"
+                    if settings.environment is TradingEnvironment.PAPER
+                    and settings.paper_order_execution_enabled
+                    else "RESEARCH_ONLY"
+                ),
             )
             args.json_output.parent.mkdir(parents=True, exist_ok=True)
             temporary = args.json_output.with_suffix(".tmp")

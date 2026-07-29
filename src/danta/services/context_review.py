@@ -584,9 +584,9 @@ def build_context_review(
 ) -> AiReviewBatch:
     reviews: list[AiCandidateReview] = []
     review_targets = sorted(
-        report.candidates,
+        [*report.candidates, *report.extended_watchlist],
         key=lambda candidate: candidate.windows["14"].rank or 999,
-    )
+    )[:50]
     for candidate in review_targets:
         snapshot = snapshots[candidate.code]
         financial_adjustment, financial_text, financial_risks = _financial_context(

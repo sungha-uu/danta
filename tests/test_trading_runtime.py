@@ -1,8 +1,9 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
 from danta.adapters.kis.client import KisOrderStatus
-from danta.adapters.kis.realtime import OrderBookTick, TradeTick
+from danta.adapters.kis.realtime import MarketVenue, OrderBookTick, TradeTick
 from danta.domain.entry import EntryPolicy
 from danta.domain.mandate import EntryMandate
 from danta.domain.market import MarketRisk
@@ -11,7 +12,11 @@ from danta.domain.trading_session import IntentSide, SymbolState
 from danta.services.capital_allocator import CapitalAllocator
 from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.trading_orchestrator import TradingOrchestrator
-from danta.services.trading_runtime import ManagedPosition, TradingRuntimeCore
+from danta.services.trading_runtime import (
+    ManagedPosition,
+    TradingRuntimeCore,
+    regular_entry_session,
+)
 
 
 def mandate() -> EntryMandate:
@@ -114,6 +119,29 @@ def orderbook(price: int, now: datetime) -> OrderBookTick:
     )
 
 
+def regular_session_time() -> datetime:
+    return datetime(2026, 7, 29, 0, 1, tzinfo=UTC)
+
+
+def test_regular_entry_session_blocks_off_hours_weekends_and_nxt() -> None:
+    regular = regular_session_time()
+    krx_event = trade(99000, regular)
+    assert regular_entry_session(krx_event, regular)
+    assert not regular_entry_session(
+        trade(99000, datetime(2026, 7, 28, 23, 59, tzinfo=UTC)),
+        datetime(2026, 7, 28, 23, 59, tzinfo=UTC),
+    )
+    assert not regular_entry_session(
+        trade(99000, datetime(2026, 7, 29, 6, 30, tzinfo=UTC)),
+        datetime(2026, 7, 29, 6, 30, tzinfo=UTC),
+    )
+    assert not regular_entry_session(
+        replace(krx_event, venue=MarketVenue.NXT), regular
+    )
+    weekend = datetime(2026, 8, 1, 0, 1, tzinfo=UTC)
+    assert not regular_entry_session(trade(99000, weekend), weekend)
+
+
 async def test_runtime_enters_tracks_fill_and_hard_stops() -> None:
     orchestrator = TradingOrchestrator(
         capital_allocator=CapitalAllocator(),
@@ -126,7 +154,7 @@ async def test_runtime_enters_tracks_fill_and_hard_stops() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
-    now = datetime.now(UTC)
+    now = regular_session_time()
     assert await core.process_event(orderbook(99000, now), now=now) is None
     buy = await core.process_event(trade(99000, now), now=now)
     assert buy is not None
@@ -167,6 +195,43 @@ async def test_runtime_enters_tracks_fill_and_hard_stops() -> None:
     assert sell.cause == "HARD_STOP_MINUS_7"
 
 
+async def test_watchdog_enforces_minus_five_floor_without_websocket_signals() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1000000)
+    now = regular_session_time()
+    session = orchestrator.sessions["005930"]
+    session.state = SymbolState.POSITION_OPEN
+    session.quantity = 10
+    session.sellable_quantity = 10
+    core.positions["005930"] = ManagedPosition(
+        symbol="005930",
+        generation=session.generation,
+        average_entry_price=Decimal("100000"),
+        quantity=10,
+        sellable_quantity=10,
+        opened_at=now,
+    )
+
+    sell = await core.process_watchdog_price(
+        symbol="005930",
+        price=95000,
+        observed_at=now,
+    )
+
+    assert sell is not None
+    assert sell.side is IntentSide.SELL
+    assert sell.cause == "HARD_DEFENSE_MINUS_5"
+
+
 async def test_box_break_does_not_cancel_pending_entry_approval() -> None:
     orchestrator = TradingOrchestrator(
         capital_allocator=CapitalAllocator(),
@@ -179,7 +244,7 @@ async def test_box_break_does_not_cancel_pending_entry_approval() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
-    now = datetime.now(UTC)
+    now = regular_session_time()
     buy = await core.process_event(trade(99000, now), now=now)
     assert buy is not None
     core.record_submission(
@@ -223,7 +288,7 @@ async def test_deteriorated_pending_buy_cancels_and_rearms_at_lower_price() -> N
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
-    now = datetime.now(UTC)
+    now = regular_session_time()
     first = await core.process_event(trade(99000, now), now=now)
     assert first is not None
     assert first.idempotency_key.endswith(":A0")
@@ -293,7 +358,7 @@ async def test_partial_fill_cancel_keeps_position_and_does_not_rearm() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
-    now = datetime.now(UTC)
+    now = regular_session_time()
     buy = await core.process_event(trade(99000, now), now=now)
     assert buy is not None
     core.record_submission(
@@ -355,7 +420,7 @@ async def test_rest_watchdog_hard_stops_without_realtime_tick() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
-    now = datetime.now(UTC)
+    now = regular_session_time()
     session = orchestrator.sessions["005930"]
     session.state = type(session.state).POSITION_OPEN
     session.quantity = 3

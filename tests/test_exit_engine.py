@@ -61,18 +61,66 @@ def test_hard_stop_works_even_when_adaptive_policy_is_not_approved() -> None:
     assert decision.quantity == 10
 
 
-def test_minus_five_with_strong_selling_uses_protective_exit() -> None:
+def test_minus_five_is_unconditional_protective_exit() -> None:
     decision = evaluate_exit(
         _snapshot(
-            last_price=94900,
-            best_bid=94900,
-            sell_pressure_score=Decimal("0.9"),
+            last_price=95000,
+            best_bid=95000,
+            sell_pressure_score=Decimal("0.1"),
+            weakness_score=Decimal("0.1"),
+            market_stress_score=Decimal("0"),
         ),
         policy=_policy(),
     )
     assert decision.action is ExitAction.SELL_MARKET
     assert decision.urgency is ExitUrgency.PROTECTIVE
-    assert decision.reason_codes == ("STRONG_DEFENSE",)
+    assert decision.quantity == 10
+    assert decision.reason_codes == ("HARD_DEFENSE_MINUS_5",)
+
+
+def test_minus_three_uses_local_pressure_when_market_stress_is_unavailable() -> None:
+    decision = evaluate_exit(
+        _snapshot(
+            last_price=96900,
+            best_bid=96900,
+            sell_pressure_score=Decimal("0.8"),
+            weakness_score=Decimal("0.7"),
+            market_stress_score=Decimal("0"),
+        ),
+        policy=_policy(),
+    )
+    assert decision.action is ExitAction.SELL_MARKET
+    assert decision.urgency is ExitUrgency.PROTECTIVE
+    assert decision.reason_codes == ("EARLY_DEFENSE",)
+
+
+def test_minus_three_holds_without_local_or_market_weakness() -> None:
+    decision = evaluate_exit(
+        _snapshot(
+            last_price=96900,
+            best_bid=96900,
+            sell_pressure_score=Decimal("0.2"),
+            weakness_score=Decimal("0.2"),
+            market_stress_score=Decimal("0"),
+        ),
+        policy=_policy(),
+    )
+    assert decision.action is ExitAction.HOLD
+
+
+def test_above_minus_three_does_not_use_early_defense() -> None:
+    decision = evaluate_exit(
+        _snapshot(
+            last_price=97100,
+            best_bid=97100,
+            sell_pressure_score=Decimal("1"),
+            weakness_score=Decimal("1"),
+            market_stress_score=Decimal("1"),
+            market_risk=MarketRisk.RISK_OFF,
+        ),
+        policy=_policy(),
+    )
+    assert decision.action is ExitAction.HOLD
 
 
 def test_profit_floor_requires_peak_giveback_and_weakness() -> None:

@@ -416,5 +416,5 @@ src/danta/
 전일 보유종목 보호는
 [`NXT_OVERNIGHT_PROTECTION.md`](NXT_OVERNIGHT_PROTECTION.md)를 따른다.
 장전 모듈은 주문을 직접 전송하지 않고 09시 이후 `ExitDecision`만 기존
-우선순위 큐에 전달한다. `HARD_STOP`은 P0, `EARLY_DEFENSE/STRONG_DEFENSE`는
+우선순위 큐에 전달한다. `HARD_STOP`은 P0, `EARLY_DEFENSE/HARD_DEFENSE_MINUS_5`는
 보호매도 우선순위이며 BUY 의도는 허용하지 않는다.

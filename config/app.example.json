@@ -23,5 +23,12 @@
   "dashboard_publish_repo": "../danta_report",
   "dashboard_public_url": "https://sungha-uu.github.io/danta_report/",
   "daily_publish_enabled": true,
-  "daily_notify_enabled": true
+  "daily_notify_enabled": true,
+  "market_wide_monitor_enabled": true,
+  "market_wide_poll_interval_seconds": 30,
+  "market_pages_publish_enabled": true,
+  "market_pages_publish_interval_seconds": 300,
+  "market_pages_git_push_enabled": true,
+  "market_dashboard_publish_repo": "../danta_market_status",
+  "market_dashboard_public_url": "https://sungha-uu.github.io/danta_market_status/"
 }

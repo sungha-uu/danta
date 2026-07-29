@@ -67,21 +67,24 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
     if review.report_data_as_of != report.data_as_of:
         raise ValueError("AI review data timestamp does not match report")
     review_map = {item.code: item for item in review.candidates}
+    all_candidates = [*report.candidates, *report.extended_watchlist]
     review_target_codes = {
         candidate.code
-        for candidate in report.candidates
+        for candidate in all_candidates
         if candidate.windows["14"].rank is not None
         and candidate.windows["14"].rank <= 50
     }
     if set(review_map) != review_target_codes:
-        raise ValueError("AI review must cover every official candidate exactly once")
+        raise ValueError(
+            "AI review must cover every official candidate review target "
+            "(quantitative top 50) exactly once"
+        )
 
-    candidates = []
-    for candidate in report.candidates:
+    reviewed_by_code = {}
+    for candidate in all_candidates:
         candidate_review = review_map.get(candidate.code)
         if candidate_review is None:
-            candidates.append(
-                candidate.model_copy(
+            reviewed_by_code[candidate.code] = candidate.model_copy(
                     update={
                         "windows": {
                             key: metrics.model_copy(
@@ -101,7 +104,6 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                         "context_status": "NOT_COLLECTED",
                         "context_fetched_at": None,
                     }
-                )
             )
             continue
         windows = {}
@@ -125,8 +127,7 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                     "risks": window_review.risks,
                 }
             )
-        candidates.append(
-            candidate.model_copy(
+        reviewed_by_code[candidate.code] = candidate.model_copy(
                 update={
                     "windows": windows,
                     "news": [
@@ -139,14 +140,19 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                     "context_status": candidate_review.context_status,
                     "context_fetched_at": review.reviewed_at,
                 }
-            )
         )
     return report.model_copy(
         update={
             "generated_at": review.reviewed_at,
             "model_id": review.model_id,
             "prompt_version": review.prompt_version,
-            "candidates": candidates,
+            "candidates": [
+                reviewed_by_code[candidate.code] for candidate in report.candidates
+            ],
+            "extended_watchlist": [
+                reviewed_by_code[candidate.code]
+                for candidate in report.extended_watchlist
+            ],
         }
     )
 

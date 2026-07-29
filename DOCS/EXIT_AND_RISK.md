@@ -40,11 +40,14 @@ hard_stop_price = normalize_to_tick(average_entry_price × 0.93, conservative=tr
 | 구간 | 상태 | 기본 동작 |
 | --- | --- | --- |
 | 손실 `0~-3%` | `NORMAL_MONITORING` | 정상 감시 |
-| 손실 `-3% 이하` | `EARLY_DEFENSE` | 시장·체결·호가·추세 조기 방어 점수를 계산하고 임계값 충족 시 전량 청산 |
-| 손실 `-5% 이하` | `STRONG_DEFENSE` | 시장 급락 또는 강한 매도 압력 하나만 확인돼도 전량 청산할 수 있는 보수 모드 |
+| 손실 `-3% 이하` | `EARLY_DEFENSE` | 종목 자체 매도압력·약세 또는 시장 비상 신호가 임계값을 충족하면 전량 시장가 청산 |
+| 손실 `-5% 이하` | `HARD_DEFENSE_MINUS_5` | 다른 신호를 기다리지 않고 매도 가능 수량 전부를 시장가 청산 |
 | 손실 `-7% 이하` | `HARD_STOP` | 다른 모든 판단을 무시하고 매도 가능 수량 전부를 시장가 청산 |
 
-`-3%`와 `-5%`는 초기 연구 경계이며 실전 확정 임계값이 아니다. 종목별 변동성, 거래비용, 오탐 청산과 추가 손실 방지 효과를 동일 데이터에서 비교해 버전으로 관리한다. 어떤 개선판도 `-7%` 발동을 취소하거나 확인 시간을 추가할 수 없다.
+모의 정책 `exit-defense-profit-paper-v2-minus5-floor`에서는 `-5%`를 절대 방어선으로
+고정한다. `-3%` 조기 방어의 신호·임계값은 종목별 변동성, 거래비용, 오탐 청산과
+추가 손실 방지 효과를 같은 데이터로 비교해 버전 관리한다. 어떤 개선판도 `-5%`
+방어선이나 `-7%` 최종 손절을 취소하거나 확인 시간을 추가할 수 없다.
 
 ### 조기 방어 입력
 
@@ -62,19 +65,32 @@ hard_stop_price = normalize_to_tick(average_entry_price × 0.93, conservative=tr
 ```text
 if loss_pct <= -7:
     HARD_STOP_MARKET
-elif loss_pct <= -5 and (market_risk_off or strong_sell_pressure):
-    PROTECTIVE_EXIT_MARKET
-elif loss_pct <= -3 and early_defense_score >= versioned_threshold:
+elif loss_pct <= -5:
+    HARD_DEFENSE_MARKET
+elif loss_pct <= -3 and (
+    mean(symbol_sell_pressure, symbol_weakness) >= local_threshold
+    or symbol_sell_pressure >= strong_sell_threshold
+    or market_stress >= panic_threshold
+    or market_risk_off
+):
     PROTECTIVE_EXIT_MARKET
 else:
     HOLD
 ```
 
-- 평상시 `EARLY_DEFENSE`는 단일 틱으로 청산하지 않고 버전된 짧은 지속시간 또는 복수 신호를 요구한다.
+- `EARLY_DEFENSE`의 로컬 점수는 종목 자체의 매도압력과 약세만 사용한다. 시장
+  스트레스가 아직 수집되지 않아 `0`이어도 조기 방어가 수학적으로 불가능해지지 않는다.
+- 모의 v2의 로컬 조기 방어 임계값은 `0.62`, 강한 개별 매도압력은 `0.72`,
+  시장 패닉은 `0.75`다.
 - `MARKET_PANIC`, 사이드카·서킷브레이커, 호가 공백, 급격한 갭 하락에서는 지속시간을 생략할 수 있다.
 - 시장 비상상태는 신규매수를 즉시 차단하지만 기존 보유종목의 보호 감시를 중단하지 않는다.
-- 조기 매도 신호와 `HARD_STOP`이 동시에 발생하면 감사 사유는 `HARD_STOP`으로 기록한다.
+- 여러 매도 신호가 동시에 발생하면 `-7% HARD_STOP` → `-5% HARD_DEFENSE` →
+  `-3% EARLY_DEFENSE` 순으로 감사 사유를 기록한다.
 - 주문 실행기는 정책 판단을 다시 해석하지 않고 멱등한 `ExitIntent`를 전량 시장가 주문으로 변환한다.
+- WebSocket이 끊겨 종목 신호를 만들 수 없는 경우에도 독립 REST 가격 감시가
+  `-5%`와 `-7%` 가격 방어선을 실행한다.
+- `EARLY_DEFENSE`, `HARD_DEFENSE_MINUS_5`, `HARD_STOP_MINUS_7`의 최종 체결은
+  모두 로컬 SMTP 큐로 자동손절 체결 메일을 발송한다.
 
 ### 갭 하락
 
@@ -283,3 +299,17 @@ AI는 원인 분류와 설명을 돕지만 회로 차단 자체는 로컬 결정
 [`NXT_OVERNIGHT_PROTECTION.md`](NXT_OVERNIGHT_PROTECTION.md)를 단일 기준으로
 사용한다. 이 기능은 현재 `PAPER_CHALLENGER`이며 실제 KIS 모의 장전·시초가
 계약 테스트가 끝나기 전에는 실전 승격하지 않는다.
+# KOSPI 시장 전체 위험 게이트
+
+시장 전체 위험은 종목 자체의 손익·체결강도와 별도로 계산한다.
+
+| 상태 | 의미 | 신규매수 | 열린 포지션 |
+| --- | --- | --- | --- |
+| `NORMAL` | 정상 | 허용 | 기존 보호 로직 |
+| `CAUTION` | 시장 스트레스 상승 | 진입 조건 강화·대기 | 기존 보호 로직 |
+| `RISK_OFF` | 광범위 하락 또는 수급 악화 확인 | 차단·미체결 매수 취소 대상 | 감시·매도 유지 |
+| `PANIC` | 서킷브레이커급 급락 또는 극단적 시장 폭 붕괴 | 즉시 차단 | 조기 방어와 -7% 강제손절 유지 |
+
+초기 모의 정책 `kospi-market-guard-paper-v2`는 KOSPI 등락률, 하락 종목 비율, 전체 거래대금 대비 외국인 순매수 비율, 프로그램 순매수 가속을 결합한다. 일반 `RISK_OFF`는 3회 연속 표본으로 확인하지만 `PANIC`과 공급자 데이터 불완전은 지연 없이 신규매수를 차단한다.
+
+외국인 순매도와 연기금 등 순매수의 동시는 시장 방어 의도를 증명하지 않는다. 이 조합은 `FOREIGN_OUTFLOW_PENSION_ABSORPTION_PROXY`라는 관찰 근거로만 기록하고, 지수 하락·시장 폭·프로그램 매도와 함께 악화될 때 위험도를 높인다.

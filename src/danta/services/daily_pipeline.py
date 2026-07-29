@@ -58,7 +58,7 @@ async def run_daily_pipeline(
     refresh_context: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> DailyPipelineResult:
-    """Run KOSPI 200 -> official +10% gate (max 30) -> full context review."""
+    """Run KOSPI 200 -> display all -> official max 30 -> AI context top 50."""
     emit = progress if progress is not None else lambda _message: None
     load_krx_environment(settings)
     emit("collecting KRX 21-trading-day dataset")
@@ -126,16 +126,19 @@ async def run_daily_pipeline(
     )
     if len(quantitative.candidates) > 30:
         raise RuntimeError("official candidate report exceeded 30 symbols")
-    official_candidates = sorted(
-        quantitative.candidates,
+    displayed_candidates = sorted(
+        [*quantitative.candidates, *quantitative.extended_watchlist],
         key=lambda candidate: candidate.windows["14"].rank or 999,
     )
-    emit("collecting news, DART disclosures, and discussions for all candidates")
+    if len(displayed_candidates) != 200:
+        raise RuntimeError("dashboard display universe must contain 200 symbols")
+    review_targets = displayed_candidates[:50]
+    emit("collecting news, DART disclosures, and discussions for quantitative top 50")
     snapshots = await PublicContextCollector(
         context_cache_root,
         dart_api_key=load_dart_api_key(settings),
     ).collect(
-        [(candidate.code, candidate.name) for candidate in official_candidates],
+        [(candidate.code, candidate.name) for candidate in review_targets],
         refresh=refresh_context,
     )
     review = build_context_review(
@@ -150,7 +153,9 @@ async def run_daily_pipeline(
     return DailyPipelineResult(
         report_path=report_output,
         dashboard_path=dashboard_path,
-        candidate_count=len(reviewed.candidates),
+        candidate_count=len(
+            [*reviewed.candidates, *reviewed.extended_watchlist]
+        ),
         deep_review_count=len(review.candidates),
         data_as_of=reviewed.data_as_of,
         fundamental_snapshot_count=len(fundamentals.snapshots),

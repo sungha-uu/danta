@@ -9,8 +9,9 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 from danta.domain.fundamentals import FundamentalSnapshot
 
 WindowKey = Literal["7", "14", "21"]
-CANDIDATE_COUNT = 200
-EXTENDED_WATCHLIST_COUNT = 0
+OFFICIAL_CANDIDATE_COUNT = 30
+EXTENDED_WATCHLIST_COUNT = 199
+DISPLAY_UNIVERSE_COUNT = 200
 Sentiment = Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]
 AiGrade = Literal[
     "STRONG_RECOMMEND",
@@ -96,7 +97,7 @@ class WindowMetrics(BaseModel):
     rank: int | None = Field(
         default=None,
         ge=1,
-        le=CANDIDATE_COUNT + EXTENDED_WATCHLIST_COUNT,
+        le=DISPLAY_UNIVERSE_COUNT,
     )
     box_low: Decimal | None = Field(default=None, gt=0)
     box_high: Decimal | None = Field(default=None, gt=0)
@@ -273,7 +274,7 @@ class DashboardReport(BaseModel):
     is_demo: bool = False
     candidates: list[CandidateView] = Field(
         min_length=1,
-        max_length=CANDIDATE_COUNT,
+        max_length=DISPLAY_UNIVERSE_COUNT,
     )
     extended_watchlist: list[CandidateView] = Field(
         default_factory=list,
@@ -282,14 +283,15 @@ class DashboardReport(BaseModel):
 
     @model_validator(mode="after")
     def validate_candidate_set(self) -> DashboardReport:
-        if (
-            self.calculation_version.startswith("intraday-actual-10pct-gate-v12")
-            and len(self.candidates) > 30
-        ):
-            raise ValueError("actual +10% gate v12 reports allow at most 30 candidates")
+        all_candidates = [*self.candidates, *self.extended_watchlist]
+        if self.calculation_version.startswith("intraday-actual-10pct-gate-v14"):
+            if len(all_candidates) != DISPLAY_UNIVERSE_COUNT:
+                raise ValueError("v14 reports require exactly 200 displayed symbols")
+            if len(self.candidates) > OFFICIAL_CANDIDATE_COUNT:
+                raise ValueError("v14 reports allow at most 30 official candidates")
         if (
             self.calculation_version.startswith("intraday-repeat-rise-v11")
-            and len(self.candidates) != CANDIDATE_COUNT
+            and len(self.candidates) != DISPLAY_UNIVERSE_COUNT
         ):
             raise ValueError("repeat-rise v11 reports require exactly 200 candidates")
         if self.strategy_status == "ACTIVE" and (
@@ -302,38 +304,17 @@ class DashboardReport(BaseModel):
             )
         codes = [
             candidate.code
-            for candidate in [*self.candidates, *self.extended_watchlist]
+            for candidate in all_candidates
         ]
         if len(set(codes)) != len(codes):
             raise ValueError("candidate codes must be unique")
         windows: tuple[WindowKey, WindowKey, WindowKey] = ("7", "14", "21")
         for window in windows:
-            metrics = [candidate.windows[window] for candidate in self.candidates]
+            metrics = [candidate.windows[window] for candidate in all_candidates]
             ready = [item for item in metrics if item.structure_status == "READY"]
             ranks = [item.rank for item in ready if item.rank is not None]
             if ready and sorted(ranks) != list(range(1, len(ready) + 1)):
                 raise ValueError(
                     f"candidate ranks for {window} days must be contiguous"
-                )
-            extended = [
-                candidate.windows[window] for candidate in self.extended_watchlist
-            ]
-            extended_ready = [
-                item for item in extended if item.structure_status == "READY"
-            ]
-            if extended_ready and len(extended_ready) != len(extended):
-                raise ValueError(
-                    f"extended watchlist structures for {window} days "
-                    "must share one status"
-                )
-            extended_ranks = [
-                item.rank for item in extended_ready if item.rank is not None
-            ]
-            extended_start = len(self.candidates) + 1
-            if extended_ready and sorted(extended_ranks) != list(
-                range(extended_start, extended_start + len(extended_ready))
-            ):
-                raise ValueError(
-                    "extended watchlist ranks must follow official candidates"
                 )
         return self

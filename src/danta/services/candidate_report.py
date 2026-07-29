@@ -9,8 +9,7 @@ from pydantic import HttpUrl
 
 from danta.adapters.krx.client import DailyBar, MarketDataset
 from danta.dashboard.models import (
-    CANDIDATE_COUNT,
-    EXTENDED_WATCHLIST_COUNT,
+    DISPLAY_UNIVERSE_COUNT,
     AiGrade,
     CandidateView,
     ChartBar,
@@ -264,7 +263,7 @@ def build_quant_report(dataset: MarketDataset) -> DashboardReport:
         provisional.append((symbol, metrics))
     provisional.sort(key=lambda item: _ready_score(item[1]), reverse=True)
     # Legacy daily-close research report remains a 50-name compatibility view.
-    published_count = min(50, CANDIDATE_COUNT + EXTENDED_WATCHLIST_COUNT)
+    published_count = min(50, DISPLAY_UNIVERSE_COUNT)
     selected_symbols = [symbol for symbol, _ in provisional[:published_count]]
     if len(selected_symbols) != published_count:
         raise CandidateReportError(

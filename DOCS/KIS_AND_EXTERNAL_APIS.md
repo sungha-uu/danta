@@ -223,3 +223,8 @@ AI는 자격 게이트 밖의 종목을 공식 후보로 추가하거나 원시 
 - [예약 Actions 지연 주의](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows)
 
 블로그보다 공식 자료를 먼저 확인하고 필드·TR ID·호출한도를 추정하지 않는다.
+# KOSPI 시장 전체 수급 파라미터 주의
+
+`FHPTJ04030000` 시장별 투자자매매동향은 KOSPI 종합 조회 시 `FID_INPUT_ISCD=KSP`, `FID_INPUT_ISCD_2=0001`을 사용한다. 공식 샘플의 `999/S001`은 파라미터 설명상 주식선물이며 현물 KOSPI 수급으로 사용하면 안 된다. 일별 시장수급 `FHPTJ04040000`의 당일 행과 개인·외국인·기관·기관 세부 금액을 대조해 공급자 계약을 검증한다.
+
+프로그램 당일동향 `HHPPG046600C1`은 현재 게이트웨이에서 공식 함수 인자 외에 `EXCH_DIV_CLS_CODE=J`를 요구한다. 이 사실은 provider-doctor 실제 응답으로 재확인해야 하며 KIS 사양 변경 시 추정값으로 자동 대체하지 않는다.
