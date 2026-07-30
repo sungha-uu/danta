@@ -128,6 +128,36 @@ class SmtpNotifier:
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
+    def send_exit_completed(
+        self,
+        trades: list[tuple[str, int, Decimal, str]],
+    ) -> NotificationReceipt:
+        if not trades:
+            raise ValueError("at least one completed exit trade is required")
+        cause_labels = {
+            "ADAPTIVE_PROFIT_FLOOR": "수익 보호",
+            "PROFIT_TARGET": "익절",
+            "TIME_EXIT": "시간 청산",
+        }
+        lines: list[str] = []
+        for name, price, return_pct, cause in trades:
+            if not name.strip():
+                raise ValueError("stock name must not be blank")
+            if price <= 0:
+                raise ValueError("sell price must be positive")
+            reason = cause_labels.get(cause, cause)
+            lines.append(
+                f"{name.strip()} {price:,}원 "
+                f"{return_pct.quantize(Decimal('0.1'))}% {reason}"
+            )
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "자동매도 체결완료."
+        message.set_content("\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
     def send_market_risk_transition(
         self,
         *,

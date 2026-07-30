@@ -155,3 +155,33 @@ def test_stop_loss_notification_contains_fill_and_return(monkeypatch: object) ->
     assert plain_body.get_content().strip() == (
         "SK하이닉스 1,479,300원 -7.0%\n삼성전자 213,000원 -7.0%"
     )
+
+
+def test_profit_exit_notification_contains_reason(monkeypatch: object) -> None:
+    from decimal import Decimal
+
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_exit_completed(
+        [
+            (
+                "SK하이닉스",
+                1_422_187,
+                Decimal("4.495"),
+                "ADAPTIVE_PROFIT_FLOOR",
+            )
+        ]
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert message["Subject"] == "자동매도 체결완료."
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert plain_body.get_content().strip() == (
+        "SK하이닉스 1,422,187원 4.5% 수익 보호"
+    )

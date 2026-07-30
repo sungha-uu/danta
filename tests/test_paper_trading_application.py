@@ -111,7 +111,7 @@ async def test_hard_stop_final_fill_queues_one_notification() -> None:
     application.mandate = SimpleNamespace(command_id="entry-test")
     application._notified_stop_intents = set()
     repository = _AuditRepository()
-    queue: asyncio.Queue[tuple[str, str, int, Decimal]] = asyncio.Queue()
+    queue: asyncio.Queue[tuple[str, str, int, Decimal, str]] = asyncio.Queue()
     intent = SimpleNamespace(
         side=IntentSide.SELL,
         cause="HARD_STOP_MINUS_7",
@@ -142,14 +142,15 @@ async def test_hard_stop_final_fill_queues_one_notification() -> None:
         repository,  # type: ignore[arg-type]
     )
 
-    intent_key, name, price, return_pct = await queue.get()
+    intent_key, name, price, return_pct, cause = await queue.get()
     assert queue.empty()
     assert intent_key == "entry-test:000660:SELL:1"
     assert name == "SK하이닉스"
     assert price == 1_479_300
     assert return_pct.quantize(Decimal("0.01")) == Decimal("-6.96")
+    assert cause == "HARD_STOP_MINUS_7"
     assert [event[0] for event in repository.events] == [
-        "HARD_STOP_EMAIL_QUEUED"
+        "EXIT_FILL_EMAIL_QUEUED"
     ]
 
 
@@ -158,7 +159,7 @@ async def test_minus_five_defense_final_fill_queues_notification() -> None:
     application.mandate = SimpleNamespace(command_id="entry-test")
     application._notified_stop_intents = set()
     repository = _AuditRepository()
-    queue: asyncio.Queue[tuple[str, str, int, Decimal]] = asyncio.Queue()
+    queue: asyncio.Queue[tuple[str, str, int, Decimal, str]] = asyncio.Queue()
     intent = SimpleNamespace(
         side=IntentSide.SELL,
         cause="HARD_DEFENSE_MINUS_5",
@@ -186,4 +187,46 @@ async def test_minus_five_defense_final_fill_queues_notification() -> None:
         "삼성전자",
         95000,
         Decimal("-5.00"),
+        "HARD_DEFENSE_MINUS_5",
     )
+
+
+async def test_adaptive_profit_final_fill_queues_exit_notification() -> None:
+    application = object.__new__(PaperTradingApplication)
+    application.mandate = SimpleNamespace(command_id="entry-test")
+    application._notified_stop_intents = set()
+    repository = _AuditRepository()
+    queue: asyncio.Queue[tuple[str, str, int, Decimal, str]] = asyncio.Queue()
+    intent = SimpleNamespace(
+        side=IntentSide.SELL,
+        cause="ADAPTIVE_PROFIT_FLOOR",
+        idempotency_key="entry-test:000660:SELL:profit",
+        symbol="000660",
+    )
+    status = SimpleNamespace(
+        remaining_quantity=0,
+        filled_quantity=16,
+        average_fill_price=Decimal("1422187"),
+    )
+    position = SimpleNamespace(average_entry_price=Decimal("1361000"))
+
+    await application._queue_stop_loss_notification(
+        intent,  # type: ignore[arg-type]
+        status,  # type: ignore[arg-type]
+        position,  # type: ignore[arg-type]
+        queue,
+        {"000660": "SK하이닉스"},
+        repository,  # type: ignore[arg-type]
+    )
+
+    item = await queue.get()
+    assert item[:3] == (
+        "entry-test:000660:SELL:profit",
+        "SK하이닉스",
+        1_422_187,
+    )
+    assert item[3].quantize(Decimal("0.01")) == Decimal("4.50")
+    assert item[4] == "ADAPTIVE_PROFIT_FLOOR"
+    assert [event[0] for event in repository.events] == [
+        "EXIT_FILL_EMAIL_QUEUED"
+    ]

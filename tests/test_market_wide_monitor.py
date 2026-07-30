@@ -10,6 +10,7 @@ import pytest
 from danta.domain.market_wide import (
     DailyMarketFlow,
     InvestorNetFlow,
+    MarketWideRiskLevel,
     MarketWideSnapshot,
     ProgramNetFlow,
 )
@@ -18,6 +19,7 @@ from danta.services.market_wide_monitor import (
     MarketStatusPublisher,
     MarketWideMonitor,
     build_flow_quality,
+    is_market_risk_escalation,
 )
 
 
@@ -30,6 +32,24 @@ class FakeCollector:
 
     def consume_daily_refresh(self) -> list[object]:
         return []
+
+
+def test_market_email_gate_allows_only_risk_escalation() -> None:
+    assert is_market_risk_escalation(
+        MarketWideRiskLevel.NORMAL, MarketWideRiskLevel.CAUTION
+    )
+    assert is_market_risk_escalation(
+        MarketWideRiskLevel.CAUTION, MarketWideRiskLevel.RISK_OFF
+    )
+    assert is_market_risk_escalation(
+        MarketWideRiskLevel.RISK_OFF, MarketWideRiskLevel.PANIC
+    )
+    assert not is_market_risk_escalation(
+        MarketWideRiskLevel.CAUTION, MarketWideRiskLevel.NORMAL
+    )
+    assert not is_market_risk_escalation(
+        MarketWideRiskLevel.PANIC, MarketWideRiskLevel.RISK_OFF
+    )
 
 
 class FakeRepository:

@@ -34,6 +34,25 @@ TransitionCallback = Callable[
     Awaitable[None],
 ]
 
+_RISK_LEVEL_ORDER = {
+    MarketWideRiskLevel.NORMAL: 0,
+    MarketWideRiskLevel.CAUTION: 1,
+    MarketWideRiskLevel.RISK_OFF: 2,
+    MarketWideRiskLevel.PANIC: 3,
+}
+
+
+def is_market_risk_escalation(
+    previous: MarketWideRiskLevel | None,
+    current: MarketWideRiskLevel,
+) -> bool:
+    """Return true only for a first warning or a worsening market state."""
+    if current is MarketWideRiskLevel.NORMAL:
+        return False
+    if previous is None:
+        return True
+    return _RISK_LEVEL_ORDER[current] > _RISK_LEVEL_ORDER[previous]
+
 
 class MarketWideCollector:
     """Collect KOSPI index, investor flow and program flow from KIS REST."""

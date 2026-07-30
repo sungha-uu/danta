@@ -33,6 +33,7 @@ from danta.services.market_wide_monitor import (
     MarketStatusPublisher,
     MarketWideCollector,
     MarketWideMonitor,
+    is_market_risk_escalation,
 )
 from danta.services.market_wide_repository import MarketWideRepository
 from danta.services.notifier import NotificationError, SmtpNotifier
@@ -99,7 +100,7 @@ class PaperTradingApplication:
                 )
         price_notifications: asyncio.Queue[tuple[str, str, int]] = asyncio.Queue()
         stop_notifications: asyncio.Queue[
-            tuple[str, str, int, Decimal]
+            tuple[str, str, int, Decimal, str]
         ] = asyncio.Queue()
         selection_names = {
             selection.symbol: selection.name
@@ -400,6 +401,17 @@ class PaperTradingApplication:
                 "reason_codes": list(decision.reason_codes),
             },
         )
+        if not is_market_risk_escalation(previous, decision.level):
+            await repository.audit(
+                "MARKET_RISK_EMAIL_SUPPRESSED",
+                correlation_id=self.mandate.command_id,
+                payload={
+                    "previous": None if previous is None else previous.value,
+                    "current": decision.level.value,
+                    "reason": "NOT_A_RISK_ESCALATION",
+                },
+            )
+            return
         if notifier is None:
             return
         try:
@@ -503,18 +515,12 @@ class PaperTradingApplication:
         intent: OrderIntent,
         status: KisOrderStatus,
         position_before: ManagedPosition | None,
-        queue: asyncio.Queue[tuple[str, str, int, Decimal]],
+        queue: asyncio.Queue[tuple[str, str, int, Decimal, str]],
         selection_names: dict[str, str],
         repository: SqlRuntimeRepository,
     ) -> None:
         if (
             intent.side is not IntentSide.SELL
-            or intent.cause
-            not in {
-                "EARLY_DEFENSE",
-                "HARD_DEFENSE_MINUS_5",
-                "HARD_STOP_MINUS_7",
-            }
             or status.remaining_quantity != 0
             or status.filled_quantity <= 0
             or position_before is None
@@ -533,50 +539,64 @@ class PaperTradingApplication:
                 selection_names.get(intent.symbol, intent.symbol),
                 int(status.average_fill_price),
                 return_pct,
+                intent.cause,
             )
         )
         await repository.audit(
-            "HARD_STOP_EMAIL_QUEUED",
+            "EXIT_FILL_EMAIL_QUEUED",
             correlation_id=self.mandate.command_id,
             payload={
                 "symbol": intent.symbol,
                 "average_fill_price": int(status.average_fill_price),
                 "return_pct": str(return_pct),
+                "cause": intent.cause,
                 "intent_key": intent.idempotency_key,
             },
         )
 
     async def _send_stop_loss_notifications(
         self,
-        queue: asyncio.Queue[tuple[str, str, int, Decimal]],
+        queue: asyncio.Queue[tuple[str, str, int, Decimal, str]],
         notifier: SmtpNotifier,
         repository: SqlRuntimeRepository,
     ) -> None:
         retry_delays = (2.0, 10.0)
         while True:
-            intent_key, name, price, return_pct = await queue.get()
+            intent_key, name, price, return_pct, cause = await queue.get()
             try:
                 for attempt in range(3):
                     try:
-                        receipt = await asyncio.to_thread(
-                            notifier.send_stop_loss_completed,
-                            [(name, price, return_pct)],
-                        )
+                        if cause in {
+                            "EARLY_DEFENSE",
+                            "HARD_DEFENSE_MINUS_5",
+                            "HARD_STOP_MINUS_7",
+                        }:
+                            receipt = await asyncio.to_thread(
+                                notifier.send_stop_loss_completed,
+                                [(name, price, return_pct)],
+                            )
+                        else:
+                            receipt = await asyncio.to_thread(
+                                notifier.send_exit_completed,
+                                [(name, price, return_pct, cause)],
+                            )
                         await repository.audit(
-                            "HARD_STOP_EMAIL_SENT",
+                            "EXIT_FILL_EMAIL_SENT",
                             correlation_id=self.mandate.command_id,
                             payload={
                                 "intent_key": intent_key,
+                                "cause": cause,
                                 "recipient_count": receipt.recipient_count,
                             },
                         )
                         break
                     except (NotificationError, OSError) as exc:
                         await repository.audit(
-                            "HARD_STOP_EMAIL_ERROR",
+                            "EXIT_FILL_EMAIL_ERROR",
                             correlation_id=self.mandate.command_id,
                             payload={
                                 "intent_key": intent_key,
+                                "cause": cause,
                                 "attempt": attempt + 1,
                                 "error": type(exc).__name__,
                             },
@@ -611,7 +631,7 @@ class PaperTradingApplication:
         manager: OrderManager,
         repository: SqlRuntimeRepository,
         stop_notifications: asyncio.Queue[
-            tuple[str, str, int, Decimal]
+            tuple[str, str, int, Decimal, str]
         ],
         selection_names: dict[str, str],
     ) -> None:
