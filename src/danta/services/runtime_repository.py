@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from danta.db.models import AuditLogModel, PositionModel
@@ -46,6 +46,22 @@ class SqlRuntimeRepository:
                 for row in rows
             ]
 
+    async def latest_generations(self, symbols: list[str]) -> dict[str, int]:
+        if not symbols:
+            return {}
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        PositionModel.symbol,
+                        func.max(PositionModel.generation),
+                    )
+                    .where(PositionModel.symbol.in_(symbols))
+                    .group_by(PositionModel.symbol)
+                )
+            ).all()
+            return {str(symbol): int(generation) for symbol, generation in rows}
+
     async def save_position(self, position: ManagedPosition) -> None:
         async with self._session_factory() as session:
             row = await session.scalar(
@@ -68,6 +84,10 @@ class SqlRuntimeRepository:
                 )
                 session.add(row)
             else:
+                if row.status == "CLOSED" and position.quantity > 0:
+                    raise RuntimeError(
+                        "closed position generation cannot be reopened"
+                    )
                 row.quantity = position.quantity
                 row.average_entry_price = int(position.average_entry_price)
                 row.hard_stop_price = hard_stop_price(position.average_entry_price)

@@ -175,6 +175,16 @@ class PaperTradingApplication:
                     )
                 )
             if reconciliation.safe_for_new_entries:
+                latest_generations = await repository.latest_generations(
+                    [selection.symbol for selection in self.mandate.selections]
+                )
+                for symbol, generation in latest_generations.items():
+                    if symbol not in orchestrator.sessions:
+                        orchestrator.sessions[symbol] = SymbolSession(
+                            symbol=symbol,
+                            generation=generation,
+                            state=SymbolState.CLOSED,
+                        )
                 reference = self.mandate.selections[0]
                 cash = await broker.orderable_cash(
                     reference.symbol,
