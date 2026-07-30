@@ -252,7 +252,10 @@ class PaperTradingApplication:
                         snapshot,
                         decision,
                         previous,
-                        notifier,
+                        # The standalone market-monitor process is the single
+                        # SMTP owner. The trading runtime still applies and
+                        # audits market risk, but must not duplicate emails.
+                        None,
                         repository,
                     )
                 ),
