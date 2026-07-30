@@ -19,7 +19,7 @@ from danta.services.market_wide_monitor import (
     MarketStatusPublisher,
     MarketWideMonitor,
     build_flow_quality,
-    is_market_risk_escalation,
+    is_market_risk_email_transition,
 )
 
 
@@ -34,21 +34,24 @@ class FakeCollector:
         return []
 
 
-def test_market_email_gate_allows_only_risk_escalation() -> None:
-    assert is_market_risk_escalation(
+def test_market_email_gate_allows_all_state_transitions() -> None:
+    assert is_market_risk_email_transition(
         MarketWideRiskLevel.NORMAL, MarketWideRiskLevel.CAUTION
     )
-    assert is_market_risk_escalation(
+    assert is_market_risk_email_transition(
         MarketWideRiskLevel.CAUTION, MarketWideRiskLevel.RISK_OFF
     )
-    assert is_market_risk_escalation(
+    assert is_market_risk_email_transition(
         MarketWideRiskLevel.RISK_OFF, MarketWideRiskLevel.PANIC
     )
-    assert not is_market_risk_escalation(
+    assert is_market_risk_email_transition(
         MarketWideRiskLevel.CAUTION, MarketWideRiskLevel.NORMAL
     )
-    assert not is_market_risk_escalation(
+    assert is_market_risk_email_transition(
         MarketWideRiskLevel.PANIC, MarketWideRiskLevel.RISK_OFF
+    )
+    assert not is_market_risk_email_transition(
+        MarketWideRiskLevel.NORMAL, MarketWideRiskLevel.NORMAL
     )
 
 

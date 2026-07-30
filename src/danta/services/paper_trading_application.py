@@ -33,7 +33,7 @@ from danta.services.market_wide_monitor import (
     MarketStatusPublisher,
     MarketWideCollector,
     MarketWideMonitor,
-    is_market_risk_escalation,
+    is_market_risk_email_transition,
 )
 from danta.services.market_wide_repository import MarketWideRepository
 from danta.services.notifier import NotificationError, SmtpNotifier
@@ -404,14 +404,14 @@ class PaperTradingApplication:
                 "reason_codes": list(decision.reason_codes),
             },
         )
-        if not is_market_risk_escalation(previous, decision.level):
+        if not is_market_risk_email_transition(previous, decision.level):
             await repository.audit(
                 "MARKET_RISK_EMAIL_SUPPRESSED",
                 correlation_id=self.mandate.command_id,
                 payload={
                     "previous": None if previous is None else previous.value,
                     "current": decision.level.value,
-                    "reason": "NOT_A_RISK_ESCALATION",
+                    "reason": "NOT_A_STATE_TRANSITION",
                 },
             )
             return

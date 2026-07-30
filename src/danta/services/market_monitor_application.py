@@ -17,7 +17,7 @@ from danta.services.market_wide_monitor import (
     MarketStatusPublisher,
     MarketWideCollector,
     MarketWideMonitor,
-    is_market_risk_escalation,
+    is_market_risk_email_transition,
 )
 from danta.services.market_wide_repository import MarketWideRepository
 from danta.services.notifier import NotificationError, SmtpNotifier
@@ -58,7 +58,7 @@ class MarketMonitorApplication:
             decision: MarketGuardDecision,
             previous: MarketWideRiskLevel | None,
         ) -> None:
-            if notifier is None or not is_market_risk_escalation(
+            if notifier is None or not is_market_risk_email_transition(
                 previous, decision.level
             ):
                 return

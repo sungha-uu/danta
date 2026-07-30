@@ -42,16 +42,14 @@ _RISK_LEVEL_ORDER = {
 }
 
 
-def is_market_risk_escalation(
+def is_market_risk_email_transition(
     previous: MarketWideRiskLevel | None,
     current: MarketWideRiskLevel,
 ) -> bool:
-    """Return true only for a first warning or a worsening market state."""
-    if current is MarketWideRiskLevel.NORMAL:
-        return False
+    """Return true for every genuine market state transition."""
     if previous is None:
-        return True
-    return _RISK_LEVEL_ORDER[current] > _RISK_LEVEL_ORDER[previous]
+        return current is not MarketWideRiskLevel.NORMAL
+    return _RISK_LEVEL_ORDER[current] != _RISK_LEVEL_ORDER[previous]
 
 
 class MarketWideCollector:
