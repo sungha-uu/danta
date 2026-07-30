@@ -22,6 +22,7 @@
   "daily_publish_enabled": true,
   "daily_notify_enabled": true,
   "market_wide_monitor_enabled": true,
+  "market_transition_email_enabled": false,
   "market_wide_poll_interval_seconds": 30,
   "market_pages_publish_enabled": true,
   "market_pages_publish_interval_seconds": 300,

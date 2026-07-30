@@ -53,6 +53,7 @@ async def test_order_status_rate_limit_is_isolated_and_backed_off(
             None,  # type: ignore[arg-type]
             repository,  # type: ignore[arg-type]
             asyncio.Queue(),
+            asyncio.Queue(),
             {},
         )
 
@@ -103,6 +104,61 @@ async def test_entry_price_notification_is_queued_once_per_intent() -> None:
     )
     assert [event[0] for event in repository.events] == [
         "ENTRY_LIMIT_PRICE_DETERMINED"
+    ]
+
+async def test_buy_final_fill_queues_one_notification() -> None:
+    application = object.__new__(PaperTradingApplication)
+    application.mandate = SimpleNamespace(command_id="entry-test")
+    application._notified_buy_fill_intents = set()
+    repository = _AuditRepository()
+    queue: asyncio.Queue[tuple[str, str, int, int]] = asyncio.Queue()
+    intent = SimpleNamespace(
+        side=IntentSide.BUY,
+        idempotency_key="entry-test:000660:BUY:A0",
+        symbol="000660",
+    )
+    partial = SimpleNamespace(
+        remaining_quantity=7,
+        filled_quantity=10,
+        average_fill_price=Decimal("1329000"),
+    )
+    complete = SimpleNamespace(
+        remaining_quantity=0,
+        filled_quantity=17,
+        average_fill_price=Decimal("1330000"),
+    )
+
+    await application._queue_buy_fill_notification(
+        intent,  # type: ignore[arg-type]
+        partial,  # type: ignore[arg-type]
+        queue,
+        {"000660": "SK하이닉스"},
+        repository,  # type: ignore[arg-type]
+    )
+    await application._queue_buy_fill_notification(
+        intent,  # type: ignore[arg-type]
+        complete,  # type: ignore[arg-type]
+        queue,
+        {"000660": "SK하이닉스"},
+        repository,  # type: ignore[arg-type]
+    )
+    await application._queue_buy_fill_notification(
+        intent,  # type: ignore[arg-type]
+        complete,  # type: ignore[arg-type]
+        queue,
+        {"000660": "SK하이닉스"},
+        repository,  # type: ignore[arg-type]
+    )
+
+    assert await queue.get() == (
+        "entry-test:000660:BUY:A0",
+        "SK하이닉스",
+        1_330_000,
+        17,
+    )
+    assert queue.empty()
+    assert [event[0] for event in repository.events] == [
+        "ENTRY_FILL_EMAIL_QUEUED"
     ]
 
 

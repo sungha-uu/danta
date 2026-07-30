@@ -45,7 +45,10 @@ class MarketMonitorApplication:
         repository = MarketWideRepository(session_factory)
         notifier = (
             SmtpNotifier(load_smtp_config(self.settings))
-            if self.settings.smtp_enabled
+            if (
+                self.settings.smtp_enabled
+                and self.settings.market_transition_email_enabled
+            )
             else None
         )
         publisher = MarketStatusPublisher(

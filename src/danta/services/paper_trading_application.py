@@ -73,6 +73,7 @@ class PaperTradingApplication:
         self.mandate = mandate
         self.policies = policies
         self._notified_price_intents: set[str] = set()
+        self._notified_buy_fill_intents: set[str] = set()
         self._notified_stop_intents: set[str] = set()
 
     async def run(self) -> None:
@@ -99,6 +100,9 @@ class PaperTradingApplication:
                     payload={"error": type(exc).__name__},
                 )
         price_notifications: asyncio.Queue[tuple[str, str, int]] = asyncio.Queue()
+        buy_fill_notifications: asyncio.Queue[
+            tuple[str, str, int, int]
+        ] = asyncio.Queue()
         stop_notifications: asyncio.Queue[
             tuple[str, str, int, Decimal, str]
         ] = asyncio.Queue()
@@ -281,6 +285,7 @@ class PaperTradingApplication:
                             broker,
                             manager,
                             repository,
+                            buy_fill_notifications,
                             stop_notifications,
                             selection_names,
                         ),
@@ -308,6 +313,14 @@ class PaperTradingApplication:
                                 repository,
                             ),
                             name="danta-entry-price-email",
+                        )
+                        group.create_task(
+                            self._send_buy_fill_notifications(
+                                buy_fill_notifications,
+                                notifier,
+                                repository,
+                            ),
+                            name="danta-buy-fill-email",
                         )
                         group.create_task(
                             self._send_stop_loss_notifications(
@@ -557,6 +570,80 @@ class PaperTradingApplication:
             },
         )
 
+    async def _queue_buy_fill_notification(
+        self,
+        intent: OrderIntent,
+        status: KisOrderStatus,
+        queue: asyncio.Queue[tuple[str, str, int, int]],
+        selection_names: dict[str, str],
+        repository: SqlRuntimeRepository,
+    ) -> None:
+        if (
+            intent.side is not IntentSide.BUY
+            or status.remaining_quantity != 0
+            or status.filled_quantity <= 0
+            or intent.idempotency_key in self._notified_buy_fill_intents
+        ):
+            return
+        self._notified_buy_fill_intents.add(intent.idempotency_key)
+        item = (
+            intent.idempotency_key,
+            selection_names.get(intent.symbol, intent.symbol),
+            int(status.average_fill_price),
+            status.filled_quantity,
+        )
+        await queue.put(item)
+        await repository.audit(
+            "ENTRY_FILL_EMAIL_QUEUED",
+            correlation_id=self.mandate.command_id,
+            payload={
+                "symbol": intent.symbol,
+                "average_fill_price": int(status.average_fill_price),
+                "filled_quantity": status.filled_quantity,
+                "intent_key": intent.idempotency_key,
+            },
+        )
+
+    async def _send_buy_fill_notifications(
+        self,
+        queue: asyncio.Queue[tuple[str, str, int, int]],
+        notifier: SmtpNotifier,
+        repository: SqlRuntimeRepository,
+    ) -> None:
+        retry_delays = (2.0, 10.0)
+        while True:
+            intent_key, name, price, quantity = await queue.get()
+            try:
+                for attempt in range(3):
+                    try:
+                        receipt = await asyncio.to_thread(
+                            notifier.send_buy_completed,
+                            [(name, price, quantity)],
+                        )
+                        await repository.audit(
+                            "ENTRY_FILL_EMAIL_SENT",
+                            correlation_id=self.mandate.command_id,
+                            payload={
+                                "intent_key": intent_key,
+                                "recipient_count": receipt.recipient_count,
+                            },
+                        )
+                        break
+                    except (NotificationError, OSError) as exc:
+                        await repository.audit(
+                            "ENTRY_FILL_EMAIL_ERROR",
+                            correlation_id=self.mandate.command_id,
+                            payload={
+                                "intent_key": intent_key,
+                                "attempt": attempt + 1,
+                                "error": type(exc).__name__,
+                            },
+                        )
+                        if attempt < len(retry_delays):
+                            await asyncio.sleep(retry_delays[attempt])
+            finally:
+                queue.task_done()
+
     async def _send_stop_loss_notifications(
         self,
         queue: asyncio.Queue[tuple[str, str, int, Decimal, str]],
@@ -633,6 +720,7 @@ class PaperTradingApplication:
         broker: KisClient,
         manager: OrderManager,
         repository: SqlRuntimeRepository,
+        buy_fill_notifications: asyncio.Queue[tuple[str, str, int, int]],
         stop_notifications: asyncio.Queue[
             tuple[str, str, int, Decimal, str]
         ],
@@ -688,6 +776,13 @@ class PaperTradingApplication:
                     status, observed_at=datetime.now(UTC)
                 )
                 if delta > 0:
+                    await self._queue_buy_fill_notification(
+                        submitted.intent,
+                        status,
+                        buy_fill_notifications,
+                        selection_names,
+                        repository,
+                    )
                     await self._queue_stop_loss_notification(
                         submitted.intent,
                         status,

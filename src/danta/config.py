@@ -49,6 +49,7 @@ class AppSettings(BaseModel):
     daily_publish_enabled: bool = True
     daily_notify_enabled: bool = True
     market_wide_monitor_enabled: bool = True
+    market_transition_email_enabled: bool = False
     market_wide_poll_interval_seconds: int = Field(default=30, ge=10, le=300)
     market_pages_publish_enabled: bool = True
     market_pages_publish_interval_seconds: int = Field(

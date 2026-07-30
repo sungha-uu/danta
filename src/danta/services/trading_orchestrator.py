@@ -64,6 +64,10 @@ class TradingOrchestrator:
             key = (mandate.command_id, plan.symbol)
             self._plans[key] = plan
             session = self.sessions.get(plan.symbol)
+            if session is not None and session.state is SymbolState.POSITION_OPEN:
+                # On restart the reconciled position remains under protection;
+                # it must never be converted back into a new entry session.
+                continue
             if session is not None and session.state not in {
                 SymbolState.IDLE,
                 SymbolState.CLOSED,

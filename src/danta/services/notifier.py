@@ -128,6 +128,27 @@ class SmtpNotifier:
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
+    def send_buy_completed(
+        self,
+        trades: list[tuple[str, int, int]],
+    ) -> NotificationReceipt:
+        if not trades:
+            raise ValueError("at least one completed buy is required")
+        lines: list[str] = []
+        for name, price, quantity in trades:
+            if not name.strip():
+                raise ValueError("stock name must not be blank")
+            if price <= 0 or quantity <= 0:
+                raise ValueError("buy fill price and quantity must be positive")
+            lines.append(f"{name.strip()} {quantity:,}주 {price:,}원")
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "자동매수 체결완료."
+        message.set_content("\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
     def send_exit_completed(
         self,
         trades: list[tuple[str, int, Decimal, str]],

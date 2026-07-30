@@ -4,7 +4,12 @@ from decimal import Decimal
 from danta.domain.entry import EntryAction, EntryDecision
 from danta.domain.mandate import EntryMandate, EntrySelection
 from danta.domain.risk import ExitAction, ExitDecision, ExitUrgency
-from danta.domain.trading_session import IntentPriority, IntentSide, SymbolState
+from danta.domain.trading_session import (
+    IntentPriority,
+    IntentSide,
+    SymbolSession,
+    SymbolState,
+)
 from danta.services.capital_allocator import CapitalAllocator
 from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.trading_orchestrator import TradingOrchestrator
@@ -120,3 +125,24 @@ async def test_entry_is_blocked_until_reconciliation_completes() -> None:
         )
         is None
     )
+
+
+async def test_restart_preserves_reconciled_open_position_session() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    orchestrator.sessions["000660"] = SymbolSession(
+        symbol="000660",
+        generation=3,
+        state=SymbolState.POSITION_OPEN,
+        quantity=17,
+        sellable_quantity=17,
+    )
+
+    await orchestrator.register_mandate(_mandate(), orderable_cash=1_000_000)
+
+    session = orchestrator.sessions["000660"]
+    assert session.state is SymbolState.POSITION_OPEN
+    assert session.generation == 3
+    assert session.quantity == 17
