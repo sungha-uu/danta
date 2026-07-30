@@ -219,7 +219,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     cycle = subparsers.add_parser(
         "daily-cycle",
-        help="run KOSPI 200 display, top-50 review, and official max-30 cycle",
+        help="run KOSPI 200 orderable display and top-50 review cycle",
     )
     cycle.add_argument("--data-root", type=Path, default=Path("data/intraday/1m"))
     cycle.add_argument(

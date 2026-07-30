@@ -122,6 +122,28 @@ def _validate_actual_ten_pct_dashboard(report: DashboardReport) -> None:
 
 def load_dashboard_report(path: Path) -> DashboardReport:
     value: Any = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        isinstance(value, dict)
+        and str(value.get("calculation_version", "")).startswith(
+            "intraday-actual-10pct-gate-v14"
+        )
+    ):
+        candidates = value.get("candidates", [])
+        extended = value.get("extended_watchlist", [])
+        if (
+            isinstance(candidates, list)
+            and isinstance(extended, list)
+            and len(candidates) + len(extended) == 200
+        ):
+            value["candidates"] = [*candidates, *extended]
+            value["extended_watchlist"] = []
+            value["calculation_version"] = str(
+                value["calculation_version"]
+            ).replace(
+                "intraday-actual-10pct-gate-v14",
+                "intraday-repeat-rise-v15",
+                1,
+            ).replace("-official30-ai50", "-orderable200-ai50", 1)
     return DashboardReport.model_validate(value)
 
 

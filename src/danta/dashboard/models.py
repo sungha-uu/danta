@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 from danta.domain.fundamentals import FundamentalSnapshot
 
 WindowKey = Literal["7", "14", "21"]
-OFFICIAL_CANDIDATE_COUNT = 30
+OFFICIAL_CANDIDATE_COUNT = 200
 EXTENDED_WATCHLIST_COUNT = 199
 DISPLAY_UNIVERSE_COUNT = 200
 Sentiment = Literal["POSITIVE", "NEUTRAL", "NEGATIVE"]
@@ -288,7 +288,12 @@ class DashboardReport(BaseModel):
             if len(all_candidates) != DISPLAY_UNIVERSE_COUNT:
                 raise ValueError("v14 reports require exactly 200 displayed symbols")
             if len(self.candidates) > OFFICIAL_CANDIDATE_COUNT:
-                raise ValueError("v14 reports allow at most 30 official candidates")
+                raise ValueError("v14 reports allow at most 200 official candidates")
+        if self.calculation_version.startswith("intraday-repeat-rise-v15"):
+            if len(self.candidates) != DISPLAY_UNIVERSE_COUNT:
+                raise ValueError("v15 reports require exactly 200 official candidates")
+            if self.extended_watchlist:
+                raise ValueError("v15 reports do not use an extended watchlist")
         if (
             self.calculation_version.startswith("intraday-repeat-rise-v11")
             and len(self.candidates) != DISPLAY_UNIVERSE_COUNT

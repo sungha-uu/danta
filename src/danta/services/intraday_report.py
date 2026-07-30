@@ -1480,23 +1480,10 @@ def build_intraday_report(
             f"only {len(ranked_symbols)} symbols were available for "
             "the 200-name quantitative universe"
         )
-    selected_symbols = [
-        symbol
-        for symbol in ranked_symbols[:50]
-        if (
-            _visible_period_values(analyses_by_window[14][symbol])[2]
-            <= Decimal("35")
-            and analyses_by_window[14][symbol].target_reaches >= 1
-            and analyses_by_window[14][symbol].current_to_window_high
-            >= Decimal("10")
-            and _visible_period_values(analyses_by_window[14][symbol])[4]
-            > analyses_by_window[14][symbol].hourly_closes[-1]
-        )
-    ][:30]
-    if not selected_symbols:
-        raise CandidateReportError(
-            "no symbol passed the official lower-zone and actual +10% gate"
-        )
+    # All market-cap top-200 symbols are official, user-selectable order
+    # candidates. Lower-zone and historical +10% evidence remain visible
+    # recommendation/risk features; they no longer revoke selection authority.
+    selected_symbols = list(ranked_symbols)
     fixed_ranks = {
         symbol: rank for rank, symbol in enumerate(ranked_symbols, start=1)
     }
@@ -1568,7 +1555,7 @@ def build_intraday_report(
             "6% 이상 비중복 반복 상승 연구 기준선"
         ),
         calculation_version=(
-            "intraday-actual-10pct-gate-v14-visible-extrema-top200-official30-ai50-"
+            "intraday-repeat-rise-v15-visible-extrema-top200-orderable200-ai50-"
             "kospi-market-cap-top200-v1"
         ),
         strategy_status=strategy_status,

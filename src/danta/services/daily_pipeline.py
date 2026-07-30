@@ -58,7 +58,7 @@ async def run_daily_pipeline(
     refresh_context: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> DailyPipelineResult:
-    """Run KOSPI 200 -> display all -> official max 30 -> AI context top 50."""
+    """Run KOSPI 200 -> orderable all 200 -> AI context top 50."""
     emit = progress if progress is not None else lambda _message: None
     load_krx_environment(settings)
     emit("collecting KRX 21-trading-day dataset")
@@ -124,8 +124,8 @@ async def run_daily_pipeline(
         ),
         fundamentals,
     )
-    if len(quantitative.candidates) > 30:
-        raise RuntimeError("official candidate report exceeded 30 symbols")
+    if len(quantitative.candidates) != 200:
+        raise RuntimeError("official orderable candidate report must contain 200 symbols")
     displayed_candidates = sorted(
         [*quantitative.candidates, *quantitative.extended_watchlist],
         key=lambda candidate: candidate.windows["14"].rank or 999,
