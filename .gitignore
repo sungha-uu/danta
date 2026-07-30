@@ -23,6 +23,7 @@ data/
 .env.*
 !.env.example
 .secrets/
+private/
 !config/*.example.json
 
 # IDE / OS
