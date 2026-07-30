@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
-from danta.adapters.kis.client import KisClient
+from danta.adapters.kis.client import KisApiError, KisClient
 from danta.config import AppSettings, load_kis_credentials, load_smtp_config
 from danta.db.session import create_engine_and_session
 from danta.domain.market_wide import MarketWideRiskLevel, MarketWideSnapshot
@@ -88,13 +89,33 @@ class MarketMonitorApplication:
                 loop = asyncio.get_running_loop()
                 while _within_market_session(datetime.now(KST)):
                     started = loop.time()
-                    snapshot, decision = await monitor.poll_once()
-                    if loop.time() >= next_publish_at:
-                        await publisher.publish(snapshot, decision)
-                        next_publish_at = (
-                            loop.time()
-                            + self.settings.market_pages_publish_interval_seconds
+                    try:
+                        snapshot, decision = await monitor.poll_once()
+                    except KisApiError as exc:
+                        print(
+                            f"market monitor transient KIS error; retrying: {exc}",
+                            file=sys.stderr,
+                            flush=True,
                         )
+                        await asyncio.sleep(
+                            self.settings.market_wide_poll_interval_seconds
+                        )
+                        continue
+                    if loop.time() >= next_publish_at:
+                        try:
+                            await publisher.publish(snapshot, decision)
+                        except (OSError, RuntimeError) as exc:
+                            print(
+                                "market Pages publish failed; monitoring continues: "
+                                f"{exc}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                        else:
+                            next_publish_at = (
+                                loop.time()
+                                + self.settings.market_pages_publish_interval_seconds
+                            )
                     elapsed = loop.time() - started
                     await asyncio.sleep(
                         max(
