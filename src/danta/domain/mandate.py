@@ -20,6 +20,7 @@ class EntrySelection(BaseModel):
         "BOX_LOW_AUTO",
         "USER_EDITED",
         "PAPER_AUTONOMOUS_REPORT_PRICE",
+        "AUTONOMOUS_REPORT_PRICE",
     ]
     allocation_pct: Decimal = Field(gt=0, le=100)
     ai_grade: str = Field(min_length=1, max_length=40)

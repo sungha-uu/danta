@@ -26,15 +26,15 @@ from danta.services.runtime_repository import SqlRuntimeRepository
 from danta.services.trading_runtime import TradingRuntimeCore
 
 AUTONOMOUS_GRADES = frozenset({"STRONG_RECOMMEND", "RECOMMEND"})
-AUTONOMOUS_SELECTION_VERSION = "paper-autonomous-rank-first-v2"
+AUTONOMOUS_SELECTION_VERSION = "autonomous-rank-first-live-v1"
 KST = ZoneInfo("Asia/Seoul")
 
 
-class PaperAutonomousCampaignAuthorization(BaseModel):
+class AutonomousCampaignAuthorization(BaseModel):
     schema_version: Literal[1] = 1
-    authority: Literal["PAPER_AUTONOMOUS_CAMPAIGN"]
-    environment: Literal["paper"]
-    campaign_id: str = Field(pattern=r"^paper-auto-[a-z0-9-]{8,64}$")
+    authority: Literal["AUTONOMOUS_TRADING_CAMPAIGN"]
+    environment: Literal["paper", "prod"]
+    campaign_id: str = Field(pattern=r"^(paper|live)-auto-[a-z0-9-]{8,64}$")
     approved_at: datetime
     expires_at: datetime
     enabled: bool = True
@@ -47,7 +47,7 @@ class PaperAutonomousCampaignAuthorization(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_window(self) -> PaperAutonomousCampaignAuthorization:
+    def validate_window(self) -> AutonomousCampaignAuthorization:
         if self.approved_at.tzinfo is None or self.expires_at.tzinfo is None:
             raise ValueError("campaign timestamps must be timezone-aware")
         duration = self.expires_at.astimezone(UTC) - self.approved_at.astimezone(UTC)
@@ -66,7 +66,7 @@ class PaperAutonomousCampaignAuthorization(BaseModel):
         ) <= normalized < self.expires_at.astimezone(UTC)
 
 
-class PaperAutonomousCampaignState(BaseModel):
+class AutonomousCampaignState(BaseModel):
     schema_version: Literal[1] = 1
     campaign_id: str
     submitted_reports: list[str] = Field(default_factory=list, max_length=100)
@@ -78,22 +78,24 @@ def create_campaign_authorization(
     *,
     now: datetime,
     days: int = 90,
-) -> PaperAutonomousCampaignAuthorization:
+    environment: TradingEnvironment = TradingEnvironment.PAPER,
+) -> AutonomousCampaignAuthorization:
     if days < 1 or days > 90:
         raise ValueError("days must be between 1 and 90")
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    return PaperAutonomousCampaignAuthorization(
-        authority="PAPER_AUTONOMOUS_CAMPAIGN",
-        environment="paper",
-        campaign_id=f"paper-auto-{uuid4().hex[:16]}",
+    prefix = "live" if environment is TradingEnvironment.PROD else "paper"
+    return AutonomousCampaignAuthorization(
+        authority="AUTONOMOUS_TRADING_CAMPAIGN",
+        environment=environment.value,
+        campaign_id=f"{prefix}-auto-{uuid4().hex[:16]}",
         approved_at=now,
         expires_at=now + timedelta(days=days),
     )
 
 
 def write_campaign_authorization(
-    authorization: PaperAutonomousCampaignAuthorization,
+    authorization: AutonomousCampaignAuthorization,
     path: Path,
 ) -> None:
     _atomic_json(path, authorization.model_dump(mode="json"))
@@ -102,22 +104,27 @@ def write_campaign_authorization(
 def load_campaign_authorization(
     settings: AppSettings,
     credentials: KisCredentials,
-) -> PaperAutonomousCampaignAuthorization | None:
-    path = settings.paper_autonomous_campaign_path
+) -> AutonomousCampaignAuthorization | None:
+    path = settings.autonomous_campaign_path
     if not path.exists():
         return None
-    # Fail closed even if a production config points at a paper authorization.
-    if (
-        settings.environment is not TradingEnvironment.PAPER
-        or credentials.environment is not TradingEnvironment.PAPER
-        or settings.real_order_execution_enabled
-    ):
-        raise PermissionError("paper autonomous campaign is forbidden outside paper")
+    if settings.environment is not credentials.environment:
+        raise PermissionError("autonomous campaign environment mismatch")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return PaperAutonomousCampaignAuthorization.model_validate(payload)
+    authorization = AutonomousCampaignAuthorization.model_validate(payload)
+    if authorization.environment != settings.environment.value:
+        if authorization.environment == "paper":
+            raise PermissionError("paper autonomous campaign is forbidden outside paper")
+        raise PermissionError("campaign authorization does not match active environment")
+    if (
+        settings.environment is TradingEnvironment.PROD
+        and not settings.real_order_execution_enabled
+    ):
+        raise PermissionError("live autonomous campaign requires the real execution gate")
+    return authorization
 
 
-class PaperAutonomousCampaignController:
+class AutonomousCampaignController:
     """Generate one durable internal mandate per reviewed report.
 
     The controller never calls an order endpoint itself. It submits through the
@@ -145,19 +152,19 @@ class PaperAutonomousCampaignController:
         self.notifier = notifier
         self.broker = broker
         self._last_block_reason: str | None = None
-        self.state_path = settings.paper_autonomous_campaign_path.with_name(
-            "paper_autonomous_campaign_state.json"
+        self.state_path = settings.autonomous_campaign_path.with_name(
+            "autonomous_campaign_state.json"
         )
 
     async def run(self) -> None:
-        interval = self.settings.paper_autonomous_poll_interval_seconds
+        interval = self.settings.autonomous_poll_interval_seconds
         while True:
             try:
                 await self.tick(datetime.now(UTC))
             except Exception as exc:
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_CAMPAIGN_ERROR",
-                    correlation_id="paper-autonomous-campaign",
+                    "AUTONOMOUS_CAMPAIGN_ERROR",
+                    correlation_id="autonomous-campaign",
                     payload={
                         "error": type(exc).__name__,
                         "detail": str(exc)[:240],
@@ -173,7 +180,7 @@ class PaperAutonomousCampaignController:
         if reason is not None:
             if reason != self._last_block_reason:
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_ENTRY_BLOCKED",
+                    "AUTONOMOUS_ENTRY_BLOCKED",
                     correlation_id=authorization.campaign_id,
                     payload={"reason": reason},
                 )
@@ -181,7 +188,7 @@ class PaperAutonomousCampaignController:
             return None
         self._last_block_reason = None
 
-        report = load_dashboard_report(self.settings.paper_autonomous_report_path)
+        report = load_dashboard_report(self.settings.autonomous_report_path)
         if not report.model_id.startswith("agent-"):
             await self._blocked(authorization, "REPORT_NOT_AGENT_REVIEWED")
             return None
@@ -222,7 +229,7 @@ class PaperAutonomousCampaignController:
                 quote = await self.broker.current_price(candidate.code)
             except KisApiError as exc:
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_LIVE_QUOTE_ERROR",
+                    "AUTONOMOUS_LIVE_QUOTE_ERROR",
                     correlation_id=authorization.campaign_id,
                     payload={
                         "symbol": candidate.code,
@@ -265,9 +272,7 @@ class PaperAutonomousCampaignController:
             await self._blocked(authorization, "NO_APPROVED_CANDIDATES")
             return None
         _atomic_json(
-            self.settings.paper_autonomous_campaign_path.with_name(
-                "paper_autonomous_live_overlay.json"
-            ),
+            self.settings.autonomous_campaign_path.with_name("autonomous_live_overlay.json"),
             {
                 "schema_version": 1,
                 "observed_at": now.isoformat(),
@@ -294,7 +299,11 @@ class PaperAutonomousCampaignController:
                     symbol=candidate.code,
                     name=candidate.name,
                     entry_target_price_krw=live_price,
-                    entry_price_source="PAPER_AUTONOMOUS_REPORT_PRICE",
+                    entry_price_source=(
+                        "AUTONOMOUS_REPORT_PRICE"
+                        if self.settings.environment is TradingEnvironment.PROD
+                        else "PAPER_AUTONOMOUS_REPORT_PRICE"
+                    ),
                     allocation_pct=allocation_pct,
                     ai_grade=str(metrics.ai_grade),
                     box_low=metrics.box_low,
@@ -322,7 +331,7 @@ class PaperAutonomousCampaignController:
             hard_stop_pct=Decimal("-7.0"),
             profit_policy="ACTIVE_VERSIONED_LOCAL_ENGINE",
             selections=selections,
-            request=f"PAPER_AUTONOMOUS_CAMPAIGN:{authorization.campaign_id}",
+            request=f"AUTONOMOUS_TRADING_CAMPAIGN:{authorization.campaign_id}",
         )
         self.command_store.submit(mandate)
         state.submitted_reports.append(report_key)
@@ -330,7 +339,7 @@ class PaperAutonomousCampaignController:
         state.updated_at = now
         _atomic_json(self.state_path, state.model_dump(mode="json"))
         await self.repository.audit(
-            "PAPER_AUTONOMOUS_MANDATE_SUBMITTED",
+            "AUTONOMOUS_MANDATE_SUBMITTED",
             correlation_id=authorization.campaign_id,
             payload={
                 "command_id": mandate.command_id,
@@ -340,8 +349,7 @@ class PaperAutonomousCampaignController:
             },
         )
         selected_positions = {
-            candidate.code: position_pct
-            for _, _, position_pct, candidate, _ in selected
+            candidate.code: position_pct for _, _, position_pct, candidate, _ in selected
         }
         await self._notify_selections(
             authorization,
@@ -353,12 +361,12 @@ class PaperAutonomousCampaignController:
 
     def _blocking_reason(
         self,
-        authorization: PaperAutonomousCampaignAuthorization,
+        authorization: AutonomousCampaignAuthorization,
         now: datetime,
     ) -> str | None:
         if not authorization.permits_new_entries(now):
             return "CAMPAIGN_DISABLED_OR_EXPIRED"
-        if self.settings.paper_autonomous_kill_switch_path.exists():
+        if self.settings.autonomous_kill_switch_path.exists():
             return "KILL_SWITCH_ACTIVE"
         if trading_session_phase(now) is not TradingSessionPhase.KRX_REGULAR:
             return "OUTSIDE_REGULAR_SESSION"
@@ -376,11 +384,11 @@ class PaperAutonomousCampaignController:
 
     async def _blocked(
         self,
-        authorization: PaperAutonomousCampaignAuthorization,
+        authorization: AutonomousCampaignAuthorization,
         reason: str,
     ) -> None:
         await self.repository.audit(
-            "PAPER_AUTONOMOUS_ENTRY_BLOCKED",
+            "AUTONOMOUS_ENTRY_BLOCKED",
             correlation_id=authorization.campaign_id,
             payload={"reason": reason},
         )
@@ -388,12 +396,12 @@ class PaperAutonomousCampaignController:
 
     async def _notify_prices(
         self,
-        authorization: PaperAutonomousCampaignAuthorization,
+        authorization: AutonomousCampaignAuthorization,
         selections: list[EntrySelection],
     ) -> None:
         if self.notifier is None:
             await self.repository.audit(
-                "PAPER_AUTONOMOUS_PRICE_EMAIL_SKIPPED",
+                "AUTONOMOUS_PRICE_EMAIL_SKIPPED",
                 correlation_id=authorization.campaign_id,
                 payload={"reason": "SMTP_DISABLED_OR_UNAVAILABLE"},
             )
@@ -407,7 +415,7 @@ class PaperAutonomousCampaignController:
                     prices,
                 )
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_PRICE_EMAIL_SENT",
+                    "AUTONOMOUS_PRICE_EMAIL_SENT",
                     correlation_id=authorization.campaign_id,
                     payload={
                         "symbols": [selection.symbol for selection in selections],
@@ -417,7 +425,7 @@ class PaperAutonomousCampaignController:
                 return
             except (NotificationError, OSError) as exc:
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_PRICE_EMAIL_ERROR",
+                    "AUTONOMOUS_PRICE_EMAIL_ERROR",
                     correlation_id=authorization.campaign_id,
                     payload={
                         "attempt": attempt + 1,
@@ -429,13 +437,13 @@ class PaperAutonomousCampaignController:
 
     async def _notify_selections(
         self,
-        authorization: PaperAutonomousCampaignAuthorization,
+        authorization: AutonomousCampaignAuthorization,
         selections: list[EntrySelection],
         selected_positions: dict[str, Decimal],
     ) -> None:
         if self.notifier is None:
             await self.repository.audit(
-                "PAPER_AUTONOMOUS_SELECTION_EMAIL_SKIPPED",
+                "AUTONOMOUS_SELECTION_EMAIL_SKIPPED",
                 correlation_id=authorization.campaign_id,
                 payload={"reason": "SMTP_DISABLED_OR_UNAVAILABLE"},
             )
@@ -457,7 +465,7 @@ class PaperAutonomousCampaignController:
                     rows,
                 )
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_SELECTION_EMAIL_SENT",
+                    "AUTONOMOUS_SELECTION_EMAIL_SENT",
                     correlation_id=authorization.campaign_id,
                     payload={
                         "symbols": [selection.symbol for selection in selections],
@@ -467,7 +475,7 @@ class PaperAutonomousCampaignController:
                 return
             except (NotificationError, OSError) as exc:
                 await self.repository.audit(
-                    "PAPER_AUTONOMOUS_SELECTION_EMAIL_ERROR",
+                    "AUTONOMOUS_SELECTION_EMAIL_ERROR",
                     correlation_id=authorization.campaign_id,
                     payload={
                         "attempt": attempt + 1,
@@ -479,18 +487,18 @@ class PaperAutonomousCampaignController:
 
     def _load_state(
         self,
-        authorization: PaperAutonomousCampaignAuthorization,
-    ) -> PaperAutonomousCampaignState:
+        authorization: AutonomousCampaignAuthorization,
+    ) -> AutonomousCampaignState:
         if not self.state_path.exists():
-            return PaperAutonomousCampaignState(
+            return AutonomousCampaignState(
                 campaign_id=authorization.campaign_id,
                 updated_at=datetime.now(UTC),
             )
-        state = PaperAutonomousCampaignState.model_validate_json(
+        state = AutonomousCampaignState.model_validate_json(
             self.state_path.read_text(encoding="utf-8")
         )
         if state.campaign_id != authorization.campaign_id:
-            return PaperAutonomousCampaignState(
+            return AutonomousCampaignState(
                 campaign_id=authorization.campaign_id,
                 updated_at=datetime.now(UTC),
             )
@@ -513,3 +521,9 @@ def _latest_expected_report_date(now: datetime) -> date:
     while candidate.weekday() >= 5:
         candidate -= timedelta(days=1)
     return candidate
+
+
+# Archived paper test/import compatibility. Production uses the neutral names.
+PaperAutonomousCampaignAuthorization = AutonomousCampaignAuthorization
+PaperAutonomousCampaignState = AutonomousCampaignState
+PaperAutonomousCampaignController = AutonomousCampaignController

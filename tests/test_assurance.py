@@ -7,14 +7,14 @@ from danta.config import AppSettings
 from danta.services.assurance import _database_revision_check
 
 
-def test_assurance_accepts_current_runtime_recovery_revision(
+def test_assurance_accepts_current_fill_ledger_revision(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "paper.db"
     with sqlite3.connect(database) as connection:
         connection.execute("create table alembic_version (version_num text)")
         connection.execute(
-            "insert into alembic_version values ('0004_runtime_recovery')"
+            "insert into alembic_version values ('0005_fill_ledger')"
         )
     settings = AppSettings(
         database_url=f"sqlite+aiosqlite:///{database.as_posix()}",

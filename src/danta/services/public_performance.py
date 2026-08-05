@@ -95,7 +95,7 @@ async def collect_public_performance(
     now: datetime | None = None,
 ) -> PublicPerformanceReport:
     current = (now or datetime.now(KST)).astimezone(KST)
-    names = _load_names(settings.paper_autonomous_report_path)
+    names = _load_names(settings.autonomous_report_path)
     realized_returns = _load_realized_returns(settings.database_url)
     account = await _kis_read(lambda: broker.account_snapshot())
     holdings: list[PublicHolding] = []
@@ -151,7 +151,7 @@ async def collect_public_performance(
         and status.average_fill_price > 0
     ]
     historical_trades, history = _load_public_history(
-        settings.paper_daily_close_root / "reports",
+        settings.daily_close_root / "reports",
         names,
         realized_returns,
     )

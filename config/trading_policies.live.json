@@ -1,0 +1,35 @@
+{
+  "schema_version": "trading-policy-registry-live-v1",
+  "entry": {
+    "version": "entry-stabilization-live-v1",
+    "approved_for_live": true,
+    "max_snapshot_age_seconds": 10,
+    "sell_pressure_block": "0.65",
+    "stabilization_required": "0.45",
+    "buy_recovery_required": "0.45",
+    "max_spread_bps": "35"
+  },
+  "exit": {
+    "version": "exit-defense-profit-live-v1-trading-minutes",
+    "approved_for_live": true,
+    "early_loss_pct": "-3.0",
+    "strong_loss_pct": "-5.0",
+    "early_defense_score": "0.62",
+    "strong_sell_pressure": "0.72",
+    "panic_market_stress": "0.75",
+    "profit_arm_pct": "5.0",
+    "profit_giveback_pct": "1.5",
+    "profit_weakness_score": "0.62",
+    "max_holding_minutes": 1440
+  },
+  "premarket": {
+    "version": "premarket-nxt-protection-live-v1",
+    "approved_for_live": true,
+    "minimum_nxt_trade_samples": 10,
+    "maximum_snapshot_age_seconds": 15,
+    "early_loss_pct": "-3.0",
+    "strong_loss_pct": "-5.0",
+    "sell_pressure_threshold": "0.72",
+    "market_stress_threshold": "0.75"
+  }
+}

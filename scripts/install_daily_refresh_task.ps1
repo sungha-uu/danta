@@ -1,13 +1,13 @@
 param(
     [string]$TaskName = "Danta-Daily-1600",
     [string]$PrefetchTaskName = "Danta-Close-Prefetch-1531",
-    [string]$PaperCloseTaskName = "Danta-Paper-Daily-Close-1535"
+    [string]$DailyCloseTaskName = "Danta-Daily-Close-1535"
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Runner = Join-Path $ProjectRoot "scripts\run_daily_refresh.ps1"
-$PaperCloseRunner = Join-Path $ProjectRoot "scripts\run_paper_daily_close.ps1"
+$DailyCloseRunner = Join-Path $ProjectRoot "scripts\run_daily_close.ps1"
 $PowerShell = (Get-Command powershell.exe).Source
 $Action = New-ScheduledTaskAction `
     -Execute $PowerShell `
@@ -17,9 +17,9 @@ $PrefetchAction = New-ScheduledTaskAction `
     -Execute $PowerShell `
     -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `"Set-Location -LiteralPath '$ProjectRoot'; & '$ProjectRoot\.venv\Scripts\danta.exe' close-prefetch`"" `
     -WorkingDirectory $ProjectRoot
-$PaperCloseAction = New-ScheduledTaskAction `
+$DailyCloseAction = New-ScheduledTaskAction `
     -Execute $PowerShell `
-    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PaperCloseRunner`"" `
+    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$DailyCloseRunner`"" `
     -WorkingDirectory $ProjectRoot
 
 $Triggers = @(
@@ -60,19 +60,19 @@ Register-ScheduledTask `
     -Description "Prefetch Danta KOSPI minute bars after the regular close" `
     -Force | Out-Null
 
-$PaperCloseTriggers = @(
+$DailyCloseTriggers = @(
     New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "15:35"
     New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "15:45"
     New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "15:55"
 )
 Register-ScheduledTask `
-    -TaskName $PaperCloseTaskName `
-    -Action $PaperCloseAction `
-    -Trigger $PaperCloseTriggers `
+    -TaskName $DailyCloseTaskName `
+    -Action $DailyCloseAction `
+    -Trigger $DailyCloseTriggers `
     -Settings $Settings `
     -Principal $Principal `
-    -Description "Email the KIS paper autonomous account daily close summary" `
+    -Description "Email the KIS live autonomous account daily close summary" `
     -Force | Out-Null
 
-Get-ScheduledTask -TaskName $TaskName,$PrefetchTaskName,$PaperCloseTaskName |
+Get-ScheduledTask -TaskName $TaskName,$PrefetchTaskName,$DailyCloseTaskName |
     Select-Object TaskName, State, Description

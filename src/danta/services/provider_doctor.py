@@ -41,7 +41,15 @@ class KisProviderDoctor:
         ]
         if self.credentials.environment is TradingEnvironment.PROD:
             checks.append(
-                CheckResult("production_lock", "PASS", "real order execution remains disabled")
+                CheckResult(
+                    "production_execution_gate",
+                    "PASS" if self.settings.real_order_execution_enabled else "BLOCKED",
+                    (
+                        "real order execution enabled by explicit live promotion"
+                        if self.settings.real_order_execution_enabled
+                        else "real order execution disabled"
+                    ),
+                )
             )
         if live:
             cache_path = (

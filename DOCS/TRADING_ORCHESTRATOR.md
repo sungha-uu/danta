@@ -253,7 +253,7 @@ available_for_symbol = symbol_cap - fills - active_reservations
 ```
 
 - `ENTRY_MANDATE`를 수락할 때 계좌·승인 기준 현금 스냅샷과 종목별 상한을 고정한다.
-- `PAPER_AUTONOMOUS_CAMPAIGN`은 별도 캠페인 컨트롤러가 최신 14일 심층검토 후보를
+- `AUTONOMOUS_TRADING_CAMPAIGN`은 별도 캠페인 컨트롤러가 최신 14일 심층검토 후보를
   선별해 기존 `EntryMandate`로 정규화한다. 따라서 주문·자금예약·멱등성·체결대조·
   손절/익절은 수동 승인 경로와 동일한 `TradingOrchestrator`를 통과한다.
 - 캠페인 컨트롤러는 계좌가 완전 유휴 상태일 때만 새 배치를 만들며 동일

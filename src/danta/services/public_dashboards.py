@@ -33,7 +33,7 @@ async def refresh_public_dashboards(
     credentials = load_kis_credentials(settings)
     async with KisClient(
         credentials,
-        token_cache_path=Path("data/kis-token-cache.json"),
+        token_cache_path=settings.kis_token_cache_path,
     ) as broker:
         fresh_performance = await collect_public_performance(settings, broker)
     public_data = Path("data/public-performance/latest.json")
@@ -44,6 +44,8 @@ async def refresh_public_dashboards(
     performance = (
         previous_performance
         if previous_performance is not None
+        and previous_performance.initial_capital_amount
+        == fresh_performance.initial_capital_amount
         and previous_performance.generated_at <= cutoff
         else fresh_performance
     )

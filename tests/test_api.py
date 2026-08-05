@@ -13,6 +13,6 @@ async def test_health_exposes_safe_environment_only() -> None:
     assert response.json() == {
         "status": "ok",
         "app": "danta",
-        "environment": "paper",
-        "real_order_execution": "disabled",
+        "environment": "prod",
+        "real_order_execution": "enabled",
     }

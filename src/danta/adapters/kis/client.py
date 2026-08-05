@@ -645,8 +645,6 @@ class KisClient:
     ) -> CashOrderReceipt:
         if not self._order_submission_enabled:
             raise PermissionError("KIS order submission is locked")
-        if self.credentials.environment is TradingEnvironment.PROD:
-            raise PermissionError("KIS production order submission is locked during Phase 0")
         self._validate_symbol(symbol)
         if side not in {"BUY", "SELL"}:
             raise ValueError("side must be BUY or SELL")
@@ -656,7 +654,10 @@ class KisClient:
             raise ValueError("order_type must be MARKET or LIMIT")
         if order_type == "LIMIT" and (limit_price is None or limit_price <= 0):
             raise ValueError("positive limit_price is required for LIMIT orders")
-        tr_id = "VTTC0012U" if side == "BUY" else "VTTC0011U"
+        if self.credentials.environment is TradingEnvironment.PAPER:
+            tr_id = "VTTC0012U" if side == "BUY" else "VTTC0011U"
+        else:
+            tr_id = "TTTC0012U" if side == "BUY" else "TTTC0011U"
         body = await self._authorized_request(
             "POST",
             CASH_ORDER_PATH,
@@ -756,8 +757,6 @@ class KisClient:
     ) -> CashOrderReceipt:
         if not self._order_submission_enabled:
             raise PermissionError("KIS order submission is locked")
-        if self.credentials.environment is TradingEnvironment.PROD:
-            raise PermissionError("KIS production order submission is locked during Phase 0")
         if not broker_order_no or not branch_no:
             raise ValueError("broker_order_no and branch_no are required")
         if quantity <= 0:
@@ -765,7 +764,11 @@ class KisClient:
         body = await self._authorized_request(
             "POST",
             REVISE_CANCEL_PATH,
-            tr_id="VTTC0013U",
+            tr_id=(
+                "VTTC0013U"
+                if self.credentials.environment is TradingEnvironment.PAPER
+                else "TTTC0013U"
+            ),
             json_body={
                 "CANO": self.credentials.account_no,
                 "ACNT_PRDT_CD": self.credentials.product_code,

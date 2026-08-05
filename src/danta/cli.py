@@ -26,10 +26,14 @@ from danta.dashboard.builder import build_dashboard, load_dashboard_report
 from danta.dashboard.demo import demo_report
 from danta.dashboard.models import DashboardReport
 from danta.db.session import create_engine_and_session
-from danta.domain.mandate import parse_entry_mandate
 from danta.services.active_box_walk_forward import run_active_box_walk_forward
 from danta.services.ai_review import apply_ai_review, load_ai_review
 from danta.services.assurance import build_assurance_report, write_assurance_report
+from danta.services.autonomous_campaign import (
+    create_campaign_authorization,
+    load_campaign_authorization,
+    write_campaign_authorization,
+)
 from danta.services.candidate_report import CandidateReportError, build_quant_report
 from danta.services.candidate_validation import (
     CandidateValidationError,
@@ -38,6 +42,11 @@ from danta.services.candidate_validation import (
 from danta.services.close_prefetch import run_close_prefetch
 from danta.services.command_store import FileCommandStore
 from danta.services.context_review import PublicContextCollector, build_context_review
+from danta.services.daily_close import (
+    DailyCloseError,
+    DailyCloseResult,
+    run_daily_close,
+)
 from danta.services.daily_operations import (
     DailyOperationError,
     run_scheduled_refresh,
@@ -51,18 +60,6 @@ from danta.services.intraday_report import (
 )
 from danta.services.market_monitor_application import MarketMonitorApplication
 from danta.services.notifier import NotificationError, SmtpNotifier
-from danta.services.paper_autonomous_campaign import (
-    create_campaign_authorization,
-    load_campaign_authorization,
-    write_campaign_authorization,
-)
-from danta.services.paper_broker_campaign import PaperBrokerCampaign
-from danta.services.paper_daily_close import (
-    PaperDailyCloseError,
-    PaperDailyCloseResult,
-    run_paper_daily_close,
-)
-from danta.services.paper_trading_application import PaperTradingApplication
 from danta.services.policy_registry import load_policy_registry
 from danta.services.provider_doctor import KisProviderDoctor
 from danta.services.public_dashboards import refresh_public_dashboards
@@ -75,6 +72,7 @@ from danta.services.runtime_lock import (
     RuntimeInstanceLock,
 )
 from danta.services.runtime_repository import SqlRuntimeRepository
+from danta.services.trading_application import TradingApplication
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -210,34 +208,19 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("dashboard/dist"),
     )
     context_review.add_argument("--refresh", action="store_true")
-    paper = subparsers.add_parser(
-        "paper-trade",
-        help="run the approved KIS paper execution runtime",
-    )
-    paper.add_argument("--mandate", type=Path, required=True)
-    paper.add_argument(
-        "--policies",
-        type=Path,
-        default=Path("config/trading_policies.paper.json"),
-    )
-    paper.add_argument(
-        "--execute",
-        action="store_true",
-        help="required second gate; without it only validates inputs",
-    )
     runtime = subparsers.add_parser(
         "trading-runtime",
-        help="run the mandate-independent KIS paper account runtime",
+        help="run the mandate-independent KIS account runtime",
     )
     runtime.add_argument(
         "--policies",
         type=Path,
-        default=Path("config/trading_policies.paper.json"),
+        default=Path("config/trading_policies.live.json"),
     )
     runtime.add_argument(
         "--command-root",
         type=Path,
-        default=Path("private/commands"),
+        default=None,
     )
     runtime.add_argument(
         "--execute",
@@ -252,16 +235,16 @@ def _parser() -> argparse.ArgumentParser:
     submit_mandate.add_argument(
         "--command-root",
         type=Path,
-        default=Path("private/commands"),
+        default=Path("private/prod/commands"),
     )
     assurance = subparsers.add_parser(
         "assure",
-        help="write the machine-readable paper readiness report",
+        help="write the machine-readable active-account readiness report",
     )
     assurance.add_argument(
         "--policies",
         type=Path,
-        default=Path("config/trading_policies.paper.json"),
+        default=Path("config/trading_policies.live.json"),
     )
     assurance.add_argument(
         "--output",
@@ -298,22 +281,9 @@ def _parser() -> argparse.ArgumentParser:
         help="prefetch the completed regular-session minute bars after 15:30",
     )
     prefetch.add_argument("--force", action="store_true")
-    campaign = subparsers.add_parser(
-        "paper-campaign",
-        help="run the isolated one-share Samsung/SK hynix paper lifecycle campaign",
-    )
-    campaign.add_argument("--execute", action="store_true")
-    campaign.add_argument("--monitor-seconds", type=int, default=30)
-    campaign.add_argument("--start-discount", type=Decimal, default=Decimal("0"))
-    campaign.add_argument("--end-discount", type=Decimal, default=Decimal("0.5"))
-    campaign.add_argument(
-        "--output",
-        type=Path,
-        default=Path("data/paper-campaign/latest.jsonl"),
-    )
     autonomy = subparsers.add_parser(
-        "paper-autonomy",
-        help="authorize, stop, resume, or inspect the KIS paper-only autonomous campaign",
+        "autonomy",
+        help="authorize, stop, resume, or inspect the active KIS autonomous campaign",
     )
     autonomy.add_argument(
         "action",
@@ -359,11 +329,11 @@ def _parser() -> argparse.ArgumentParser:
         type=Decimal,
         default=Decimal("35"),
     )
-    paper_close = subparsers.add_parser(
-        "paper-daily-close",
-        help="email the KIS paper autonomous account close summary",
+    daily_close = subparsers.add_parser(
+        "daily-close",
+        help="email the active KIS autonomous account close summary",
     )
-    paper_close.add_argument(
+    daily_close.add_argument(
         "--force",
         action="store_true",
         help="allow manual execution outside the normal close-time gate",
@@ -439,7 +409,7 @@ def main() -> None:
             "re-latch it if risk remains"
         )
         return
-    if args.command == "paper-autonomy":
+    if args.command == "autonomy":
         try:
             settings = load_settings()
             credentials = load_kis_credentials(settings)
@@ -449,12 +419,13 @@ def main() -> None:
                 authorization = create_campaign_authorization(
                     now=datetime.now().astimezone(),
                     days=args.days,
+                    environment=settings.environment,
                 )
                 write_campaign_authorization(
                     authorization,
-                    settings.paper_autonomous_campaign_path,
+                    settings.autonomous_campaign_path,
                 )
-                settings.paper_autonomous_kill_switch_path.unlink(missing_ok=True)
+                settings.autonomous_kill_switch_path.unlink(missing_ok=True)
                 print(
                     json.dumps(
                         authorization.model_dump(mode="json"),
@@ -464,15 +435,15 @@ def main() -> None:
                 )
                 return
             if args.action == "stop":
-                settings.paper_autonomous_kill_switch_path.parent.mkdir(
+                settings.autonomous_kill_switch_path.parent.mkdir(
                     parents=True,
                     exist_ok=True,
                 )
-                settings.paper_autonomous_kill_switch_path.write_text(
+                settings.autonomous_kill_switch_path.write_text(
                     datetime.now().astimezone().isoformat(),
                     encoding="utf-8",
                 )
-                print("paper autonomous NEW ENTRIES stopped; position protection remains active")
+                print("autonomous NEW ENTRIES stopped; position protection remains active")
                 return
             if args.action == "resume":
                 if not args.execute:
@@ -482,8 +453,8 @@ def main() -> None:
                     datetime.now().astimezone()
                 ):
                     raise PermissionError("a valid non-expired campaign is required")
-                settings.paper_autonomous_kill_switch_path.unlink(missing_ok=True)
-                print("paper autonomous new entries resumed")
+                settings.autonomous_kill_switch_path.unlink(missing_ok=True)
+                print("autonomous new entries resumed")
                 return
             loaded_authorization = load_campaign_authorization(settings, credentials)
             print(
@@ -494,7 +465,7 @@ def main() -> None:
                             if loaded_authorization is None
                             else loaded_authorization.model_dump(mode="json")
                         ),
-                        "kill_switch": (settings.paper_autonomous_kill_switch_path.exists()),
+                        "kill_switch": (settings.autonomous_kill_switch_path.exists()),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -502,7 +473,7 @@ def main() -> None:
             )
             return
         except (OSError, ValueError, ValidationError, PermissionError) as exc:
-            print(f"paper autonomy command rejected: {exc}", file=sys.stderr)
+            print(f"autonomy command rejected: {exc}", file=sys.stderr)
             raise SystemExit(18) from None
     if args.command == "market-monitor":
         try:
@@ -567,7 +538,7 @@ def main() -> None:
             print(f"assurance failed: {exc}", file=sys.stderr)
             raise SystemExit(11) from None
         print(json.dumps(assurance_report.as_dict(), ensure_ascii=False, indent=2))
-        raise SystemExit(0 if assurance_report.ready_for_new_paper_entries else 12)
+        raise SystemExit(0 if assurance_report.ready_for_new_entries else 12)
     if args.command == "daily-cycle":
         try:
             daily_result = asyncio.run(
@@ -597,84 +568,6 @@ def main() -> None:
             f"{daily_result.dashboard_path}"
         )
         return
-    if args.command == "paper-campaign":
-        if not args.execute:
-            print("paper campaign validated no action; pass --execute to submit paper orders")
-            return
-        try:
-            if (
-                args.start_discount < 0
-                or args.end_discount > Decimal("0.5")
-                or args.start_discount > args.end_discount
-                or args.start_discount % Decimal("0.1") != 0
-                or args.end_discount % Decimal("0.1") != 0
-            ):
-                raise ValueError("paper campaign discounts must be 0.1% steps between 0% and 0.5%")
-            settings = load_settings()
-            campaign = PaperBrokerCampaign(
-                settings=settings,
-                credentials=load_kis_credentials(settings),
-                policies=load_policy_registry(Path("config/trading_policies.paper.json")),
-                output=args.output,
-                monitor_seconds=args.monitor_seconds,
-            )
-            results = asyncio.run(
-                campaign.run(
-                    symbols=("000660", "005930"),
-                    discounts=tuple(
-                        Decimal(index) / Decimal("10")
-                        for index in range(
-                            int(args.start_discount * 10),
-                            int(args.end_discount * 10) + 1,
-                        )
-                    ),
-                )
-            )
-        except (
-            OSError,
-            ValueError,
-            RuntimeError,
-            PermissionError,
-            KisApiError,
-        ) as exc:
-            print(f"paper campaign stopped safely: {exc}", file=sys.stderr)
-            raise SystemExit(14) from None
-        print(
-            f"paper campaign completed: {len(results)} steps, "
-            f"{sum(item.status == 'ROUND_TRIP_FILLED' for item in results)} fills"
-        )
-        return
-    if args.command == "paper-trade":
-        try:
-            settings = load_settings()
-            mandate = parse_entry_mandate(args.mandate.read_text(encoding="utf-8"))
-            policies = load_policy_registry(args.policies)
-            credentials = load_kis_credentials(settings)
-            if not args.execute:
-                print(
-                    "paper runtime inputs are valid; no order was sent. "
-                    "Pass --execute to start the long-running runtime."
-                )
-                return
-            application = PaperTradingApplication(
-                settings=settings,
-                credentials=credentials,
-                mandate=mandate,
-                policies=policies,
-            )
-            with RuntimeInstanceLock(Path("private/trading-runtime.lock")):
-                asyncio.run(application.run())
-        except (
-            OSError,
-            ValueError,
-            ValidationError,
-            PermissionError,
-            KisApiError,
-            RuntimeAlreadyRunningError,
-        ) as exc:
-            print(f"paper runtime refused to start: {exc}", file=sys.stderr)
-            raise SystemExit(10) from None
-        return
     if args.command == "submit-entry-mandate":
         try:
             target = FileCommandStore(args.command_root).submit_document(args.input)
@@ -694,7 +587,7 @@ def main() -> None:
                     "Pass --execute to start recovery and monitoring."
                 )
                 return
-            application = PaperTradingApplication(
+            application = TradingApplication(
                 settings=settings,
                 credentials=credentials,
                 mandate=None,
@@ -795,13 +688,13 @@ def main() -> None:
             flush=True,
         )
         return
-    if args.command == "paper-daily-close":
+    if args.command == "daily-close":
         settings = load_settings()
         try:
             credentials = load_kis_credentials(settings)
             notifier = SmtpNotifier(load_smtp_config(settings))
 
-            async def close_report() -> PaperDailyCloseResult:
+            async def close_report() -> DailyCloseResult:
                 engine, session_factory = create_engine_and_session(
                     settings.database_url
                 )
@@ -811,9 +704,9 @@ def main() -> None:
                     ).load_open_positions()
                     async with KisClient(
                         credentials,
-                        token_cache_path=Path("data/kis-token-cache.json"),
+                        token_cache_path=settings.kis_token_cache_path,
                     ) as client:
-                        return await run_paper_daily_close(
+                        return await run_daily_close(
                             settings,
                             credentials,
                             client,
@@ -832,7 +725,7 @@ def main() -> None:
             PermissionError,
             KisApiError,
             NotificationError,
-            PaperDailyCloseError,
+            DailyCloseError,
         ) as exc:
             print(f"paper daily close failed: {exc}", file=sys.stderr)
             raise SystemExit(14) from None
@@ -1043,8 +936,11 @@ def main() -> None:
                 MinuteBarStore(args.data_root),
                 strategy_status=(
                     "ACTIVE"
-                    if settings.environment is TradingEnvironment.PAPER
-                    and settings.paper_order_execution_enabled
+                    if (
+                        settings.real_order_execution_enabled
+                        if settings.environment is TradingEnvironment.PROD
+                        else settings.paper_order_execution_enabled
+                    )
                     else "RESEARCH_ONLY"
                 ),
             )

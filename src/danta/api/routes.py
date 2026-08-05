@@ -16,7 +16,9 @@ async def health() -> dict[str, str]:
         "status": "ok",
         "app": settings.app_name,
         "environment": settings.environment.value,
-        "real_order_execution": "disabled",
+        "real_order_execution": (
+            "enabled" if settings.real_order_execution_enabled else "disabled"
+        ),
     }
 
 

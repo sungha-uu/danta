@@ -2,7 +2,8 @@
 
 - 문서 등급: 외부 연동 기준
 - 활성 주문 공급자: 한국투자증권 Open API(KIS)
-- 확인 기준일: 2026-07-26
+- 확인 기준일: 2026-08-06
+- 활성 환경: 실전(`prod`)만 운용. 모의 자격증명은 감사 보관이며 런타임에서 사용하지 않는다.
 
 키움증권 REST API는 활성 구현 기준이 아니다. 전환 결정과 차이는 [`BROKER_API_COMPARISON.md`](BROKER_API_COMPARISON.md)에 둔다.
 
@@ -14,10 +15,9 @@
 2. 한국투자증권 온라인 ID/HTS ID를 만들고 계좌를 연결한다.
 3. [KIS Developers](https://apiportal.koreainvestment.com/)의 `API신청`에서 Open API 서비스를 신청한다.
 4. 실전투자용 `App Key`와 `App Secret`을 발급받는다.
-5. 모의투자용 `App Key`와 `App Secret`을 별도로 발급받는다.
-6. 실전 계좌번호와 모의 계좌번호를 확인한다. 설정에는 앞 8자리와 뒤 2자리 상품코드를 분리한다. 일반 종합계좌 상품코드는 보통 `01`이지만 본인 계좌에서 확인한다.
+5. 실전 계좌번호를 확인한다. 설정에는 앞 8자리와 뒤 2자리 상품코드를 분리한다. 일반 종합계좌 상품코드는 보통 `01`이지만 본인 계좌에서 확인한다.
 7. 체결통보와 일부 WebSocket 기능에 사용하는 HTS ID를 확인한다.
-8. 모의투자에서 현재가·잔고·주문·정정/취소·매도와 WebSocket 체결·호가를 시험할 수 있는지 확인한다.
+8. 실전 계좌에서 현재가·잔고와 WebSocket 연결을 읽기 전용 진단하고, 주문·정정/취소·매도는 단위·계약 테스트와 운영 게이트로 검증한다.
 
 ### 프로젝트 운영에 필요
 
@@ -36,7 +36,6 @@
 
 ```text
 .secrets/
-  kis/paper.json
   kis/prod.json
   imported_financial_statement_analysis/key.txt
   imported_financial_statement_analysis/email_config.json
@@ -46,7 +45,7 @@ JSON 필드:
 
 ```json
 {
-  "environment": "paper",
+  "environment": "prod",
   "app_key": "",
   "app_secret": "",
   "account_no": "",
@@ -55,7 +54,7 @@ JSON 필드:
 }
 ```
 
-모의와 실전은 파일·프로세스·토큰 캐시·DB 스키마 또는 DB 인스턴스를 분리한다. 실행 시 `KIS_ENV`와 키·계좌의 환경이 일치하지 않으면 시작을 거부한다.
+활성 실전 경로는 `.secrets/kis/prod.json`, `.secrets/kis/.cache/prod_token.json`, `data/danta-live.db`, `private/prod`로 격리한다. 실행 시 설정과 키·계좌의 환경이 일치하지 않으면 시작을 거부한다.
 
 ## 3. 공식 샘플 기준 환경
 
@@ -63,6 +62,8 @@ JSON 필드:
 | --- | --- | --- |
 | 실전 | `https://openapi.koreainvestment.com:9443` | 공식 설정의 `ops` 값 사용 |
 | 모의 | `https://openapivts.koreainvestment.com:29443` | 공식 설정의 `vops` 값 사용 |
+
+활성 현금주문 TR ID는 KIS 공식 샘플 기준 매수 `TTTC0012U`, 매도 `TTTC0011U`, 정정·취소 `TTTC0013U`다. 어댑터 계약 테스트가 이 값을 고정 검증한다.
 
 WebSocket 주소와 TR ID는 코드에 중복 하드코딩하지 않고 버전 관리되는 KIS 설정과 어댑터에 둔다. 공식 샘플은 `prod`와 `vps`로 실전·모의를 전환하며, REST 접근토큰과 WebSocket 접속키를 별도로 발급한다.
 

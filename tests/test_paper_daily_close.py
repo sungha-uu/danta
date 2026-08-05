@@ -144,9 +144,9 @@ class RecordingNotifier(SmtpNotifier):
         )
         self.bodies: list[str] = []
 
-    def send_paper_daily_close(self, body: str):
+    def send_daily_close(self, body: str):
         self.bodies.append(body)
-        return super().send_paper_daily_close(body)
+        return super().send_daily_close(body)
 
     def _deliver(self, _message) -> None:
         return None

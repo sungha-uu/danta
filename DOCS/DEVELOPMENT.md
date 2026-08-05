@@ -2,6 +2,21 @@
 
 ## 0. 현재 구현 상태
 
+### 2026-08-06 활성 실계좌 기준
+
+- 활성 설정: `config/app.json`의 `environment=prod`, `real_order_execution_enabled=true`
+- 실전 정책: `config/trading_policies.live.json`
+- 격리 저장소: `data/danta-live.db`, `private/prod`, `.secrets/kis/.cache/prod_token.json`
+- 기준자산: 5,000,000원
+- 과거 모의투자 런타임과 예약 작업은 비활성화했으며 모의 DB는 감사용으로만 보관한다.
+- 실전 주문·취소 TR ID는 KIS 공식 샘플의 `TTTC0012U`, `TTTC0011U`, `TTTC0013U`를 사용한다.
+- 신규매수는 유효한 `AUTONOMOUS_TRADING_CAMPAIGN`, 시작 복구·잔고대조, 시장·데이터·정책 게이트를 모두 통과해야 한다.
+
+### 보관 기록: 2026-07-28 모의 검증 단계
+
+아래 내용은 실계좌 승격 전 구현·검증 이력이다. 현재 실행 명령·경로·판정 기준으로
+사용하지 않으며, 활성 기준은 바로 위 `2026-08-06 활성 실계좌 기준`만 따른다.
+
 2026-07-28 기준 데이터·분석 경로와 모의주문 실행 후보판을 구현했다.
 
 - `src/danta`: FastAPI, 설정, 도메인, 포트, KIS 어댑터, 서비스, DB
@@ -25,8 +40,8 @@ Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성
 우선순위 주문 큐, SQL 멱등 원장, KIS 모의 현금주문·취소·체결조회,
 부분체결 포지션 보호, DB/KIS 시작 대조, WebSocket 감시와 독립 REST `-7%`
 감시까지 연결했다. 2026-07-28 사전 보증과 KIS 모의 실연결 진단 통과 후
-`paper_order_execution_enabled=true`로 전환했으며, 사용자 승인문과 `--execute`
-이중 게이트를 유지한다. `real_order_execution_enabled=false`는 계속 고정한다.
+과거 모의 실행의 `paper_order_execution_enabled`는 비활성화했다. 활성 런타임은
+`real_order_execution_enabled=true`, 실전 승인 정책과 `--execute` 게이트를 사용한다.
 코드 구현 완료와 모의 운용 승격은 별개이며, 아래 장애 시나리오의 실제 KIS 증거가
 없으면 `PAPER_READY` 또는 실전 가능으로 판정하지 않는다.
 
@@ -34,11 +49,11 @@ Phase 0B KIS 모의계좌 live doctor는 2026-07-26 통과했다. 토큰, 삼성
 
 - `daily-cycle`: KOSPI 시총 상위 200개, 21일 1분봉 증분 수집, 14일 +10% 자격 게이트,
   정량 상위 50개 뉴스·DART·토론·재무 컨텍스트 검토, 공식 후보 200개 정적 대시보드 생성
-- `paper-trade`: 승인문과 버전 정책을 받아 최대 N개 구조로 실행하되 현재 설정 한도는 3개
+- `trading-runtime`: 환경별 전용 명령함과 버전 정책을 사용하며 현재 실계좌 설정 한도는 3개
 - `TradingRuntimeCore`: 체결·10호가 신호, 최대 매수가 이하 안정화 진입,
   적응형 보호청산과 불변 `-7%` 손절
 - `OrderManager`/`SqlOrderJournal`: 주문 멱등성, 제출 상태 영속화, 미체결 잔량 취소
-- `assure`: 신규 모의매수 허용 여부를 기계 판독 가능한 JSON으로 출력
+- `assure`: 활성 실계좌 신규매수 허용 여부를 기계 판독 가능한 JSON으로 출력
 
 현재 대시보드는 결정적 데모 데이터로 UI·스키마·기간 전환을 검증하는 단계다. 실제 KIS·KRX·뉴스·수급 수집기와 연결되기 전에는 화면에 `DEMO DATA`를 표시한다.
 

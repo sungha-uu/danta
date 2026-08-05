@@ -208,16 +208,20 @@ class SmtpNotifier:
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
-    def send_paper_daily_close(self, body: str) -> NotificationReceipt:
+    def send_daily_close(self, body: str) -> NotificationReceipt:
         if not body.strip():
-            raise ValueError("paper daily close body must not be blank")
+            raise ValueError("daily close body must not be blank")
         message = EmailMessage()
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
-        message["Subject"] = "# 자율 모의투자 현황"
+        message["Subject"] = "# 자율매매 현황"
         _set_utf8_content(message, body.strip())
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_paper_daily_close(self, body: str) -> NotificationReceipt:
+        """Compatibility alias for archived paper-report tooling."""
+        return self.send_daily_close(body)
 
     def send_market_risk_transition(
         self,

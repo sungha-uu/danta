@@ -18,12 +18,11 @@ from danta.adapters.kis.client import (
 from danta.config import (
     AppSettings,
     KisCredentials,
-    TradingEnvironment,
 )
 from danta.dashboard.builder import load_dashboard_report
 from danta.ports.broker import Quote
+from danta.services.autonomous_campaign import load_campaign_authorization
 from danta.services.notifier import SmtpNotifier
-from danta.services.paper_autonomous_campaign import load_campaign_authorization
 from danta.services.runtime_repository import StoredPosition
 
 KST = ZoneInfo("Asia/Seoul")
@@ -88,11 +87,11 @@ class PaperDailyHolding(BaseModel):
 
 
 class PaperDailyCloseReport(BaseModel):
-    schema_version: Literal["paper-daily-close-v2"] = "paper-daily-close-v2"
+    schema_version: Literal["daily-close-v3"] = "daily-close-v3"
     campaign_id: str
     trading_date: str
     generated_at: datetime
-    environment: Literal["paper"] = "paper"
+    environment: Literal["paper", "prod"]
     fills: list[PaperDailyFill]
     open_orders: list[PaperDailyOpenOrder]
     holdings: list[PaperDailyHolding]
@@ -133,24 +132,20 @@ async def run_paper_daily_close(
 ) -> PaperDailyCloseResult:
     current = (now or datetime.now(KST)).astimezone(KST)
     trading_date = current.date().isoformat()
-    if not settings.paper_daily_close_enabled:
+    if not settings.daily_close_enabled:
         return PaperDailyCloseResult(
             status="DISABLED",
             trading_date=trading_date,
-            detail="paper daily close email is disabled",
+            detail="daily close email is disabled",
         )
-    if (
-        settings.environment is not TradingEnvironment.PAPER
-        or credentials.environment is not TradingEnvironment.PAPER
-        or settings.real_order_execution_enabled
-    ):
-        raise PermissionError("paper daily close is forbidden outside KIS paper")
+    if settings.environment is not credentials.environment:
+        raise PermissionError("daily close environment mismatch")
     authorization = load_campaign_authorization(settings, credentials)
     if authorization is None:
         return PaperDailyCloseResult(
             status="DISABLED",
             trading_date=trading_date,
-            detail="paper autonomous campaign is not authorized",
+            detail="autonomous campaign is not authorized",
         )
     if current.weekday() >= 5 and not force:
         return PaperDailyCloseResult(
@@ -159,9 +154,9 @@ async def run_paper_daily_close(
             detail="weekend close report skipped",
         )
     if current.timetz().replace(tzinfo=None) < time(15, 30) and not force:
-        raise PaperDailyCloseError("paper daily close cannot run before 15:30 KST")
+        raise PaperDailyCloseError("daily close cannot run before 15:30 KST")
 
-    root = settings.paper_daily_close_root
+    root = settings.daily_close_root
     marker = root / "sent" / f"{trading_date}.json"
     if marker.exists() and not force:
         return PaperDailyCloseResult(
@@ -177,10 +172,8 @@ async def run_paper_daily_close(
             detail="KIS did not return a regular-session bar for this date",
         )
 
-    names = _load_names(settings.paper_autonomous_report_path)
-    statuses = await broker.daily_order_statuses(
-        trading_date=trading_date.replace("-", "")
-    )
+    names = _load_names(settings.autonomous_report_path)
+    statuses = await broker.daily_order_statuses(trading_date=trading_date.replace("-", ""))
     account = await broker.account_snapshot()
     holdings: list[PaperDailyHolding] = []
     for position in account.positions:
@@ -188,9 +181,7 @@ async def run_paper_daily_close(
         evaluation = quote.price * position.quantity
         cost = position.average_price * Decimal(position.quantity)
         profit_loss = Decimal(evaluation) - cost
-        return_pct = (
-            profit_loss / cost * HUNDRED if cost > 0 else Decimal("0")
-        )
+        return_pct = profit_loss / cost * HUNDRED if cost > 0 else Decimal("0")
         holdings.append(
             PaperDailyHolding(
                 symbol=position.symbol,
@@ -233,21 +224,14 @@ async def run_paper_daily_close(
     ]
     summary = account.summary
     holdings_return = (
-        Decimal(summary.holdings_profit_loss)
-        / Decimal(summary.purchase_amount)
-        * HUNDRED
+        Decimal(summary.holdings_profit_loss) / Decimal(summary.purchase_amount) * HUNDRED
         if summary.purchase_amount > 0
         else Decimal("0")
     )
     initial_capital = settings.autonomous_initial_capital_krw
     cumulative = (
-        (
-            Decimal(summary.net_asset_amount)
-            / Decimal(initial_capital)
-            - Decimal("1")
-        )
-        * HUNDRED
-    )
+        Decimal(summary.net_asset_amount) / Decimal(initial_capital) - Decimal("1")
+    ) * HUNDRED
     reconciliation_status, reconciliation_detail = _reconcile(
         account,
         internal_positions,
@@ -256,6 +240,7 @@ async def run_paper_daily_close(
         campaign_id=authorization.campaign_id,
         trading_date=trading_date,
         generated_at=current,
+        environment=settings.environment.value,
         fills=fills,
         open_orders=open_orders,
         holdings=holdings,
@@ -278,7 +263,7 @@ async def run_paper_daily_close(
     report_path = root / "reports" / f"{trading_date}.json"
     _write_model(report_path, report)
     _write_model(root / "latest.json", report)
-    receipt = notifier.send_paper_daily_close(format_paper_daily_close(report))
+    receipt = notifier.send_daily_close(format_paper_daily_close(report))
     _write_json(
         marker,
         {
@@ -294,14 +279,14 @@ async def run_paper_daily_close(
         trading_date=trading_date,
         report_path=str(report_path),
         recipient_count=receipt.recipient_count,
-        detail="paper autonomous daily close email sent",
+        detail="autonomous daily close email sent",
     )
 
 
 def format_paper_daily_close(report: PaperDailyCloseReport) -> str:
     lines = [
         f"기준일시: {report.generated_at.astimezone(KST).strftime('%Y-%m-%d %H:%M:%S')}",
-        "모드: KIS 모의투자 전자동",
+        f"모드: KIS {'실계좌' if report.environment == 'prod' else '모의투자'} 전자동",
         "",
         "[당일 매수 체결]",
     ]
@@ -313,8 +298,7 @@ def format_paper_daily_close(report: PaperDailyCloseReport) -> str:
     lines.extend(["", "[미체결 주문]"])
     if report.open_orders:
         lines.extend(
-            f"- {item.name} {item.side} {item.remaining_quantity:,}주 "
-            f"{item.order_price:,}원"
+            f"- {item.name} {item.side} {item.remaining_quantity:,}주 {item.order_price:,}원"
             for item in report.open_orders
         )
     else:
@@ -374,10 +358,7 @@ def _load_names(report_path: Path) -> dict[str, str]:
     if not report_path.exists():
         return {}
     report = load_dashboard_report(report_path)
-    return {
-        item.code: item.name
-        for item in [*report.candidates, *report.extended_watchlist]
-    }
+    return {item.code: item.name for item in [*report.candidates, *report.extended_watchlist]}
 
 
 def _reconcile(
@@ -398,8 +379,7 @@ def _reconcile(
 
 def _fill_lines(items: list[PaperDailyFill]) -> list[str]:
     return [
-        f"- {item.name} {item.quantity:,}주 {item.average_fill_price:,.0f}원 "
-        f"({item.order_time})"
+        f"- {item.name} {item.quantity:,}주 {item.average_fill_price:,.0f}원 ({item.order_time})"
         for item in items
     ]
 

@@ -29,6 +29,13 @@ class AppSettings(BaseModel):
     log_level: str = "INFO"
     buy_requires_user_approval: bool = True
     unattended_auto_buy_enabled: bool = False
+    autonomous_campaign_path: Path = Path("private/live/autonomous_campaign.json")
+    autonomous_kill_switch_path: Path = Path("private/live/AUTONOMY_STOP")
+    autonomous_report_path: Path = Path("data/candidate_intraday_ai_report.json")
+    autonomous_poll_interval_seconds: int = Field(default=30, ge=5, le=300)
+    daily_close_enabled: bool = True
+    daily_close_root: Path = Path("data/live-daily-close")
+    kis_token_cache_path: Path = Path(".secrets/kis/.cache/prod_token.json")
     paper_autonomous_campaign_path: Path = Path("private/paper_autonomous_campaign.json")
     paper_autonomous_kill_switch_path: Path = Path("private/PAPER_AUTONOMY_STOP")
     paper_autonomous_report_path: Path = Path("data/candidate_intraday_ai_report.json")
@@ -45,9 +52,7 @@ class AppSettings(BaseModel):
     order_poll_interval_seconds: Decimal = Field(default=Decimal("2.0"), ge=Decimal("1"))
     market_data_stale_seconds: int = Field(default=10, ge=2, le=60)
     fundamental_snapshot_path: Path = Path("data/fundamentals/latest.json")
-    recommendation_performance_root: Path = Path(
-        "data/recommendation-performance"
-    )
+    recommendation_performance_root: Path = Path("data/recommendation-performance")
     recommendation_round_trip_cost_bps: Decimal = Field(
         default=Decimal("35"),
         ge=0,
@@ -76,20 +81,46 @@ class AppSettings(BaseModel):
     financial_analysis_dashboard_public_url: str = (
         "https://sungha-uu.github.io/financial_statement_analysis_daily_report/"
     )
-    public_dashboard_refresh_interval_seconds: int = Field(
-        default=900, ge=900, le=3600
-    )
-    market_entry_resume_required_path: Path = Path(
-        "private/MARKET_ENTRY_RESUME_REQUIRED"
-    )
+    public_dashboard_refresh_interval_seconds: int = Field(default=900, ge=900, le=3600)
+    market_entry_resume_required_path: Path = Path("private/MARKET_ENTRY_RESUME_REQUIRED")
 
     @model_validator(mode="after")
     def enforce_immutable_safety_policy(self) -> AppSettings:
         errors: list[str] = []
+        if (
+            "autonomous_campaign_path" not in self.model_fields_set
+            and "paper_autonomous_campaign_path" in self.model_fields_set
+        ):
+            self.autonomous_campaign_path = self.paper_autonomous_campaign_path
+        if (
+            "autonomous_kill_switch_path" not in self.model_fields_set
+            and "paper_autonomous_kill_switch_path" in self.model_fields_set
+        ):
+            self.autonomous_kill_switch_path = self.paper_autonomous_kill_switch_path
+        if (
+            "autonomous_report_path" not in self.model_fields_set
+            and "paper_autonomous_report_path" in self.model_fields_set
+        ):
+            self.autonomous_report_path = self.paper_autonomous_report_path
+        # Archived paper tooling keeps its isolated paths; the active production
+        # config uses only the environment-neutral fields above.
+        if self.environment is TradingEnvironment.PAPER:
+            if "autonomous_campaign_path" not in self.model_fields_set:
+                self.autonomous_campaign_path = self.paper_autonomous_campaign_path
+            if "autonomous_kill_switch_path" not in self.model_fields_set:
+                self.autonomous_kill_switch_path = self.paper_autonomous_kill_switch_path
+            if "autonomous_report_path" not in self.model_fields_set:
+                self.autonomous_report_path = self.paper_autonomous_report_path
+            if "autonomous_poll_interval_seconds" not in self.model_fields_set:
+                self.autonomous_poll_interval_seconds = self.paper_autonomous_poll_interval_seconds
+            if "daily_close_enabled" not in self.model_fields_set:
+                self.daily_close_enabled = self.paper_daily_close_enabled
+            if "daily_close_root" not in self.model_fields_set:
+                self.daily_close_root = self.paper_daily_close_root
         if not self.buy_requires_user_approval:
             errors.append("buy_requires_user_approval must be true")
         # This legacy global switch remains locked. The only unattended path is
-        # a validated, expiring PAPER_AUTONOMOUS_CAMPAIGN authorization file.
+        # a validated, expiring autonomous campaign authorization file.
         if self.unattended_auto_buy_enabled:
             errors.append("unattended_auto_buy_enabled must be false")
         if not self.auto_stop_sell_enabled:
@@ -98,8 +129,11 @@ class AppSettings(BaseModel):
             errors.append("stop_loss_pct must be exactly 7.0")
         if self.stop_sell_requires_confirmation:
             errors.append("stop_sell_requires_confirmation must be false")
-        if self.environment is TradingEnvironment.PROD and self.real_order_execution_enabled:
-            errors.append("real order execution is locked during Phase 0")
+        if self.environment is TradingEnvironment.PROD:
+            if self.paper_order_execution_enabled:
+                errors.append("paper_order_execution_enabled must be false in prod")
+        elif self.real_order_execution_enabled:
+            errors.append("real_order_execution_enabled is forbidden in paper")
         if errors:
             raise ValueError("; ".join(errors))
         return self
@@ -143,6 +177,12 @@ def load_settings() -> AppSettings:
         data["database_url"] = database_url
     if paper_execution := os.getenv("DANTA_PAPER_ORDER_EXECUTION_ENABLED"):
         data["paper_order_execution_enabled"] = paper_execution.lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+    if real_execution := os.getenv("DANTA_REAL_ORDER_EXECUTION_ENABLED"):
+        data["real_order_execution_enabled"] = real_execution.lower() in {
             "1",
             "true",
             "yes",

@@ -75,7 +75,7 @@ async def run_scheduled_refresh(
         result = await run_daily_pipeline(
             settings,
             data_root=Path("data/intraday/1m"),
-            report_output=settings.paper_autonomous_report_path,
+            report_output=settings.autonomous_report_path,
             review_output=Path("data/context-review-latest.json"),
             dashboard_output=Path("dashboard/dist"),
             context_cache_root=Path("data/public-context"),

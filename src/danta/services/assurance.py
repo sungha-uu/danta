@@ -29,16 +29,15 @@ class AssuranceReport:
     code_fingerprint: str
 
     @property
-    def ready_for_new_paper_entries(self) -> bool:
+    def ready_for_new_entries(self) -> bool:
         return not any(
-            check.severity == "CRITICAL" and check.status != "PASS"
-            for check in self.checks
+            check.severity == "CRITICAL" and check.status != "PASS" for check in self.checks
         )
 
     def as_dict(self) -> dict[str, object]:
         return {
             "generated_at": self.generated_at.isoformat(),
-            "ready_for_new_paper_entries": self.ready_for_new_paper_entries,
+            "ready_for_new_entries": self.ready_for_new_entries,
             "code_fingerprint": self.code_fingerprint,
             "checks": [
                 {
@@ -74,34 +73,45 @@ def build_assurance_report(
             "automatic -7% stop must remain enabled without confirmation",
         ),
         _check(
-            "PRODUCTION_ORDER_LOCK",
+            "EXECUTION_ENVIRONMENT_GATE",
             "CRITICAL",
-            not settings.real_order_execution_enabled,
-            "real_order_execution_enabled must remain false before promotion",
+            (
+                settings.environment is TradingEnvironment.PROD
+                and settings.real_order_execution_enabled
+                and not settings.paper_order_execution_enabled
+            )
+            or (
+                settings.environment is TradingEnvironment.PAPER
+                and settings.paper_order_execution_enabled
+                and not settings.real_order_execution_enabled
+            ),
+            f"environment={settings.environment.value}",
         ),
         _check(
-            "PAPER_ENVIRONMENT",
+            "ACTIVE_ENVIRONMENT",
             "CRITICAL",
-            settings.environment is TradingEnvironment.PAPER,
+            settings.environment in {TradingEnvironment.PAPER, TradingEnvironment.PROD},
             f"active environment={settings.environment.value}",
         ),
         _check(
             "ENTRY_POLICY_APPROVED",
             "CRITICAL",
-            policies.entry.approved_for_paper,
+            policies.entry.approved_for(settings.environment),
             policies.entry.version,
         ),
         _check(
             "EXIT_POLICY_APPROVED",
             "CRITICAL",
-            policies.exit.approved_for_paper,
+            policies.exit.approved_for(settings.environment),
             policies.exit.version,
         ),
         _check(
-            "PAPER_EXECUTION_GATE",
+            "ORDER_EXECUTION_GATE",
             "CRITICAL",
-            settings.paper_order_execution_enabled,
-            "paper_order_execution_enabled is the config-side order gate",
+            settings.real_order_execution_enabled
+            if settings.environment is TradingEnvironment.PROD
+            else settings.paper_order_execution_enabled,
+            "the active environment order gate must be enabled",
         ),
         _check(
             "KIS_SECRET_FILE",
@@ -147,9 +157,7 @@ def write_assurance_report(report: AssuranceReport, path: Path) -> None:
     temporary.replace(path)
 
 
-def _check(
-    code: str, severity: str, passed: bool, evidence: str
-) -> AssuranceCheck:
+def _check(code: str, severity: str, passed: bool, evidence: str) -> AssuranceCheck:
     return AssuranceCheck(code, severity, "PASS" if passed else "BLOCKED", evidence)
 
 
@@ -161,9 +169,7 @@ def _fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _database_revision_check(
-    settings: AppSettings, project_root: Path
-) -> AssuranceCheck:
+def _database_revision_check(settings: AppSettings, project_root: Path) -> AssuranceCheck:
     prefix = "sqlite+aiosqlite:///"
     if not settings.database_url.startswith(prefix):
         return AssuranceCheck(
@@ -184,9 +190,7 @@ def _database_revision_check(
         )
     try:
         with sqlite3.connect(database) as connection:
-            row = connection.execute(
-                "SELECT version_num FROM alembic_version"
-            ).fetchone()
+            row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
     except sqlite3.Error as exc:
         return AssuranceCheck(
             "DATABASE_SCHEMA_APPLIED",
@@ -198,6 +202,6 @@ def _database_revision_check(
     return AssuranceCheck(
         "DATABASE_SCHEMA_APPLIED",
         "CRITICAL",
-        "PASS" if revision == "0004_runtime_recovery" else "BLOCKED",
+        "PASS" if revision == "0005_fill_ledger" else "BLOCKED",
         f"alembic revision={revision}",
     )

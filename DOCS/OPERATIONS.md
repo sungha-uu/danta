@@ -1,5 +1,15 @@
 # 운영·이메일·대시보드 통합 가이드
 
+### 2026-08-06 실계좌 전환 운영 기록
+
+- Codex Plus 잔여량: 공식 로컬 조회 수단이 없어 `NOT_AVAILABLE`
+- 별도 OpenAI API 사용량: `0`; 주문·감시·메일은 로컬 Python 경로
+- 활성 계좌: KIS `prod`, 기준자산 5,000,000원
+- 읽기 전용 실연결: 토큰·현재가·잔고·WebSocket 승인키 PASS, 순자산 5,004,000원, 보유·당일 주문 없음
+- 실전 격리: `data/danta-live.db`, `private/prod`, `.secrets/kis/.cache/prod_token.json`
+- 런타임 시작 조건: Alembic `0005_fill_ledger`, 실전 정책 승인, 실전 캠페인, KIS/DB 대조 PASS
+- 모의투자 예약 작업은 `Danta-Daily-Close-1535` 실계좌 마감 작업으로 교체했다.
+
 ### 2026-07-29 지정가 이메일 작업 사용량 기록
 
 - 측정시각: 2026-07-29 08:27 KST
@@ -18,7 +28,7 @@
 ## 1. 장 시작 전
 
 1. 운영 호스트 시간과 `Asia/Seoul`을 확인한다.
-2. KIS 토큰, App Key 환경, 모의/실전 계좌를 확인한다.
+2. KIS 토큰, App Key 환경이 `prod`인지 확인한다.
 3. KIS 잔고·미체결·체결과 내부 포지션을 대조한다.
 4. WebSocket과 후보 구독을 테스트한다.
 5. SMTP 최근 성공 상태를 확인한다.

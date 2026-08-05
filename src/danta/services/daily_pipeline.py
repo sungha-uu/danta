@@ -129,8 +129,11 @@ async def run_daily_pipeline(
             store,
             strategy_status=(
                 "ACTIVE"
-                if settings.environment is TradingEnvironment.PAPER
-                and settings.paper_order_execution_enabled
+                if (
+                    settings.real_order_execution_enabled
+                    if settings.environment is TradingEnvironment.PROD
+                    else settings.paper_order_execution_enabled
+                )
                 else "RESEARCH_ONLY"
             ),
         ),

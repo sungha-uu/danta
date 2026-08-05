@@ -239,7 +239,7 @@ def test_profit_exit_notification_contains_reason(monkeypatch: object) -> None:
     )
 
 
-def test_paper_daily_close_notification_uses_exact_subject(
+def test_daily_close_notification_uses_exact_subject(
     monkeypatch: object,
 ) -> None:
     from pytest import MonkeyPatch
@@ -248,13 +248,13 @@ def test_paper_daily_close_notification_uses_exact_subject(
     FakeSmtp.instances.clear()
     monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
 
-    SmtpNotifier(_config(use_ssl=True)).send_paper_daily_close(
+    SmtpNotifier(_config(use_ssl=True)).send_daily_close(
         "[계좌 요약]\n계좌 순자산: 50,100,000원"
     )
 
     message = FakeSmtp.instances[-1].message
     assert message is not None
-    assert message["Subject"] == "# 자율 모의투자 현황"
+    assert message["Subject"] == "# 자율매매 현황"
     plain_body = message.get_body(preferencelist=("plain",))
     assert plain_body is not None
     assert "계좌 순자산" in plain_body.get_content()

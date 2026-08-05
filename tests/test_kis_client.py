@@ -529,6 +529,84 @@ async def test_cancel_order_uses_official_paper_contract(
     assert receipt.broker_order_no == "54321"
 
 
+async def test_live_buy_order_uses_official_production_contract() -> None:
+    credentials = KisCredentials(
+        environment="prod",
+        app_key="key",
+        app_secret="secret",
+        account_no="12345678",
+        product_code="01",
+        hts_id="tester",
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "token",
+                    "access_token_token_expired": "2099-01-01 00:00:00",
+                },
+            )
+        assert request.headers["tr_id"] == "TTTC0012U"
+        return httpx.Response(
+            200,
+            json={"rt_cd": "0", "output": {"ODNO": "10001", "ORD_TMD": "090001"}},
+        )
+
+    client = KisClient(
+        credentials,
+        transport=httpx.MockTransport(handler),
+        order_submission_enabled=True,
+    )
+    try:
+        receipt = await client.submit_cash_order(
+            side="BUY", symbol="005930", quantity=1, order_type="LIMIT", limit_price=240_000
+        )
+    finally:
+        await client.close()
+    assert receipt.broker_order_no == "10001"
+
+
+async def test_live_cancel_order_uses_official_production_contract() -> None:
+    credentials = KisCredentials(
+        environment="prod",
+        app_key="key",
+        app_secret="secret",
+        account_no="12345678",
+        product_code="01",
+        hts_id="tester",
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "token",
+                    "access_token_token_expired": "2099-01-01 00:00:00",
+                },
+            )
+        assert request.headers["tr_id"] == "TTTC0013U"
+        return httpx.Response(
+            200,
+            json={"rt_cd": "0", "output": {"ODNO": "10002", "ORD_TMD": "090002"}},
+        )
+
+    client = KisClient(
+        credentials,
+        transport=httpx.MockTransport(handler),
+        order_submission_enabled=True,
+    )
+    try:
+        receipt = await client.cancel_cash_order(
+            broker_order_no="10001", branch_no="06010", quantity=1
+        )
+    finally:
+        await client.close()
+    assert receipt.broker_order_no == "10002"
+
+
 @pytest.mark.asyncio
 async def test_access_token_is_persisted_and_reused(
     credentials: KisCredentials, tmp_path: Path

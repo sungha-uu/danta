@@ -14,11 +14,10 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Danta",
         version=__version__,
-        description="KIS paper-trading research and controlled execution service",
+        description="KIS live autonomous trading and controlled execution service",
     )
     app.include_router(router, prefix="/api/v1")
     return app
 
 
 app = create_app()
-

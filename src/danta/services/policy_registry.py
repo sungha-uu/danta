@@ -7,6 +7,7 @@ from typing import cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from danta.config import TradingEnvironment
 from danta.domain.entry import EntryPolicy
 from danta.domain.premarket import PremarketPolicy
 from danta.domain.risk import ExitPolicy
@@ -15,16 +16,24 @@ from danta.domain.risk import ExitPolicy
 class EntryPolicyConfig(BaseModel):
     version: str
     approved_for_paper: bool = False
+    approved_for_live: bool = False
     max_snapshot_age_seconds: int = Field(gt=0)
     sell_pressure_block: Decimal = Field(ge=0, le=1)
     stabilization_required: Decimal = Field(ge=0, le=1)
     buy_recovery_required: Decimal = Field(ge=0, le=1)
     max_spread_bps: Decimal = Field(gt=0)
 
-    def to_domain(self) -> EntryPolicy:
+    def approved_for(self, environment: TradingEnvironment) -> bool:
+        return (
+            self.approved_for_live
+            if environment is TradingEnvironment.PROD
+            else self.approved_for_paper
+        )
+
+    def to_domain(self, environment: TradingEnvironment = TradingEnvironment.PAPER) -> EntryPolicy:
         return EntryPolicy(
             version=self.version,
-            approved=self.approved_for_paper,
+            approved=self.approved_for(environment),
             max_snapshot_age_seconds=self.max_snapshot_age_seconds,
             sell_pressure_block=self.sell_pressure_block,
             stabilization_required=self.stabilization_required,
@@ -36,6 +45,7 @@ class EntryPolicyConfig(BaseModel):
 class ExitPolicyConfig(BaseModel):
     version: str
     approved_for_paper: bool = False
+    approved_for_live: bool = False
     early_loss_pct: Decimal
     strong_loss_pct: Decimal
     early_defense_score: Decimal = Field(ge=0, le=1)
@@ -46,10 +56,17 @@ class ExitPolicyConfig(BaseModel):
     profit_weakness_score: Decimal = Field(ge=0, le=1)
     max_holding_minutes: int = Field(gt=0)
 
-    def to_domain(self) -> ExitPolicy:
+    def approved_for(self, environment: TradingEnvironment) -> bool:
+        return (
+            self.approved_for_live
+            if environment is TradingEnvironment.PROD
+            else self.approved_for_paper
+        )
+
+    def to_domain(self, environment: TradingEnvironment = TradingEnvironment.PAPER) -> ExitPolicy:
         return ExitPolicy(
             version=self.version,
-            approved=self.approved_for_paper,
+            approved=self.approved_for(environment),
             early_loss_pct=self.early_loss_pct,
             strong_loss_pct=self.strong_loss_pct,
             early_defense_score=self.early_defense_score,
@@ -65,6 +82,7 @@ class ExitPolicyConfig(BaseModel):
 class PremarketPolicyConfig(BaseModel):
     version: str
     approved_for_paper: bool = False
+    approved_for_live: bool = False
     minimum_nxt_trade_samples: int = Field(gt=0)
     maximum_snapshot_age_seconds: int = Field(gt=0)
     early_loss_pct: Decimal
@@ -72,10 +90,19 @@ class PremarketPolicyConfig(BaseModel):
     sell_pressure_threshold: Decimal = Field(ge=0, le=1)
     market_stress_threshold: Decimal = Field(ge=0, le=1)
 
-    def to_domain(self) -> PremarketPolicy:
+    def approved_for(self, environment: TradingEnvironment) -> bool:
+        return (
+            self.approved_for_live
+            if environment is TradingEnvironment.PROD
+            else self.approved_for_paper
+        )
+
+    def to_domain(
+        self, environment: TradingEnvironment = TradingEnvironment.PAPER
+    ) -> PremarketPolicy:
         return PremarketPolicy(
             version=self.version,
-            approved=self.approved_for_paper,
+            approved=self.approved_for(environment),
             minimum_nxt_trade_samples=self.minimum_nxt_trade_samples,
             maximum_snapshot_age_seconds=self.maximum_snapshot_age_seconds,
             early_loss_pct=self.early_loss_pct,

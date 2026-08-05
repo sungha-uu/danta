@@ -28,6 +28,9 @@ from danta.domain.trading_session import (
     SymbolSession,
     SymbolState,
 )
+from danta.services.autonomous_campaign import (
+    AutonomousCampaignController,
+)
 from danta.services.capital_allocator import CapitalAllocator
 from danta.services.command_store import CommandStatus, FileCommandStore, StoredCommand
 from danta.services.market_data_router import MarketDataRouter
@@ -45,9 +48,6 @@ from danta.services.market_wide_monitor import (
 from danta.services.market_wide_repository import MarketWideRepository
 from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.order_manager import BrokerReceipt, OrderExecution, OrderManager
-from danta.services.paper_autonomous_campaign import (
-    PaperAutonomousCampaignController,
-)
 from danta.services.policy_registry import TradingPolicyRegistry
 from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.reconciliation import reconcile_positions
@@ -93,8 +93,8 @@ def _ensure_market_resume_latch(
     return True
 
 
-class PaperTradingApplication:
-    """KIS paper-only executable composition root."""
+class TradingApplication:
+    """Environment-locked KIS executable composition root."""
 
     def __init__(
         self,
@@ -103,23 +103,33 @@ class PaperTradingApplication:
         credentials: KisCredentials,
         mandate: EntryMandate | None,
         policies: TradingPolicyRegistry,
-        command_root: Path = Path("private/commands"),
+        command_root: Path | None = None,
     ) -> None:
-        if settings.environment is not TradingEnvironment.PAPER:
-            raise PermissionError("paper runtime requires paper application settings")
-        if credentials.environment is not TradingEnvironment.PAPER:
-            raise PermissionError("paper runtime requires paper KIS credentials")
-        if not settings.paper_order_execution_enabled:
-            raise PermissionError("paper order execution is disabled in config")
-        if not policies.entry.approved_for_paper or not policies.exit.approved_for_paper:
-            raise PermissionError("entry and exit policies must be approved for paper")
+        if credentials.environment is not settings.environment:
+            raise PermissionError("runtime and KIS credential environments differ")
+        execution_enabled = (
+            settings.real_order_execution_enabled
+            if settings.environment is TradingEnvironment.PROD
+            else settings.paper_order_execution_enabled
+        )
+        if not execution_enabled:
+            raise PermissionError(f"{settings.environment.value} order execution is disabled")
+        if not policies.entry.approved_for(settings.environment) or not policies.exit.approved_for(
+            settings.environment
+        ):
+            raise PermissionError(
+                "entry and exit policies are not approved for the active environment"
+            )
         self.settings = settings
         self.credentials = credentials
         self.mandate = mandate
         self.policies = policies
-        self.command_store = FileCommandStore(command_root)
+        resolved_command_root = (
+            command_root or Path("private") / settings.environment.value / "commands"
+        )
+        self.command_store = FileCommandStore(resolved_command_root)
         self.trade_notification_outbox = TradeNotificationOutbox(
-            command_root.parent / "notifications"
+            resolved_command_root.parent / "notifications"
         )
         self._notified_price_intents: set[str] = set()
         self._notified_buy_fill_intents: set[str] = set()
@@ -127,7 +137,11 @@ class PaperTradingApplication:
 
     @property
     def correlation_id(self) -> str:
-        return self.mandate.command_id if self.mandate is not None else "paper-account-runtime"
+        return (
+            self.mandate.command_id
+            if self.mandate is not None
+            else f"{self.settings.environment.value}-account-runtime"
+        )
 
     async def run(self) -> None:
         engine, session_factory = create_engine_and_session(self.settings.database_url)
@@ -169,14 +183,14 @@ class PaperTradingApplication:
         )
         core = TradingRuntimeCore(
             orchestrator=orchestrator,
-            entry_policy=self.policies.entry.to_domain(),
-            exit_policy=self.policies.exit.to_domain(),
+            entry_policy=self.policies.entry.to_domain(self.settings.environment),
+            exit_policy=self.policies.exit.to_domain(self.settings.environment),
         )
         if self.settings.market_entry_resume_required_path.exists():
             core.require_market_entry_resume_confirmation()
         async with KisClient(
             self.credentials,
-            token_cache_path=Path("data/kis-token-cache.json"),
+            token_cache_path=self.settings.kis_token_cache_path,
             order_submission_enabled=True,
         ) as broker:
             broker_positions = await broker.positions()
@@ -292,12 +306,8 @@ class PaperTradingApplication:
                 self.mandate = None
                 selection_names = {}
             if reconciliation.safe_for_new_entries and self.mandate is not None:
-                mandate_symbols = [
-                    selection.symbol for selection in self.mandate.selections
-                ]
-                latest_generations = await repository.latest_generations(
-                    mandate_symbols
-                )
+                mandate_symbols = [selection.symbol for selection in self.mandate.selections]
+                latest_generations = await repository.latest_generations(mandate_symbols)
                 for symbol, generation in latest_generations.items():
                     if symbol not in orchestrator.sessions:
                         orchestrator.sessions[symbol] = SymbolSession(
@@ -427,9 +437,11 @@ class PaperTradingApplication:
                             realtime=realtime,
                             router=router,
                             core=core,
-                            premarket_policy=self.policies.premarket.to_domain(),
+                            premarket_policy=self.policies.premarket.to_domain(
+                                self.settings.environment
+                            ),
                             repository=repository,
-                            correlation_id="paper-account-runtime",
+                            correlation_id=f"{self.settings.environment.value}-account-runtime",
                             opening_reconcile=lambda: self._opening_reconcile(
                                 core,
                                 broker,
@@ -449,7 +461,7 @@ class PaperTradingApplication:
                         name="danta-command-inbox",
                     )
                     group.create_task(
-                        PaperAutonomousCampaignController(
+                        AutonomousCampaignController(
                             settings=self.settings,
                             credentials=self.credentials,
                             command_store=self.command_store,
@@ -458,7 +470,7 @@ class PaperTradingApplication:
                             notifier=notifier,
                             broker=broker,
                         ).run(),
-                        name="danta-paper-autonomous-campaign",
+                        name="danta-autonomous-campaign",
                     )
                     group.create_task(pump.run(), name="danta-order-pump")
                     group.create_task(
@@ -935,6 +947,7 @@ class PaperTradingApplication:
                 )
             elapsed = loop.time() - started
             await asyncio.sleep(max(1.0, poll_interval - elapsed))
+
     async def _market_risk_transition(
         self,
         snapshot: MarketWideSnapshot,
@@ -1586,3 +1599,7 @@ class _KisOrderBrokerAdapter:
             quantity=quantity,
         )
         return BrokerReceipt(receipt.broker_order_no, receipt.order_time)
+
+
+# Archived test/import compatibility. The active composition root is TradingApplication.
+PaperTradingApplication = TradingApplication

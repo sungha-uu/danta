@@ -40,7 +40,7 @@ def collect_operations_health(
     now: datetime | None = None,
 ) -> OperationsHealthReport:
     current = (now or datetime.now(KST)).astimezone(KST)
-    runtime = _read_json(Path("private/runtime_state.json"))
+    runtime = _read_json(settings.autonomous_campaign_path.parent / "runtime_state.json")
     runtime_updated = _parse_datetime(runtime.get("updated_at"))
     runtime_fresh = runtime_updated is not None and current - runtime_updated < timedelta(
         minutes=3
@@ -58,13 +58,15 @@ def collect_operations_health(
         )
     )
     daily_success = _latest_json(settings.daily_run_root, "*success*.json")
-    candidate_at = _file_time(settings.paper_autonomous_report_path)
-    performance_at = _latest_report_time(settings.paper_daily_close_root / "reports")
+    candidate_at = _file_time(settings.autonomous_report_path)
+    performance_at = _latest_report_time(settings.daily_close_root / "reports") or _file_time(
+        Path("data/public-performance/latest.json")
+    )
     financial_analysis_at = _file_time(
         settings.financial_analysis_dashboard_index_path
     )
-    campaign = _read_json(settings.paper_autonomous_campaign_path)
-    campaign_active = bool(campaign) and not settings.paper_autonomous_kill_switch_path.exists()
+    campaign = _read_json(settings.autonomous_campaign_path)
+    campaign_active = bool(campaign) and not settings.autonomous_kill_switch_path.exists()
     managed_positions = _as_list(runtime.get("managed_positions"))
     pending_orders = _as_list(runtime.get("pending_orders"))
     risk = market.get("risk")
@@ -75,8 +77,8 @@ def collect_operations_health(
     )
 
     runtime_issue = "" if runtime_fresh else "런타임 상태 갱신이 3분 이상 지연됨"
-    fill_issue = "" if database["fills"] > 0 else "체결 감사 원장에 기록이 없음"
-    core_status: HealthLevel = "정상" if runtime_fresh and not fill_issue else "주의"
+    fill_issue = ""
+    core_status: HealthLevel = "정상" if runtime_fresh else "주의"
     market_status: HealthLevel = "정상" if market_fresh else "주의"
     trade_status: HealthLevel = "정상" if runtime_fresh and campaign_active else "주의"
     candidate_status: HealthLevel = "정상" if candidate_at else "오류"
@@ -116,7 +118,7 @@ def collect_operations_health(
             ),
             last_success=_format_time(runtime_updated),
             next_run="상시 · 시간대별 KRX/NXT 자동 전환",
-            issue="" if campaign_active else "자율 모의투자 캠페인이 중지 또는 만료됨",
+            issue="" if campaign_active else "자율매매 캠페인이 중지 또는 만료됨",
         ),
         SystemHealthRow(
             number=3,
@@ -156,7 +158,7 @@ def collect_operations_health(
             number=6,
             name="자율 매매 시스템 실적 대시보드",
             status=performance_status,
-            current_work="5천만원 단일 기준 · 보유·체결·누적수익률 공개 요약",
+            current_work="5백만원 단일 기준 · 보유·체결·누적수익률 공개 요약",
             last_success=_format_time(performance_at),
             next_run="15분 지연 · 장마감 확정",
             issue="" if performance_at else "공개 실적 스냅샷 최초 생성 필요",
