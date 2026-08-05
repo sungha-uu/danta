@@ -30,5 +30,10 @@
   "market_pages_git_push_enabled": true,
   "market_dashboard_publish_repo": "../danta_market_status",
   "market_dashboard_public_url": "https://sungha-uu.github.io/danta_market_status/",
+  "operations_dashboard_publish_repo": "../danta_operations",
+  "operations_dashboard_public_url": "https://sungha-uu.github.io/danta_operations/",
+  "performance_dashboard_publish_repo": "../danta_performance",
+  "performance_dashboard_public_url": "https://sungha-uu.github.io/danta_performance/",
+  "public_dashboard_refresh_interval_seconds": 900,
   "market_entry_resume_required_path": "private/MARKET_ENTRY_RESUME_REQUIRED"
 }

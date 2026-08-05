@@ -66,6 +66,13 @@ class AppSettings(BaseModel):
     market_pages_git_push_enabled: bool = True
     market_dashboard_publish_repo: Path = Path("../danta_market_status")
     market_dashboard_public_url: str = "https://sungha-uu.github.io/danta_market_status/"
+    operations_dashboard_publish_repo: Path = Path("../danta_operations")
+    operations_dashboard_public_url: str = "https://sungha-uu.github.io/danta_operations/"
+    performance_dashboard_publish_repo: Path = Path("../danta_performance")
+    performance_dashboard_public_url: str = "https://sungha-uu.github.io/danta_performance/"
+    public_dashboard_refresh_interval_seconds: int = Field(
+        default=900, ge=900, le=3600
+    )
     market_entry_resume_required_path: Path = Path(
         "private/MARKET_ENTRY_RESUME_REQUIRED"
     )

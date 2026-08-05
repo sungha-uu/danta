@@ -65,6 +65,7 @@ from danta.services.paper_daily_close import (
 from danta.services.paper_trading_application import PaperTradingApplication
 from danta.services.policy_registry import load_policy_registry
 from danta.services.provider_doctor import KisProviderDoctor
+from danta.services.public_dashboards import refresh_public_dashboards
 from danta.services.recommendation_performance import (
     RecommendationPerformanceError,
     RecommendationPerformanceTracker,
@@ -367,6 +368,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow manual execution outside the normal close-time gate",
     )
+    public_dashboards = subparsers.add_parser(
+        "public-dashboards",
+        help="build sanitized operations and autonomous-performance Pages",
+    )
+    public_dashboards.add_argument(
+        "--publish",
+        action="store_true",
+        help="commit and push both configured GitHub Pages repositories",
+    )
     return parser
 
 
@@ -389,6 +399,23 @@ async def _doctor(live: bool, symbol: str) -> int:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "public-dashboards":
+        try:
+            public_dashboard_result = asyncio.run(
+                refresh_public_dashboards(load_settings(), publish=args.publish)
+            )
+        except (OSError, ValueError, RuntimeError, KisApiError) as exc:
+            print(f"public dashboard refresh failed: {exc}", file=sys.stderr)
+            raise SystemExit(20) from None
+        print(
+            json.dumps(
+                asdict(public_dashboard_result),
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            )
+        )
+        return
     if args.command == "market-entry-gate":
         settings = load_settings()
         latch = settings.market_entry_resume_required_path

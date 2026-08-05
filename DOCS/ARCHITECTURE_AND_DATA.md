@@ -13,12 +13,19 @@
 
 | 번호 | 시스템 | 구현 경계 |
 | --- | --- | --- |
-| 1 | 시장 센싱 | `MarketWideCollector`·`MarketWideMonitor`·`MarketRegimeGuard` |
-| 2 | 자율매매 | 후보·진입·`TradingOrchestrator`·OMS·손절/익절·복구 |
-| 3-1 | 단기 후보 대시보드 | 공개 정적 `danta_report` |
-| 3-2 | KOSPI 시장·자금 대시보드 | 공개 5분 지연 `danta_market_status` |
-| 3-3 | 계좌·자율매매 실적 대시보드 | 비공개 계좌 스냅샷·체결·손익 화면, 공개 Pages 금지 |
-| 4 | 안전·감사 기반 | DB·Outbox·멱등키·대조·품질 보증·전략 버전 |
+| 1 | 통합 운영·안전 코어 | `TradingRuntimeCore`·`TradingOrchestrator`·복구·DB·Outbox·멱등키·KIS 대조·헬스체크 |
+| 2 | 시장 센싱 | `MarketWideCollector`·`MarketWideMonitor`·`MarketRegimeGuard` |
+| 3 | 자율매매 | 후보 오버레이·진입·OMS·손절/익절·포지션 복구 |
+| 4 | 단기 후보 대시보드 | 공개 정적 `danta_report` |
+| 5 | KOSPI 시장·자금 대시보드 | 공개 5분 지연 `danta_market_status` |
+| 6 | 자율매매 실적 대시보드 | 공개 허용 필드만 담은 정적 실적 Pages; 계좌·증권사·주문 식별자 금지 |
+
+1번 코어의 운영 화면은 1~6번 헬스 상태를 모으는 관제 허브다. 각 행에는
+`NORMAL/WARNING/FAILED/STOPPED/NOT_IMPLEMENTED`, 마지막 정상 시각, 다음 실행 시각,
+장애 시작 시각, 최근 오류 요약, 현재 작업, 보호매도·신규매수 상태, 시장 재개 확인
+필요 여부, 이메일·Pages 배포 상태와 최근 조치 이력을 포함하고 4~6번 화면으로
+연결한다. 사용자 요청용 `Codex 전달문 복사`는 주문 명령이 아니라 시스템 번호,
+감지 시각, 오류 요약과 진단 요청만 직렬화한다.
 
 ```mermaid
 flowchart LR

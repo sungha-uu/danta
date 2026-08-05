@@ -165,7 +165,10 @@ class MinuteBarStore:
             return False
         return (
             bars[0].trading_time <= "091000"
-            and bars[-1].trading_time >= "151900"
+            # A liquid-enough stock can legitimately have no new trade in the
+            # final few minutes. Requiring an exact 15:19 print incorrectly
+            # treated a complete KIS response as missing (012630 on 2026-07-29).
+            and bars[-1].trading_time >= "151500"
         )
 
     def save(self, symbol: str, trading_date: str, bars: list[KisMinuteBar]) -> Path:

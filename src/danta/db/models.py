@@ -65,12 +65,20 @@ class BrokerOrderModel(Base):
 
 class FillModel(Base):
     __tablename__ = "fills"
+    __table_args__ = (
+        UniqueConstraint(
+            "broker_order_id",
+            "cumulative_quantity",
+            name="uq_fill_broker_cumulative_quantity",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     broker_order_id: Mapped[str] = mapped_column(String(36), index=True)
     symbol: Mapped[str] = mapped_column(String(12), index=True)
     price: Mapped[int] = mapped_column(BigInteger)
     quantity: Mapped[int] = mapped_column(Integer)
+    cumulative_quantity: Mapped[int] = mapped_column(Integer)
     filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

@@ -26,6 +26,16 @@ try {
         throw "Danta scheduled refresh failed with exit code $LASTEXITCODE"
     }
 }
+catch {
+    $FailurePath = Join-Path $LogRoot "$Timestamp-failure.json"
+    @{
+        failed_at = (Get-Date).ToString("o")
+        command = "scheduled-refresh"
+        error = $_.Exception.Message
+        log_path = $LogPath
+    } | ConvertTo-Json | Set-Content -LiteralPath $FailurePath -Encoding utf8
+    throw
+}
 finally {
     Pop-Location
 }

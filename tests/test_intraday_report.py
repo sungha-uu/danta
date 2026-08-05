@@ -176,6 +176,11 @@ def test_minute_store_accepts_complete_continuous_session_without_auction_bar(
     assert len(sparse_rows) == 191
     assert store.is_complete("000500", "20260724")
 
+    quiet_close_rows = rows[:-1]
+    store.save("012630", "20260724", quiet_close_rows)
+    assert quiet_close_rows[-1].trading_time == "151800"
+    assert store.is_complete("012630", "20260724")
+
 
 def test_aggregate_hour_bars_uses_full_ohlcv() -> None:
     rows = [

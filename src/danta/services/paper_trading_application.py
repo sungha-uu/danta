@@ -133,7 +133,7 @@ class PaperTradingApplication:
         engine, session_factory = create_engine_and_session(self.settings.database_url)
         async with engine.connect() as connection:
             revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "0004_runtime_recovery":
+        if revision != "0005_fill_ledger":
             await engine.dispose()
             raise RuntimeError("database schema is not current; run alembic upgrade head")
         repository = SqlRuntimeRepository(session_factory)
@@ -405,9 +405,9 @@ class PaperTradingApplication:
                     snapshot,
                     decision,
                     previous,
-                    # The standalone market-monitor process is the single
-                    # SMTP owner. The trading runtime still applies and
-                    # audits market risk, but must not duplicate emails.
+                    # Market-transition email is intentionally disabled by
+                    # policy. The unified runtime remains the single collector
+                    # and still applies and audits the market risk gate.
                     None,
                     repository,
                 ),
@@ -466,6 +466,7 @@ class PaperTradingApplication:
                             core,
                             broker,
                             manager,
+                            journal,
                             repository,
                             buy_fill_notifications,
                             stop_notifications,
@@ -616,6 +617,16 @@ class PaperTradingApplication:
                     },
                 )
                 continue
+            await journal.apply_broker_status(
+                idempotency_key=item.intent.idempotency_key,
+                broker_order_no=broker_no,
+                symbol=item.intent.symbol,
+                ordered_quantity=recovered_status.ordered_quantity,
+                cumulative_filled_quantity=recovered_status.filled_quantity,
+                average_fill_price=recovered_status.average_fill_price,
+                remaining_quantity=recovered_status.remaining_quantity,
+                filled_at=datetime.now(UTC),
+            )
             if recovered_status.remaining_quantity <= 0:
                 if (
                     recovery_command_id is not None
@@ -1347,6 +1358,7 @@ class PaperTradingApplication:
         core: TradingRuntimeCore,
         broker: KisClient,
         manager: OrderManager,
+        journal: SqlOrderJournal,
         repository: SqlRuntimeRepository,
         buy_fill_notifications: asyncio.Queue[tuple[str, str, int, int]],
         stop_notifications: asyncio.Queue[tuple[str, str, int, Decimal, str]],
@@ -1400,6 +1412,27 @@ class PaperTradingApplication:
                 position_before = core.positions.get(status.symbol)
                 generation = submitted.intent.generation
                 delta = core.apply_order_status(status, observed_at=datetime.now(UTC))
+                persisted_delta = await journal.apply_broker_status(
+                    idempotency_key=submitted.intent.idempotency_key,
+                    broker_order_no=status.broker_order_no,
+                    symbol=status.symbol,
+                    ordered_quantity=status.ordered_quantity,
+                    cumulative_filled_quantity=status.filled_quantity,
+                    average_fill_price=status.average_fill_price,
+                    remaining_quantity=status.remaining_quantity,
+                    filled_at=datetime.now(UTC),
+                )
+                if persisted_delta != delta:
+                    await repository.audit(
+                        "FILL_LEDGER_DELTA_MISMATCH",
+                        correlation_id=self.correlation_id,
+                        payload={
+                            "symbol": status.symbol,
+                            "runtime_delta": delta,
+                            "ledger_delta": persisted_delta,
+                            "intent_key": submitted.intent.idempotency_key,
+                        },
+                    )
                 if delta > 0:
                     await self._queue_buy_fill_notification(
                         submitted.intent,

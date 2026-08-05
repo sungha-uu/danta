@@ -185,6 +185,7 @@ async def test_order_status_rate_limit_is_isolated_and_backed_off(
             SimpleNamespace(submitted={"pending": object()}),  # type: ignore[arg-type]
             _RateLimitedBroker(),  # type: ignore[arg-type]
             None,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
             repository,  # type: ignore[arg-type]
             asyncio.Queue(),
             asyncio.Queue(),
@@ -221,6 +222,7 @@ async def test_idle_order_reconciler_does_not_call_kis(
         await application._poll_orders(
             SimpleNamespace(submitted={}),  # type: ignore[arg-type]
             _UnexpectedBroker(),  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
             None,  # type: ignore[arg-type]
             _AuditRepository(),  # type: ignore[arg-type]
             asyncio.Queue(),

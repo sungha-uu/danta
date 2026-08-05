@@ -6,6 +6,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+dashboard/operations/
+dashboard/performance/
 .venv/
 dist/
 build/

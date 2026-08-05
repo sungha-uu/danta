@@ -1,31 +1,12 @@
 $ErrorActionPreference = "Stop"
 
-$TaskName = "Danta-Market-Monitor-0850"
-$Runner = (Resolve-Path (Join-Path $PSScriptRoot "run_market_monitor.ps1")).Path
-$Action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`""
-$Trigger = New-ScheduledTaskTrigger `
-    -Weekly `
-    -WeeksInterval 1 `
-    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday `
-    -At "08:50"
-$Settings = New-ScheduledTaskSettingsSet `
-    -StartWhenAvailable `
-    -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 7)
-$Principal = New-ScheduledTaskPrincipal `
-    -UserId $env:USERNAME `
-    -LogonType Interactive `
-    -RunLevel Limited
-
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $Action `
-    -Trigger $Trigger `
-    -Settings $Settings `
-    -Principal $Principal `
-    -Description "Danta KOSPI market monitor, Pages publisher, and transition email" `
-    -Force | Out-Null
-
-Get-ScheduledTask -TaskName $TaskName | Select-Object TaskName,State
+# Market sensing is owned by the unified trading runtime. A second process uses
+# a separate rate limiter and can exceed the KIS per-second transaction limit.
+$legacyTaskName = "Danta-Market-Monitor-0850"
+if (Get-ScheduledTask -TaskName $legacyTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false
+    Write-Output "Removed legacy duplicate task: $legacyTaskName"
+}
+else {
+    Write-Output "Legacy duplicate task is already absent"
+}
