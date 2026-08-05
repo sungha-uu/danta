@@ -33,7 +33,7 @@ a{{color:#2d5faf;font-weight:700}}.note{{color:#68748b;font-size:13px;margin-top
 <div>안전 코어부터 세 개의 공개 대시보드까지 한 화면에서 확인합니다. · 기준 {generated}</div></header>
 <main><section class="summary"><div class="card">정상<br><b>{report.normal_count}</b></div>
 <div class="card">확인 필요<br><b>{report.attention_count}</b></div></section>
-<div class="table-wrap"><table><thead><tr><th>번호</th><th>시스템</th><th>상태</th><th>현재 작업</th><th>최근 성공</th><th>다음 실행</th><th>문제·조치</th><th>바로가기</th></tr></thead>
+<div class="table-wrap"><table><thead><tr><th>번호</th><th>시스템</th><th>상태</th><th>현재 작업</th><th>최근 성공</th><th>다음 실행</th><th>문제·조치</th></tr></thead>
 <tbody>{rows}</tbody></table></div>
 <p class="note">계좌번호·증권사·주문번호·승인문·비밀정보는 이 공개 페이지에 포함하지 않습니다. 표시된 문제는 다음 갱신 때 다시 자체 점검합니다.</p>
 </main></body></html>"""
@@ -55,15 +55,20 @@ def _row_html(item: dict[str, object]) -> str:
     status = str(item["status"])
     css = "normal" if status == "정상" else "warning" if status == "주의" else "error"
     url = item.get("dashboard_url")
-    link = f'<a href="{escape(str(url))}">열기</a>' if url else "-"
+    number = int(str(item["number"]))
+    name = escape(str(item["name"]))
+    name_cell = (
+        f'<a href="{escape(str(url))}">{name}</a>'
+        if url and number in {2, 4, 5, 6}
+        else name
+    )
     return (
         "<tr>"
         f"<td>{escape(str(item['number']))}</td>"
-        f"<td>{escape(str(item['name']))}</td>"
+        f"<td>{name_cell}</td>"
         f'<td><span class="badge {css}">{escape(status)}</span></td>'
         f"<td>{escape(str(item['current_work']))}</td>"
         f"<td>{escape(str(item['last_success']))}</td>"
         f"<td>{escape(str(item['next_run']))}</td>"
-        f"<td>{escape(str(item['issue']) or '-')}</td>"
-        f"<td>{link}</td></tr>"
+        f"<td>{escape(str(item['issue']) or '-')}</td></tr>"
     )

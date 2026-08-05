@@ -42,6 +42,9 @@ def test_public_performance_page_is_utf8_and_sanitized(tmp_path: Path) -> None:
     html = path.read_text(encoding="utf-8")
     assert "Danta 자율매매 실적" in html
     assert "최초 투자금" in html
+    assert "trade-buy" in html
+    assert "trade-sell" in html
+    assert "x.side==='BUY'?'trade-buy':'trade-sell'" in html
     assert "한국투자증권" not in html
     assert "account_no" not in html
 
@@ -75,3 +78,5 @@ def test_operations_dashboard_contains_six_numbered_systems(tmp_path: Path) -> N
     html = path.read_text(encoding="utf-8")
     assert "Danta 통합 운영 현황" in html
     assert html.count("시스템 ") == 6
+    assert "<th>바로가기</th>" not in html
+    assert html.count('href="https://example.test/"') == 4
