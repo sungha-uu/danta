@@ -42,3 +42,15 @@ async def test_router_serializes_each_symbol_independently() -> None:
     await router.queues["000660"].join()
     await router.stop()
     assert sorted(core.symbols) == ["000660", "005930"]
+
+
+async def test_router_releases_terminal_symbol_worker() -> None:
+    router = MarketDataRouter(FakeCore())  # type: ignore[arg-type]
+    router.start(["005930", "000660"])
+
+    await router.stop_symbols(["005930"])
+
+    assert "005930" not in router.queues
+    assert "005930" not in router.tasks
+    assert "000660" in router.tasks
+    await router.stop()

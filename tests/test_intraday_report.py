@@ -123,6 +123,27 @@ def test_market_cap_top_universe_sorts_common_stocks_by_market_cap() -> None:
 
     assert [item.symbol for item in universe] == ["000002", "000001"]
 
+def test_market_cap_top_universe_excludes_latest_suspended_security() -> None:
+    dates = [date(2026, 7, 30)]
+    dataset = MarketDataset(
+        bars={
+            "000001": [
+                DailyBar(dates[0], Decimal("10000"), Decimal("100"), Decimal("1000"))
+            ],
+            "000002": [
+                DailyBar(dates[0], Decimal("20000"), Decimal("0"), Decimal("0"))
+            ],
+        },
+        names={"000001": "거래중", "000002": "거래정지"},
+        flows={},
+        trading_dates=dates,
+        market_caps={"000001": Decimal("100"), "000002": Decimal("300")},
+    )
+
+    universe = market_cap_top_universe(dataset, limit=1)
+
+    assert [item.symbol for item in universe] == ["000001"]
+
 
 def test_minute_store_accepts_complete_continuous_session_without_auction_bar(
     tmp_path,

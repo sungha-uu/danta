@@ -1,5 +1,7 @@
 import asyncio
+from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,12 +10,19 @@ import pytest
 from danta.adapters.kis.client import KisApiError
 from danta.domain.trading_session import IntentSide
 from danta.services import paper_trading_application as application_module
+from danta.services.command_store import CommandStatus, StoredCommand
 from danta.services.paper_trading_application import PaperTradingApplication
+from danta.services.trade_notification_outbox import TradeNotificationOutbox
 
 
 class _RateLimitedBroker:
     async def daily_order_statuses(self, **_: Any) -> list[object]:
         raise KisApiError("EGW00201", status_code=429)
+
+
+class _UnexpectedBroker:
+    async def daily_order_statuses(self, **_: Any) -> list[object]:
+        raise AssertionError("idle runtime must not poll KIS order status")
 
 
 class _AuditRepository:
@@ -30,13 +39,138 @@ class _AuditRepository:
         self.events.append((event_type, correlation_id, payload))
 
 
+class _LifecycleRepository:
+    def __init__(self, closed: set[str]) -> None:
+        self.closed = closed
+        self.opened_since: datetime | None = None
+
+    async def closed_symbols_since(self, symbols: list[str], *, opened_since: datetime) -> set[str]:
+        self.opened_since = opened_since
+        return self.closed & set(symbols)
+
+
+class _LifecycleBroker:
+    def __init__(self, statuses: list[object]) -> None:
+        self.statuses = statuses
+        self.queries: list[str] = []
+
+    async def daily_order_statuses(self, *, trading_date: str) -> list[object]:
+        self.queries.append(trading_date)
+        return self.statuses
+
+
+def _stored_command() -> StoredCommand:
+    mandate = SimpleNamespace(
+        command_id="entry-recovery",
+        selections=[
+            SimpleNamespace(symbol="005930"),
+            SimpleNamespace(symbol="000660"),
+        ],
+    )
+    return StoredCommand(
+        mandate=mandate,  # type: ignore[arg-type]
+        status=CommandStatus.ACTIVE,
+        accepted_at=datetime(2026, 7, 31, 1, tzinfo=UTC),
+        source_path=Path("active.json"),
+    )
+
+
+async def test_startup_marks_fully_closed_flat_lifecycle_complete() -> None:
+    application = object.__new__(PaperTradingApplication)
+    repository = _LifecycleRepository({"005930", "000660"})
+    broker = _LifecycleBroker([])
+
+    assert await application._startup_lifecycle_complete(
+        active_command=_stored_command(),
+        broker=broker,  # type: ignore[arg-type]
+        broker_position_symbols=set(),
+        repository=repository,  # type: ignore[arg-type]
+    )
+    assert repository.opened_since == datetime(2026, 7, 31, 1, tzinfo=UTC)
+    assert broker.queries
+
+
+@pytest.mark.parametrize(
+    ("closed", "broker_positions", "statuses"),
+    [
+        ({"005930"}, set(), []),
+        ({"005930", "000660"}, {"000660"}, []),
+        (
+            {"005930", "000660"},
+            set(),
+            [SimpleNamespace(symbol="005930", remaining_quantity=1)],
+        ),
+    ],
+)
+async def test_startup_keeps_incomplete_or_broker_active_lifecycle(
+    closed: set[str],
+    broker_positions: set[str],
+    statuses: list[object],
+) -> None:
+    application = object.__new__(PaperTradingApplication)
+
+    assert not await application._startup_lifecycle_complete(
+        active_command=_stored_command(),
+        broker=_LifecycleBroker(statuses),  # type: ignore[arg-type]
+        broker_position_symbols=broker_positions,
+        repository=_LifecycleRepository(closed),  # type: ignore[arg-type]
+    )
+
+
+async def test_pending_trade_emails_are_replayed_after_restart(tmp_path: Path) -> None:
+    application = object.__new__(PaperTradingApplication)
+    application.trade_notification_outbox = TradeNotificationOutbox(tmp_path / "notifications")
+    application._notified_buy_fill_intents = set()
+    application._notified_stop_intents = set()
+    application.trade_notification_outbox.enqueue_buy(
+        intent_key="entry:005930:BUY:A0",
+        correlation_id="entry",
+        name="삼성전자",
+        price=100_000,
+        quantity=10,
+    )
+    application.trade_notification_outbox.enqueue_exit(
+        intent_key="entry:005930:SELL:1",
+        correlation_id="entry",
+        name="삼성전자",
+        price=95_000,
+        return_pct=Decimal("-5"),
+        cause="HARD_DEFENSE_MINUS_5",
+    )
+    buy_queue: asyncio.Queue[tuple[str, str, int, int]] = asyncio.Queue()
+    exit_queue: asyncio.Queue[tuple[str, str, int, Decimal, str]] = asyncio.Queue()
+    repository = _AuditRepository()
+
+    await application._replay_trade_notification_outbox(
+        buy_queue,
+        exit_queue,
+        repository,  # type: ignore[arg-type]
+    )
+
+    assert await buy_queue.get() == (
+        "entry:005930:BUY:A0",
+        "삼성전자",
+        100_000,
+        10,
+    )
+    assert await exit_queue.get() == (
+        "entry:005930:SELL:1",
+        "삼성전자",
+        95_000,
+        Decimal("-5"),
+        "HARD_DEFENSE_MINUS_5",
+    )
+    assert [event[0] for event in repository.events] == [
+        "TRADE_FILL_EMAIL_REPLAYED",
+        "TRADE_FILL_EMAIL_REPLAYED",
+    ]
+
+
 async def test_order_status_rate_limit_is_isolated_and_backed_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = object.__new__(PaperTradingApplication)
-    application.settings = SimpleNamespace(
-        order_poll_interval_seconds=Decimal("2.0")
-    )
+    application.settings = SimpleNamespace(order_poll_interval_seconds=Decimal("2.0"))
     application.mandate = SimpleNamespace(command_id="entry-test")
     repository = _AuditRepository()
 
@@ -48,7 +182,7 @@ async def test_order_status_rate_limit_is_isolated_and_backed_off(
 
     with pytest.raises(asyncio.CancelledError):
         await application._poll_orders(
-            None,  # type: ignore[arg-type]
+            SimpleNamespace(submitted={"pending": object()}),  # type: ignore[arg-type]
             _RateLimitedBroker(),  # type: ignore[arg-type]
             None,  # type: ignore[arg-type]
             repository,  # type: ignore[arg-type]
@@ -68,6 +202,31 @@ async def test_order_status_rate_limit_is_isolated_and_backed_off(
             },
         )
     ]
+
+
+async def test_idle_order_reconciler_does_not_call_kis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = object.__new__(PaperTradingApplication)
+    application.settings = SimpleNamespace(order_poll_interval_seconds=Decimal("2.0"))
+    application.mandate = None
+
+    async def stop_after_idle_sleep(seconds: float) -> None:
+        assert seconds == 5.0
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(application_module.asyncio, "sleep", stop_after_idle_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await application._poll_orders(
+            SimpleNamespace(submitted={}),  # type: ignore[arg-type]
+            _UnexpectedBroker(),  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            _AuditRepository(),  # type: ignore[arg-type]
+            asyncio.Queue(),
+            asyncio.Queue(),
+            {},
+        )
 
 
 async def test_entry_price_notification_is_queued_once_per_intent() -> None:
@@ -102,9 +261,8 @@ async def test_entry_price_notification_is_queued_once_per_intent() -> None:
         "SK하이닉스",
         1_445_000,
     )
-    assert [event[0] for event in repository.events] == [
-        "ENTRY_LIMIT_PRICE_DETERMINED"
-    ]
+    assert [event[0] for event in repository.events] == ["ENTRY_LIMIT_PRICE_DETERMINED"]
+
 
 async def test_buy_final_fill_queues_one_notification() -> None:
     application = object.__new__(PaperTradingApplication)
@@ -157,9 +315,7 @@ async def test_buy_final_fill_queues_one_notification() -> None:
         17,
     )
     assert queue.empty()
-    assert [event[0] for event in repository.events] == [
-        "ENTRY_FILL_EMAIL_QUEUED"
-    ]
+    assert [event[0] for event in repository.events] == ["ENTRY_FILL_EMAIL_QUEUED"]
 
 
 async def test_hard_stop_final_fill_queues_one_notification() -> None:
@@ -205,9 +361,7 @@ async def test_hard_stop_final_fill_queues_one_notification() -> None:
     assert price == 1_479_300
     assert return_pct.quantize(Decimal("0.01")) == Decimal("-6.96")
     assert cause == "HARD_STOP_MINUS_7"
-    assert [event[0] for event in repository.events] == [
-        "EXIT_FILL_EMAIL_QUEUED"
-    ]
+    assert [event[0] for event in repository.events] == ["EXIT_FILL_EMAIL_QUEUED"]
 
 
 async def test_minus_five_defense_final_fill_queues_notification() -> None:
@@ -283,6 +437,4 @@ async def test_adaptive_profit_final_fill_queues_exit_notification() -> None:
     )
     assert item[3].quantize(Decimal("0.01")) == Decimal("4.50")
     assert item[4] == "ADAPTIVE_PROFIT_FLOOR"
-    assert [event[0] for event in repository.events] == [
-        "EXIT_FILL_EMAIL_QUEUED"
-    ]
+    assert [event[0] for event in repository.events] == ["EXIT_FILL_EMAIL_QUEUED"]

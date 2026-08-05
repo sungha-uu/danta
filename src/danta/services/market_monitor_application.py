@@ -39,7 +39,7 @@ class MarketMonitorApplication:
             revision = await connection.scalar(
                 text("SELECT version_num FROM alembic_version")
             )
-        if revision != "0003_market_wide_monitor":
+        if revision != "0004_runtime_recovery":
             await engine.dispose()
             raise RuntimeError("database schema is not current; run alembic upgrade head")
         repository = MarketWideRepository(session_factory)

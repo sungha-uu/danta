@@ -27,6 +27,7 @@ class MarketVenue(StrEnum):
     KRX = "KRX"
     NXT = "NXT"
 
+
 TRADE_COLUMNS = (
     "symbol",
     "time",
@@ -202,8 +203,20 @@ def parse_realtime_message(raw: str, *, received_at: datetime) -> list[RealtimeE
     columns, venue, event_type = layout
     values = pieces[3].split("^")
     width = len(columns)
+    if tr_id == NXT_ORDERBOOK_TR_ID and count > 0 and len(values) % count == 0:
+        observed_width = len(values) // count
+        # The official sample currently defines 65 fields. The paper WebSocket
+        # has also been observed returning 62 fields with the final NMID triplet
+        # omitted. Those optional midpoint fields are not used by our internal
+        # order-book contract, whose required prefix is the first 59 fields.
+        if len(ORDERBOOK_COLUMNS) <= observed_width <= len(NXT_ORDERBOOK_COLUMNS):
+            columns = NXT_ORDERBOOK_COLUMNS[:observed_width]
+            width = observed_width
     if count <= 0 or len(values) < count * width:
-        raise ValueError("KIS realtime frame has incomplete records")
+        raise ValueError(
+            "KIS realtime frame has incomplete records "
+            f"(tr_id={tr_id}, count={count}, values={len(values)}, width={width})"
+        )
     events: list[RealtimeEvent] = []
     for index in range(count):
         row = dict(zip(columns, values[index * width : (index + 1) * width], strict=True))
@@ -373,11 +386,7 @@ class KisRealtimeClient:
         venue: MarketVenue = MarketVenue.KRX,
         reconnect_attempts: int = 5,
     ) -> AsyncIterator[ExpectedPriceTick]:
-        tr_id = (
-            EXPECTED_TRADE_TR_ID
-            if venue is MarketVenue.KRX
-            else NXT_EXPECTED_TRADE_TR_ID
-        )
+        tr_id = EXPECTED_TRADE_TR_ID if venue is MarketVenue.KRX else NXT_EXPECTED_TRADE_TR_ID
         async for event in self._stream_tr_ids(
             symbols,
             tr_ids=(tr_id,),
@@ -385,6 +394,24 @@ class KisRealtimeClient:
         ):
             if isinstance(event, ExpectedPriceTick):
                 yield event
+
+    async def stream_premarket(
+        self,
+        symbols: list[str],
+        *,
+        reconnect_attempts: int = 5,
+    ) -> AsyncIterator[RealtimeEvent]:
+        """Stream NXT trades/books and KRX expected prices on one socket."""
+        async for event in self._stream_tr_ids(
+            symbols,
+            tr_ids=(
+                NXT_TRADE_TR_ID,
+                NXT_ORDERBOOK_TR_ID,
+                EXPECTED_TRADE_TR_ID,
+            ),
+            reconnect_attempts=reconnect_attempts,
+        ):
+            yield event
 
     async def _stream_tr_ids(
         self,
@@ -425,9 +452,7 @@ class KisRealtimeClient:
                             ):
                                 await socket.send(raw)
                             continue
-                        for event in parse_realtime_message(
-                            raw, received_at=datetime.now(UTC)
-                        ):
+                        for event in parse_realtime_message(raw, received_at=datetime.now(UTC)):
                             yield event
                 return
             except (OSError, websockets.WebSocketException):

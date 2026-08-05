@@ -482,7 +482,7 @@ def _qualified_grade(
     current_10pct_threshold = (
         Decimal("1") / Decimal("1.10") - Decimal("1")
     ) * Decimal("100")
-    qualified = (
+    lower_reversal = (
         (metrics.target_reach_count or 0) >= 1
         and metrics.position_pct is not None
         and metrics.position_pct <= Decimal("35")
@@ -492,9 +492,41 @@ def _qualified_grade(
         and metrics.target_price_10pct > candidate_price
         and not expired_spike_reversion
     )
-    if qualified:
+    repeat_continuation = _repeat_continuation_qualified(
+        candidate_price=candidate_price,
+        metrics=metrics,
+        expired_spike_reversion=expired_spike_reversion,
+    )
+    if lower_reversal or repeat_continuation:
         return _grade(score)
     return "NOT_RECOMMEND" if score >= Decimal("45") else "STRONG_NOT_RECOMMEND"
+
+
+def _repeat_continuation_qualified(
+    *,
+    candidate_price: Decimal,
+    metrics: WindowMetrics,
+    expired_spike_reversion: bool,
+) -> bool:
+    """Paper challenger gate for repeat-rise setups after the first rebound."""
+    return (
+        metrics.rank is not None
+        and metrics.rank <= 20
+        and (metrics.target_reach_count or 0) >= 1
+        and metrics.position_pct is not None
+        and metrics.position_pct <= Decimal("75")
+        and metrics.current_vs_window_high_pct is not None
+        and metrics.current_vs_window_high_pct <= Decimal("-8")
+        and (metrics.average_up_swing_pct or Decimal("0")) >= Decimal("10")
+        and (metrics.up_swing_count or 0) >= 5
+        and metrics.average_time_to_6pct_hours is not None
+        and metrics.average_time_to_6pct_hours <= Decimal("6")
+        and metrics.volume_ratio >= Decimal("0.75")
+        and metrics.target_price_10pct is not None
+        and metrics.target_price_10pct <= candidate_price
+        and metrics.decline_shape != "STRUCTURAL_DECLINE"
+        and not expired_spike_reversion
+    )
 
 
 EXPIRED_SPIKE_RISK = "21일 원시세 복귀형 급등 소멸"
@@ -718,8 +750,8 @@ def build_context_review(
             )
         )
     return AiReviewBatch(
-        model_id="agent-context-review-v8-official-all-flow-news-dart-fundamental",
-        prompt_version="official-all-flow-news-dart-fundamental-v8-20260728",
+        model_id="agent-context-review-v9-repeat-continuation-challenger",
+        prompt_version="repeat-continuation-challenger-v9-20260805",
         report_data_as_of=report.data_as_of,
         reviewed_at=reviewed_at,
         candidates=reviews,

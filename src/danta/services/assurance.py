@@ -112,8 +112,8 @@ def build_assurance_report(
         _check(
             "DATABASE_MIGRATION_DEFINITION",
             "CRITICAL",
-            (project_root / "migrations/versions/0002_execution_runtime.py").is_file(),
-            "execution runtime migration definition exists",
+            (project_root / "migrations/versions/0004_runtime_recovery.py").is_file(),
+            "runtime recovery migration definition exists",
         ),
         _database_revision_check(settings, project_root),
         _check(
@@ -198,6 +198,6 @@ def _database_revision_check(
     return AssuranceCheck(
         "DATABASE_SCHEMA_APPLIED",
         "CRITICAL",
-        "PASS" if revision == "0002_execution_runtime" else "BLOCKED",
+        "PASS" if revision == "0004_runtime_recovery" else "BLOCKED",
         f"alembic revision={revision}",
     )

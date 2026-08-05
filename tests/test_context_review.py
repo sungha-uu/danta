@@ -11,6 +11,7 @@ from danta.services.context_review import (
     ContextSnapshot,
     _is_expired_spike_reversion,
     _NaverBoardParser,
+    _qualified_grade,
     build_context_review,
 )
 
@@ -67,7 +68,7 @@ def test_context_review_covers_all_candidates_and_applies_public_context() -> No
     assert len(review.candidates) == 50
     assert (
         review.model_id
-        == "agent-context-review-v8-official-all-flow-news-dart-fundamental"
+        == "agent-context-review-v9-repeat-continuation-challenger"
     )
     assert all(set(candidate.windows) == {"7", "14", "21"} for candidate in review.candidates)
     assert all(candidate.context_status == "READY" for candidate in review.candidates)
@@ -130,3 +131,51 @@ def test_expired_spike_reversion_requires_peak_and_falling_upper_regime() -> Non
 
     assert _is_expired_spike_reversion(decaying)
     assert not _is_expired_spike_reversion(stable)
+
+
+def test_repeat_continuation_can_qualify_after_first_target_was_passed() -> None:
+    metrics = demo_report().candidates[0].windows["14"].model_copy(
+        update={
+            "rank": 2,
+            "position_pct": Decimal("51.4"),
+            "current_vs_window_high_pct": Decimal("-20.6"),
+            "average_up_swing_pct": Decimal("15.0"),
+            "up_swing_count": 13,
+            "average_time_to_6pct_hours": Decimal("1.4"),
+            "volume_ratio": Decimal("2.05"),
+            "target_reach_count": 2,
+            "target_price_10pct": Decimal("179410"),
+            "decline_shape": "OTHER",
+        }
+    )
+
+    assert _qualified_grade(
+        Decimal("92"),
+        candidate_price=Decimal("225000"),
+        metrics=metrics,
+        expired_spike_reversion=False,
+    ) == "STRONG_RECOMMEND"
+
+
+def test_repeat_continuation_rejects_extended_or_structurally_broken_setup() -> None:
+    base = demo_report().candidates[0].windows["14"].model_copy(
+        update={
+            "rank": 2,
+            "position_pct": Decimal("76"),
+            "current_vs_window_high_pct": Decimal("-7"),
+            "average_up_swing_pct": Decimal("15"),
+            "up_swing_count": 13,
+            "average_time_to_6pct_hours": Decimal("1.4"),
+            "volume_ratio": Decimal("2"),
+            "target_reach_count": 2,
+            "target_price_10pct": Decimal("179410"),
+            "decline_shape": "STRUCTURAL_DECLINE",
+        }
+    )
+
+    assert _qualified_grade(
+        Decimal("92"),
+        candidate_price=Decimal("225000"),
+        metrics=base,
+        expired_spike_reversion=False,
+    ) == "NOT_RECOMMEND"

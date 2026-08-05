@@ -84,6 +84,9 @@ class PositionModel(Base):
     quantity: Mapped[int] = mapped_column(Integer)
     average_entry_price: Mapped[int] = mapped_column(BigInteger)
     hard_stop_price: Mapped[int] = mapped_column(BigInteger)
+    peak_return_pct: Mapped[Decimal] = mapped_column(
+        Numeric(10, 6), default=Decimal("0")
+    )
     status: Mapped[str] = mapped_column(String(24))
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

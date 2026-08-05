@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -8,7 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from danta.db.models import BrokerOrderModel, OrderIntentModel
-from danta.domain.trading_session import OrderIntent
+from danta.domain.trading_session import (
+    IntentPriority,
+    IntentSide,
+    OrderIntent,
+)
 from danta.services.order_manager import OrderExecution
 
 
@@ -37,6 +42,63 @@ class SqlOrderJournal:
                 broker_order_no=order.broker_order_no,
                 status=order.status,
             )
+
+    async def load_recoverable(self) -> list[RecoveredOrder]:
+        """Load orders whose terminal broker outcome still matters."""
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OrderIntentModel, BrokerOrderModel)
+                    .outerjoin(
+                        BrokerOrderModel,
+                        BrokerOrderModel.order_intent_id == OrderIntentModel.id,
+                    )
+                    .where(
+                        (
+                            OrderIntentModel.status.in_(
+                                ("SUBMITTING", "SUBMITTED")
+                            )
+                        )
+                        | OrderIntentModel.status.like("UNKNOWN:%")
+                    )
+                    .order_by(
+                        OrderIntentModel.created_at,
+                        BrokerOrderModel.created_at.desc(),
+                    )
+                )
+            ).all()
+        seen: set[str] = set()
+        recovered: list[RecoveredOrder] = []
+        for intent_row, broker_row in rows:
+            if intent_row.idempotency_key in seen:
+                continue
+            seen.add(intent_row.idempotency_key)
+            recovered.append(
+                RecoveredOrder(
+                    intent=OrderIntent(
+                        idempotency_key=intent_row.idempotency_key,
+                        symbol=intent_row.symbol,
+                        generation=intent_row.generation,
+                        side=IntentSide(intent_row.side),
+                        priority=IntentPriority(intent_row.priority),
+                        quantity=intent_row.quantity,
+                        order_type=intent_row.order_type,
+                        limit_price=intent_row.limit_price,
+                        cause=intent_row.cause,
+                        policy_version=intent_row.policy_version,
+                        created_at=_aware(intent_row.created_at),
+                        approval_id=intent_row.approval_id,
+                    ),
+                    intent_status=intent_row.status,
+                    broker_order_no=(
+                        None if broker_row is None else broker_row.broker_order_no
+                    ),
+                    broker_status=(
+                        None if broker_row is None else broker_row.status
+                    ),
+                )
+            )
+        return recovered
 
     async def mark_submitting(self, intent: OrderIntent) -> bool:
         async with self._session_factory() as session:
@@ -125,3 +187,15 @@ class SqlOrderJournal:
             if row is not None:
                 row.status = f"UNKNOWN:{reason}"[:24]
                 await session.commit()
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveredOrder:
+    intent: OrderIntent
+    intent_status: str
+    broker_order_no: str | None
+    broker_status: str | None
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value

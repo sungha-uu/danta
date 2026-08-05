@@ -15,6 +15,11 @@ class NotificationError(RuntimeError):
     """Raised when an external notification could not be delivered."""
 
 
+def _set_utf8_content(message: EmailMessage, body: str) -> None:
+    """Encode Korean notification bodies without depending on host code pages."""
+    message.set_content(body, charset="utf-8", cte="base64")
+
+
 @dataclass(frozen=True)
 class NotificationReceipt:
     recipient_count: int
@@ -36,7 +41,7 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = subject
-        message.set_content(
+        _set_utf8_content(message,
             "Danta 리포트가 GitHub Pages에 배포되었습니다.\n"
             f"{report_url}\n\n"
             + data_notice
@@ -67,7 +72,7 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = f"[DANTA][완료] {stage}"
-        message.set_content(
+        _set_utf8_content(message,
             f"{stage} 작업이 완료되었습니다.\n"
             f"{detail}\n\n"
             f"리포트: {report_url}\n"
@@ -101,7 +106,31 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = "지정가격 산정완료."
-        message.set_content("\n".join(lines))
+        _set_utf8_content(message, "\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_autonomous_selection_completed(
+        self,
+        selections: list[tuple[str, str, int, Decimal]],
+    ) -> NotificationReceipt:
+        if not selections:
+            raise ValueError("at least one autonomous selection is required")
+        lines: list[str] = []
+        for name, grade, price, position_pct in selections:
+            if not name.strip() or not grade.strip():
+                raise ValueError("selection name and grade must not be blank")
+            if price <= 0:
+                raise ValueError("selection price must be positive")
+            lines.append(
+                f"{name.strip()} {grade.strip()} {price:,}원 "
+                f"박스위치 {position_pct.quantize(Decimal('0.1'))}%"
+            )
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "자율 모의투자 종목 선정완료."
+        _set_utf8_content(message, "\n".join(lines))
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
@@ -124,7 +153,7 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = "자동손절 체결완료."
-        message.set_content("\n".join(lines))
+        _set_utf8_content(message, "\n".join(lines))
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
@@ -145,7 +174,7 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = "자동매수 체결완료."
-        message.set_content("\n".join(lines))
+        _set_utf8_content(message, "\n".join(lines))
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
@@ -175,7 +204,18 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = "자동매도 체결완료."
-        message.set_content("\n".join(lines))
+        _set_utf8_content(message, "\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_paper_daily_close(self, body: str) -> NotificationReceipt:
+        if not body.strip():
+            raise ValueError("paper daily close body must not be blank")
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "# 자율 모의투자 현황"
+        _set_utf8_content(message, body.strip())
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 
@@ -204,7 +244,7 @@ class SmtpNotifier:
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
         message["Subject"] = f"[DANTA][시장위험] {before} → {after}"
-        message.set_content(
+        _set_utf8_content(message,
             f"시장 상태: {before} → {after}\n"
             f"KOSPI: {kospi_return_pct.quantize(Decimal('0.01'))}%\n"
             f"외국인: {foreign_net_million:,}백만원\n"

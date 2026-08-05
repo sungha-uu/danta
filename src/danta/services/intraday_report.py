@@ -235,6 +235,10 @@ def market_cap_top_universe(
         bars = dataset.bars.get(symbol, [])
         if not bars or bars[-1].trading_date != dataset.trading_dates[-1]:
             continue
+        if bars[-1].volume <= 0 or bars[-1].trading_value <= 0:
+            # A market-cap row can remain available while a security is
+            # suspended. It is not an orderable minute-bar candidate.
+            continue
         name = dataset.names.get(symbol, symbol).strip()
         if EXCLUDED_NAME.search(name):
             continue

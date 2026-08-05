@@ -330,6 +330,62 @@ async def test_paper_orderable_cash_uses_no_credit_fields(
 
 
 @pytest.mark.asyncio
+async def test_paper_account_snapshot_uses_balance_summary(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(
+                200,
+                json={"access_token": "token", "expires_in": 3600},
+            )
+        assert request.headers["tr_id"] == "VTTC8434R"
+        assert request.url.params["INQR_DVSN"] == "02"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output1": [
+                    {
+                        "pdno": "005930",
+                        "hldg_qty": "2",
+                        "ord_psbl_qty": "2",
+                        "pchs_avg_pric": "200000",
+                    }
+                ],
+                "output2": [
+                    {
+                        "dnca_tot_amt": "1000000",
+                        "scts_evlu_amt": "420000",
+                        "tot_evlu_amt": "1420000",
+                        "nass_amt": "1420000",
+                        "pchs_amt_smtl_amt": "400000",
+                        "evlu_amt_smtl_amt": "420000",
+                        "evlu_pfls_smtl_amt": "20000",
+                        "asst_icdc_amt": "10000",
+                        "asst_icdc_erng_rt": "0.71",
+                        "thdt_buy_amt": "400000",
+                        "thdt_sll_amt": "0",
+                    }
+                ],
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        snapshot = await client.account_snapshot()
+        positions = await client.positions()
+    finally:
+        await client.close()
+
+    assert snapshot.summary.net_asset_amount == 1_420_000
+    assert snapshot.summary.holdings_profit_loss == 20_000
+    assert snapshot.summary.asset_change_return_pct == Decimal("0.71")
+    assert snapshot.positions[0].symbol == "005930"
+    assert positions[0].quantity == 2
+
+
+@pytest.mark.asyncio
 async def test_enabled_paper_limit_buy_maps_official_order_contract(
     credentials: KisCredentials,
 ) -> None:
@@ -399,22 +455,35 @@ async def test_daily_order_status_maps_reconciliation_fields(
                         "avg_prvs": "69950",
                         "ord_tmd": "101010",
                         "ord_gno_brno": "06010",
-                    }
+                    },
+                    {
+                        "odno": "12346",
+                        "orgn_odno": "12345",
+                        "pdno": "005930",
+                        "sll_buy_dvsn_cd_name": "현금매수",
+                        "ord_qty": "10",
+                        "tot_ccld_qty": "6",
+                        "rmn_qty": "-2",
+                        "ord_unpr": "70000",
+                        "avg_prvs": "69900",
+                        "ord_tmd": "101011",
+                        "ord_gno_brno": "06010",
+                    },
                 ],
             },
         )
 
     client = KisClient(credentials, transport=httpx.MockTransport(handler))
     try:
-        statuses = await client.daily_order_statuses(
-            trading_date="20260728", symbol="005930"
-        )
+        statuses = await client.daily_order_statuses(trading_date="20260728", symbol="005930")
     finally:
         await client.close()
     assert statuses[0].filled_quantity == 4
     assert statuses[0].remaining_quantity == 6
     assert statuses[0].average_fill_price == Decimal("69950")
     assert statuses[0].side == "BUY"
+    assert statuses[1].filled_quantity == 6
+    assert statuses[1].remaining_quantity == 0
 
 
 async def test_cancel_order_uses_official_paper_contract(

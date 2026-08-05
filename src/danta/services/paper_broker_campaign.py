@@ -14,6 +14,7 @@ from danta.config import AppSettings, KisCredentials, TradingEnvironment
 from danta.domain.market import MarketRisk
 from danta.domain.price_tick import floor_kospi_price
 from danta.domain.risk import PositionRiskSnapshot, evaluate_exit
+from danta.services.market_session import krx_regular_trading_minutes_between
 from danta.services.market_signal import RollingMarketSignal
 from danta.services.policy_registry import TradingPolicyRegistry
 
@@ -224,8 +225,9 @@ class PaperBrokerCampaign:
                                 best_bid=snapshot.best_bid,
                                 broker_return_pct=None,
                                 peak_return_pct=peak,
-                                held_minutes=int(
-                                    (now - started).total_seconds() // 60
+                                held_minutes=krx_regular_trading_minutes_between(
+                                    started,
+                                    now,
                                 ),
                                 sell_pressure_score=snapshot.sell_pressure_score,
                                 weakness_score=snapshot.weakness_score,

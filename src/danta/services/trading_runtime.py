@@ -15,6 +15,7 @@ from danta.domain.mandate import EntryMandate, PlannedEntry
 from danta.domain.market import MarketRisk
 from danta.domain.risk import ExitPolicy, PositionRiskSnapshot, evaluate_exit
 from danta.domain.trading_session import IntentSide, OrderIntent, SymbolState
+from danta.services.market_session import krx_regular_trading_minutes_between
 from danta.services.market_signal import RollingMarketSignal
 from danta.services.order_manager import (
     OrderExecution,
@@ -35,10 +36,7 @@ def regular_entry_session(event: RealtimeEvent, observed_at: datetime) -> bool:
     if event.venue is not MarketVenue.KRX:
         return False
     local = observed_at.astimezone(KST)
-    return (
-        local.weekday() < 5
-        and REGULAR_ENTRY_OPEN <= local.time() < REGULAR_ENTRY_CLOSE
-    )
+    return local.weekday() < 5 and REGULAR_ENTRY_OPEN <= local.time() < REGULAR_ENTRY_CLOSE
 
 
 @dataclass(slots=True)
@@ -97,6 +95,7 @@ class TradingRuntimeCore:
         self.cancel_requested: set[str] = set()
         self.cancel_completed: set[str] = set()
         self.pending_buy_cancel_reason: dict[str, str] = {}
+        self.recovered_order_keys: set[str] = set()
         self.entry_attempts: dict[str, int] = {}
         self.box_valid: dict[str, bool] = {}
         self.market_risk = MarketRisk.NORMAL
@@ -108,9 +107,7 @@ class TradingRuntimeCore:
         *,
         orderable_cash: int,
     ) -> list[PlannedEntry]:
-        plans = await self.orchestrator.register_mandate(
-            mandate, orderable_cash=orderable_cash
-        )
+        plans = await self.orchestrator.register_mandate(mandate, orderable_cash=orderable_cash)
         self.mandate = mandate
         self.plans = {plan.symbol: plan for plan in plans}
         self.signals = {
@@ -121,13 +118,49 @@ class TradingRuntimeCore:
         self.entry_attempts = {selection.symbol: 0 for selection in mandate.selections}
         return plans
 
-    def set_market_guard(
-        self, risk: MarketRisk, *, stress_score: Decimal
-    ) -> None:
+    def restore_completed_symbols(self, symbols: set[str]) -> None:
+        """Keep completed legs terminal when resuming a multi-symbol mandate."""
+        for symbol in symbols:
+            if symbol in self.positions or symbol in self.submitted:
+                raise ValueError("an active position/order cannot be restored as completed")
+            session = self.orchestrator.sessions.get(symbol)
+            if session is None:
+                raise ValueError("completed symbol is outside the active mandate")
+            session.state = SymbolState.CLOSED
+            session.active_order_key = None
+            session.quantity = 0
+            session.sellable_quantity = 0
+            self.signals.pop(symbol, None)
+            self.entry_attempts.pop(symbol, None)
+            self.box_valid.pop(symbol, None)
+
+    def set_market_guard(self, risk: MarketRisk, *, stress_score: Decimal) -> None:
         if stress_score < 0 or stress_score > 1:
             raise ValueError("stress_score must be between 0 and 1")
         self.market_risk = risk
         self.market_stress_score = stress_score
+
+    def reset_market_signals(self) -> None:
+        """Start a new venue/session window without changing trading state."""
+        self.signals = {symbol: RollingMarketSignal(symbol) for symbol in self.signals}
+
+    def clear_terminal_mandate(self) -> None:
+        if self.mandate is None:
+            return
+        terminal = {SymbolState.CLOSED, SymbolState.INVALIDATED}
+        if any(
+            self.orchestrator.sessions[selection.symbol].state not in terminal
+            for selection in self.mandate.selections
+        ):
+            raise RuntimeError("active mandate still has non-terminal symbols")
+        symbols = [selection.symbol for selection in self.mandate.selections]
+        self.mandate = None
+        self.plans = {}
+        self.entry_attempts = {}
+        for symbol in symbols:
+            if symbol not in self.positions:
+                self.signals.pop(symbol, None)
+                self.box_valid.pop(symbol, None)
 
     def restore_position(
         self,
@@ -183,9 +216,7 @@ class TradingRuntimeCore:
         intent = submitted.intent
         if intent.side is not IntentSide.BUY:
             return False
-        await self.orchestrator.capital_allocator.release(
-            f"{intent.idempotency_key}:CAPITAL"
-        )
+        await self.orchestrator.capital_allocator.release(f"{intent.idempotency_key}:CAPITAL")
         await self.orchestrator.scheduler.forget(intent.idempotency_key)
         session = self.orchestrator.sessions[intent.symbol]
         session.active_order_key = None
@@ -194,9 +225,7 @@ class TradingRuntimeCore:
         if self.positions.get(intent.symbol) is not None:
             session.state = SymbolState.POSITION_OPEN
         else:
-            self.entry_attempts[intent.symbol] = (
-                self.entry_attempts.get(intent.symbol, 0) + 1
-            )
+            self.entry_attempts[intent.symbol] = self.entry_attempts.get(intent.symbol, 0) + 1
             session.state = SymbolState.WATCHING_ENTRY
         return True
 
@@ -260,8 +289,9 @@ class TradingRuntimeCore:
             * Decimal("100")
         )
         position.peak_return_pct = max(position.peak_return_pct, current_return)
-        held_minutes = max(
-            0, int((observed_now - position.opened_at).total_seconds() // 60)
+        held_minutes = krx_regular_trading_minutes_between(
+            position.opened_at,
+            observed_now,
         )
         exit_decision = evaluate_exit(
             PositionRiskSnapshot(
@@ -285,9 +315,7 @@ class TradingRuntimeCore:
             ),
             policy=self.exit_policy,
         )
-        return await self.orchestrator.handle_exit_decision(
-            exit_decision, created_at=observed_now
-        )
+        return await self.orchestrator.handle_exit_decision(exit_decision, created_at=observed_now)
 
     async def process_watchdog_price(
         self,
@@ -311,9 +339,9 @@ class TradingRuntimeCore:
                 best_bid=None,
                 broker_return_pct=None,
                 peak_return_pct=position.peak_return_pct,
-                held_minutes=max(
-                    0,
-                    int((observed_at - position.opened_at).total_seconds() // 60),
+                held_minutes=krx_regular_trading_minutes_between(
+                    position.opened_at,
+                    observed_at,
                 ),
                 sell_pressure_score=Decimal("0"),
                 weakness_score=Decimal("0"),
@@ -330,18 +358,41 @@ class TradingRuntimeCore:
             "HARD_DEFENSE_MINUS_5",
         }.intersection(decision.reason_codes):
             return None
-        return await self.orchestrator.handle_exit_decision(
-            decision, created_at=observed_at
-        )
+        return await self.orchestrator.handle_exit_decision(decision, created_at=observed_at)
 
-    def record_submission(
-        self, intent: OrderIntent, execution: OrderExecution
-    ) -> None:
+    def record_submission(self, intent: OrderIntent, execution: OrderExecution) -> None:
         existing = self.order_number_to_key.get(execution.broker_order_no)
         if existing is not None and existing != intent.idempotency_key:
             raise RuntimeError("broker order number is mapped to multiple intents")
         self.submitted[intent.idempotency_key] = SubmittedOrder(intent, execution)
         self.order_number_to_key[execution.broker_order_no] = intent.idempotency_key
+
+    def restore_submission(
+        self,
+        intent: OrderIntent,
+        execution: OrderExecution,
+        *,
+        cumulative_filled: int,
+        average_fill_price: Decimal,
+    ) -> None:
+        """Restore broker linkage without replaying already-accounted fills."""
+        if cumulative_filled < 0 or cumulative_filled > intent.quantity:
+            raise ValueError("recovered cumulative fill quantity is invalid")
+        self.record_submission(intent, execution)
+        self.recovered_order_keys.add(intent.idempotency_key)
+        submitted = self.submitted[intent.idempotency_key]
+        submitted.cumulative_filled = cumulative_filled
+        submitted.cumulative_fill_value = average_fill_price * cumulative_filled
+        session = self.orchestrator.sessions.get(intent.symbol)
+        if session is None:
+            raise ValueError("recovered order has no symbol session")
+        session.active_order_key = intent.idempotency_key
+        if intent.side is IntentSide.BUY:
+            session.state = (
+                SymbolState.PARTIALLY_FILLED if cumulative_filled > 0 else SymbolState.BUY_PENDING
+            )
+        elif intent.side is IntentSide.SELL:
+            session.state = SymbolState.SELL_PENDING
 
     def apply_order_status(self, status: KisOrderStatus, *, observed_at: datetime) -> int:
         key = self.order_number_to_key.get(status.broker_order_no)

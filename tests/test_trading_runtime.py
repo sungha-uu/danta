@@ -10,6 +10,7 @@ from danta.domain.market import MarketRisk
 from danta.domain.risk import ExitPolicy
 from danta.domain.trading_session import IntentSide, SymbolState
 from danta.services.capital_allocator import CapitalAllocator
+from danta.services.order_manager import OrderExecution
 from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.trading_orchestrator import TradingOrchestrator
 from danta.services.trading_runtime import (
@@ -438,3 +439,78 @@ async def test_rest_watchdog_hard_stops_without_realtime_tick() -> None:
     )
     assert intent is not None
     assert intent.cause == "HARD_STOP_MINUS_7"
+
+
+async def test_recovered_partial_order_does_not_replay_old_fills() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1_000_000)
+    now = regular_session_time()
+    await core.process_event(orderbook(99_000, now), now=now)
+    intent = await core.process_event(trade(99_000, now), now=now)
+    assert intent is not None
+    session = orchestrator.sessions["005930"]
+    session.quantity = 2
+    session.sellable_quantity = 2
+    core.restore_position(
+        ManagedPosition(
+            symbol="005930",
+            generation=session.generation,
+            quantity=2,
+            sellable_quantity=2,
+            average_entry_price=Decimal("99000"),
+            opened_at=now,
+        )
+    )
+
+    core.restore_submission(
+        intent,
+        OrderExecution(intent.idempotency_key, "RECOVERED-1", "SUBMITTED"),
+        cumulative_filled=2,
+        average_fill_price=Decimal("99000"),
+    )
+    status = KisOrderStatus(
+        broker_order_no="RECOVERED-1",
+        original_order_no="",
+        symbol="005930",
+        side="BUY",
+        ordered_quantity=10,
+        filled_quantity=3,
+        remaining_quantity=7,
+        order_price=99_000,
+        average_fill_price=Decimal("99000"),
+        order_time="090001",
+        branch_no="1",
+    )
+
+    assert core.apply_order_status(status, observed_at=now) == 1
+    assert core.positions["005930"].quantity == 3
+
+
+async def test_completed_leg_stays_closed_when_active_mandate_is_restored() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1_000_000)
+
+    core.restore_completed_symbols({"005930"})
+
+    assert orchestrator.sessions["005930"].state is SymbolState.CLOSED
+    assert "005930" not in core.signals
+    assert "005930" not in core.entry_attempts
+    assert "005930" not in core.box_valid

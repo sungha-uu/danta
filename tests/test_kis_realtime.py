@@ -12,6 +12,7 @@ from danta.adapters.kis.realtime import (
     TRADE_COLUMNS,
     TRADE_TR_ID,
     ExpectedPriceTick,
+    KisRealtimeClient,
     MarketVenue,
     OrderBookTick,
     TradeTick,
@@ -157,6 +158,13 @@ def test_nxt_trade_and_orderbook_frames_preserve_venue() -> None:
     assert isinstance(book, OrderBookTick)
     assert book.venue is MarketVenue.NXT
 
+    paper_book = parse_realtime_message(
+        _frame(NXT_ORDERBOOK_TR_ID, NXT_ORDERBOOK_COLUMNS[:-3], [row]),
+        received_at=observed_at,
+    )[0]
+    assert isinstance(paper_book, OrderBookTick)
+    assert paper_book.venue is MarketVenue.NXT
+
 
 def test_krx_expected_price_frame_maps_official_contract() -> None:
     observed_at = datetime.now(UTC)
@@ -186,4 +194,39 @@ def test_krx_expected_price_frame_maps_official_contract() -> None:
         expected_volume=12345,
         change_rate=Decimal("-4.0"),
         venue=MarketVenue.KRX,
+    )
+
+
+async def test_premarket_stream_uses_one_combined_subscription_set() -> None:
+    class _Harness:
+        def __init__(self) -> None:
+            self.tr_ids: tuple[str, ...] = ()
+
+        async def _stream_tr_ids(
+            self,
+            symbols: list[str],
+            *,
+            tr_ids: tuple[str, ...],
+            reconnect_attempts: int,
+        ):
+            assert symbols == ["000660"]
+            assert reconnect_attempts == 5
+            self.tr_ids = tr_ids
+            if False:
+                yield None
+
+    harness = _Harness()
+    events = [
+        event
+        async for event in KisRealtimeClient.stream_premarket(  # type: ignore[arg-type]
+            harness,
+            ["000660"],
+        )
+    ]
+
+    assert events == []
+    assert harness.tr_ids == (
+        NXT_TRADE_TR_ID,
+        NXT_ORDERBOOK_TR_ID,
+        EXPECTED_TRADE_TR_ID,
     )

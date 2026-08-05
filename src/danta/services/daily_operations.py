@@ -75,7 +75,7 @@ async def run_scheduled_refresh(
         result = await run_daily_pipeline(
             settings,
             data_root=Path("data/intraday/1m"),
-            report_output=Path("data/candidate_intraday_public_report.json"),
+            report_output=settings.paper_autonomous_report_path,
             review_output=Path("data/context-review-latest.json"),
             dashboard_output=Path("dashboard/dist"),
             context_cache_root=Path("data/public-context"),
@@ -125,7 +125,9 @@ async def run_scheduled_refresh(
                 detail=(
                     f"공식 후보 {result.candidate_count}개, "
                     f"재무 스냅샷 {result.fundamental_snapshot_count}개, "
-                    f"재무 미확보 {result.fundamental_unavailable_count}개"
+                    f"재무 미확보 {result.fundamental_unavailable_count}개, "
+                    f"추천 평가 스냅샷 {result.performance_snapshot_count}일, "
+                    f"평가 상태 {result.recommendation_edge_status}"
                 ),
             )
         completed = ScheduledRefreshResult(
@@ -134,7 +136,9 @@ async def run_scheduled_refresh(
             completed_at=datetime.now(KST).isoformat(),
             detail=(
                 f"{result.candidate_count} candidates; "
-                f"{result.fundamental_snapshot_count} fundamentals"
+                f"{result.fundamental_snapshot_count} fundamentals; "
+                f"recommendation performance "
+                f"{result.recommendation_edge_status}"
             ),
             dashboard_path=str(result.dashboard_path),
             published_commit=commit,

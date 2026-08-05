@@ -130,6 +130,34 @@ def test_entry_price_notification_is_simple_and_exact(monkeypatch: object) -> No
         "SK하이닉스 1,450,000원\n삼성전자 208,500원"
     )
 
+def test_autonomous_selection_notification_is_simple_and_exact(
+    monkeypatch: object,
+) -> None:
+    from decimal import Decimal
+
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_autonomous_selection_completed(
+        [
+            ("SK하이닉스", "STRONG_RECOMMEND", 1_450_000, Decimal("18.24")),
+            ("삼성전자", "RECOMMEND", 208_500, Decimal("31.05")),
+        ]
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert message["Subject"] == "자율 모의투자 종목 선정완료."
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert plain_body.get_content().strip() == (
+        "SK하이닉스 STRONG_RECOMMEND 1,450,000원 박스위치 18.2%\n"
+        "삼성전자 RECOMMEND 208,500원 박스위치 31.0%"
+    )
+
 
 def test_stop_loss_notification_contains_fill_and_return(monkeypatch: object) -> None:
     from decimal import Decimal
@@ -173,6 +201,12 @@ def test_buy_fill_notification_contains_quantity_and_price(monkeypatch: object) 
     plain_body = message.get_body(preferencelist=("plain",))
     assert plain_body is not None
     assert plain_body.get_content().strip() == "SK하이닉스 17주 1,330,000원"
+    assert plain_body.get_content_charset() == "utf-8"
+    assert plain_body["Content-Transfer-Encoding"] == "base64"
+    serialized = message.as_bytes()
+    reparsed = __import__("email").message_from_bytes(serialized)
+    decoded = reparsed.get_payload(decode=True).decode("utf-8")
+    assert decoded.strip() == "SK하이닉스 17주 1,330,000원"
 
 
 def test_profit_exit_notification_contains_reason(monkeypatch: object) -> None:
@@ -203,3 +237,24 @@ def test_profit_exit_notification_contains_reason(monkeypatch: object) -> None:
     assert plain_body.get_content().strip() == (
         "SK하이닉스 1,422,187원 4.5% 수익 보호"
     )
+
+
+def test_paper_daily_close_notification_uses_exact_subject(
+    monkeypatch: object,
+) -> None:
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_paper_daily_close(
+        "[계좌 요약]\n계좌 순자산: 50,100,000원"
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert message["Subject"] == "# 자율 모의투자 현황"
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert "계좌 순자산" in plain_body.get_content()

@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -19,24 +19,16 @@ TOKEN_PATH = "/oauth2/tokenP"
 WS_APPROVAL_PATH = "/oauth2/Approval"
 PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 DAILY_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-MINUTE_DAILY_CHART_PATH = (
-    "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
-)
+MINUTE_DAILY_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
 BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 ORDERABLE_PATH = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
 CASH_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
 DAILY_ORDER_PATH = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 REVISE_CANCEL_PATH = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
 INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"
-MARKET_INVESTOR_PATH = (
-    "/uapi/domestic-stock/v1/quotations/inquire-investor-time-by-market"
-)
-PROGRAM_INVESTOR_PATH = (
-    "/uapi/domestic-stock/v1/quotations/investor-program-trade-today"
-)
-DAILY_MARKET_INVESTOR_PATH = (
-    "/uapi/domestic-stock/v1/quotations/inquire-investor-daily-by-market"
-)
+MARKET_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor-time-by-market"
+PROGRAM_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/investor-program-trade-today"
+DAILY_MARKET_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor-daily-by-market"
 
 
 class KisApiError(RuntimeError):
@@ -100,6 +92,27 @@ class KisOrderStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class KisAccountSummary:
+    cash_balance: int
+    securities_evaluation_amount: int
+    total_evaluation_amount: int
+    net_asset_amount: int
+    purchase_amount: int
+    holdings_evaluation_amount: int
+    holdings_profit_loss: int
+    asset_change_amount: int
+    asset_change_return_pct: Decimal
+    today_buy_amount: int
+    today_sell_amount: int
+
+
+@dataclass(frozen=True, slots=True)
+class KisAccountSnapshot:
+    positions: tuple[AccountPosition, ...]
+    summary: KisAccountSummary
+
+
+@dataclass(frozen=True, slots=True)
 class KisIndexPrice:
     index: Decimal
     return_pct: Decimal
@@ -118,6 +131,13 @@ def _response_int(row: dict[str, Any], field: str) -> int:
     try:
         return int(row.get(field, "0") or "0")
     except ValueError as exc:
+        raise KisApiError(f"KIS response contains invalid {field}") from exc
+
+
+def _response_decimal(row: dict[str, Any], field: str) -> Decimal:
+    try:
+        return Decimal(str(row.get(field, "0") or "0"))
+    except (InvalidOperation, TypeError, ValueError) as exc:
         raise KisApiError(f"KIS response contains invalid {field}") from exc
 
 
@@ -255,9 +275,7 @@ class KisClient:
                 open=Decimal(str(output["bstp_nmix_oprc"])),
                 high=Decimal(str(output["bstp_nmix_hgpr"])),
                 low=Decimal(str(output["bstp_nmix_lwpr"])),
-                accumulated_trading_value_million=int(
-                    output.get("acml_tr_pbmn", "0") or "0"
-                ),
+                accumulated_trading_value_million=int(output.get("acml_tr_pbmn", "0") or "0"),
                 rising_issues=int(output.get("ascn_issu_cnt", "0") or "0"),
                 flat_issues=int(output.get("stnr_issu_cnt", "0") or "0"),
                 declining_issues=int(output.get("down_issu_cnt", "0") or "0"),
@@ -376,36 +394,22 @@ class KisClient:
                 result.append(
                     DailyMarketFlow(
                         trading_date=str(row["stck_bsop_date"]),
-                        kospi_return_pct=Decimal(
-                            str(row.get("bstp_nmix_prdy_ctrt", "0") or "0")
-                        ),
+                        kospi_return_pct=Decimal(str(row.get("bstp_nmix_prdy_ctrt", "0") or "0")),
                         personal=_response_int(row, "prsn_ntby_tr_pbmn"),
                         foreign=_response_int(row, "frgn_ntby_tr_pbmn"),
                         institution=_response_int(row, "orgn_ntby_tr_pbmn"),
-                        financial_investment=_response_int(
-                            row, "scrt_ntby_tr_pbmn"
-                        ),
+                        financial_investment=_response_int(row, "scrt_ntby_tr_pbmn"),
                         insurance=_response_int(row, "insu_ntby_tr_pbmn"),
-                        investment_trust=_response_int(
-                            row, "ivtr_ntby_tr_pbmn"
-                        ),
-                        private_fund=_response_int(
-                            row, "pe_fund_ntby_tr_pbmn"
-                        ),
+                        investment_trust=_response_int(row, "ivtr_ntby_tr_pbmn"),
+                        private_fund=_response_int(row, "pe_fund_ntby_tr_pbmn"),
                         bank=_response_int(row, "bank_ntby_tr_pbmn"),
                         other_finance=_response_int(row, "mrbn_ntby_tr_pbmn"),
-                        pension_fund_etc=_response_int(
-                            row, "fund_ntby_tr_pbmn"
-                        ),
-                        other_corporation=_response_int(
-                            row, "etc_corp_ntby_tr_pbmn"
-                        ),
+                        pension_fund_etc=_response_int(row, "fund_ntby_tr_pbmn"),
+                        other_corporation=_response_int(row, "etc_corp_ntby_tr_pbmn"),
                     )
                 )
             except ValueError as exc:
-                raise KisApiError(
-                    "KIS daily market response contains invalid return"
-                ) from exc
+                raise KisApiError("KIS daily market response contains invalid return") from exc
         if not result:
             raise KisApiError("KIS daily market investor response contained no rows")
         return result
@@ -501,9 +505,7 @@ class KisClient:
                         low=int(row.get("stck_lwpr", "0") or "0"),
                         close=int(row.get("stck_prpr", "0") or "0"),
                         volume=int(row.get("cntg_vol", "0") or "0"),
-                        accumulated_trading_value=int(
-                            row.get("acml_tr_pbmn", "0") or "0"
-                        ),
+                        accumulated_trading_value=int(row.get("acml_tr_pbmn", "0") or "0"),
                     )
                 except (TypeError, ValueError) as exc:
                     raise KisApiError("KIS minute chart response has invalid numbers") from exc
@@ -529,11 +531,9 @@ class KisClient:
             )
         return result
 
-    async def positions(self) -> list[AccountPosition]:
+    async def account_snapshot(self) -> KisAccountSnapshot:
         tr_id = (
-            "VTTC8434R"
-            if self.credentials.environment is TradingEnvironment.PAPER
-            else "TTTC8434R"
+            "VTTC8434R" if self.credentials.environment is TradingEnvironment.PAPER else "TTTC8434R"
         )
         body = await self._authorized_request(
             "GET",
@@ -556,12 +556,12 @@ class KisClient:
         rows = body.get("output1", [])
         if not isinstance(rows, list):
             raise KisApiError("KIS balance response output1 is invalid")
-        result: list[AccountPosition] = []
+        positions: list[AccountPosition] = []
         for row in rows:
             quantity = int(row.get("hldg_qty", "0"))
             if quantity <= 0:
                 continue
-            result.append(
+            positions.append(
                 AccountPosition(
                     symbol=str(row["pdno"]),
                     quantity=quantity,
@@ -569,16 +569,48 @@ class KisClient:
                     average_price=Decimal(str(row.get("pchs_avg_pric", "0"))),
                 )
             )
-        return result
+        summaries = body.get("output2", [])
+        if not isinstance(summaries, list) or not summaries or not isinstance(summaries[0], dict):
+            raise KisApiError("KIS balance response output2 is invalid")
+        summary = summaries[0]
+        return KisAccountSnapshot(
+            positions=tuple(positions),
+            summary=KisAccountSummary(
+                cash_balance=_response_int(summary, "dnca_tot_amt"),
+                securities_evaluation_amount=_response_int(
+                    summary,
+                    "scts_evlu_amt",
+                ),
+                total_evaluation_amount=_response_int(summary, "tot_evlu_amt"),
+                net_asset_amount=_response_int(summary, "nass_amt"),
+                purchase_amount=_response_int(summary, "pchs_amt_smtl_amt"),
+                holdings_evaluation_amount=_response_int(
+                    summary,
+                    "evlu_amt_smtl_amt",
+                ),
+                holdings_profit_loss=_response_int(
+                    summary,
+                    "evlu_pfls_smtl_amt",
+                ),
+                asset_change_amount=_response_int(summary, "asst_icdc_amt"),
+                asset_change_return_pct=_response_decimal(
+                    summary,
+                    "asst_icdc_erng_rt",
+                ),
+                today_buy_amount=_response_int(summary, "thdt_buy_amt"),
+                today_sell_amount=_response_int(summary, "thdt_sll_amt"),
+            ),
+        )
+
+    async def positions(self) -> list[AccountPosition]:
+        return list((await self.account_snapshot()).positions)
 
     async def orderable_cash(self, symbol: str, *, reference_price: int) -> OrderableCash:
         self._validate_symbol(symbol)
         if reference_price <= 0:
             raise ValueError("reference_price must be positive")
         tr_id = (
-            "VTTC8908R"
-            if self.credentials.environment is TradingEnvironment.PAPER
-            else "TTTC8908R"
+            "VTTC8908R" if self.credentials.environment is TradingEnvironment.PAPER else "TTTC8908R"
         )
         body = await self._authorized_request(
             "GET",
@@ -661,9 +693,7 @@ class KisClient:
         if symbol:
             self._validate_symbol(symbol)
         tr_id = (
-            "VTTC0081R"
-            if self.credentials.environment is TradingEnvironment.PAPER
-            else "TTTC0081R"
+            "VTTC0081R" if self.credentials.environment is TradingEnvironment.PAPER else "TTTC0081R"
         )
         body = await self._authorized_request(
             "GET",
@@ -704,7 +734,11 @@ class KisClient:
                     side=side,
                     ordered_quantity=int(row.get("ord_qty", "0") or "0"),
                     filled_quantity=int(row.get("tot_ccld_qty", "0") or "0"),
-                    remaining_quantity=int(row.get("rmn_qty", "0") or "0"),
+                    # Paper KIS can briefly return a negative remainder when
+                    # fills race with an all-quantity cancellation.  The
+                    # executable meaning is terminal/no remainder; never let
+                    # this provider quirk enter the non-negative domain model.
+                    remaining_quantity=max(0, int(row.get("rmn_qty", "0") or "0")),
                     order_price=int(row.get("ord_unpr", "0") or "0"),
                     average_fill_price=Decimal(str(row.get("avg_prvs", "0") or "0")),
                     order_time=str(row.get("ord_tmd", "")),
@@ -790,9 +824,7 @@ class KisClient:
                     if attempt == 0 and method == "GET":
                         continue
                     if method == "GET":
-                        raise KisApiError(
-                            f"KIS GET request failed after retry: {path}"
-                        ) from exc
+                        raise KisApiError(f"KIS GET request failed after retry: {path}") from exc
                     raise
                 self._last_rest_request_at = time.monotonic()
             try:
@@ -804,11 +836,7 @@ class KisClient:
                 if isinstance(raw_body, dict)
                 else ""
             )
-            if (
-                attempt == 0
-                and method == "GET"
-                and error_code == "EGW00123"
-            ):
+            if attempt == 0 and method == "GET" and error_code == "EGW00123":
                 # A broker-side token can expire before its local expiry timestamp.
                 # GET market-data calls are safe to repeat after one forced refresh.
                 self._token = None

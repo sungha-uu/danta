@@ -27,8 +27,10 @@ class MarketDataRouter:
         self.queues: dict[str, asyncio.Queue[RealtimeEvent | None]] = {}
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.dropped_events: dict[str, int] = {}
+        self.subscriptions_changed = asyncio.Event()
 
     def start(self, symbols: Iterable[str]) -> None:
+        changed = False
         for symbol in dict.fromkeys(symbols):
             if symbol in self.tasks:
                 continue
@@ -41,6 +43,9 @@ class MarketDataRouter:
                 self._run_symbol(symbol, queue),
                 name=f"danta-market-router-{symbol}",
             )
+            changed = True
+        if changed:
+            self.subscriptions_changed.set()
 
     async def route(self, event: RealtimeEvent) -> bool:
         queue = self.queues.get(event.symbol)
@@ -64,6 +69,23 @@ class MarketDataRouter:
         await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         self.queues.clear()
         self.tasks.clear()
+
+    async def stop_symbols(self, symbols: Iterable[str]) -> None:
+        changed = False
+        stopped: list[asyncio.Task[None]] = []
+        for symbol in dict.fromkeys(symbols):
+            queue = self.queues.pop(symbol, None)
+            task = self.tasks.pop(symbol, None)
+            self.dropped_events.pop(symbol, None)
+            if queue is not None:
+                await queue.put(None)
+                changed = True
+            if task is not None:
+                stopped.append(task)
+        if stopped:
+            await asyncio.gather(*stopped, return_exceptions=True)
+        if changed:
+            self.subscriptions_changed.set()
 
     async def _run_symbol(
         self,

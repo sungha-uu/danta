@@ -10,7 +10,7 @@
     "max_spread_bps": "35"
   },
   "exit": {
-    "version": "exit-defense-profit-paper-v2-minus5-floor",
+    "version": "exit-defense-profit-paper-v3-trading-minutes",
     "approved_for_paper": true,
     "early_loss_pct": "-3.0",
     "strong_loss_pct": "-5.0",

@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -34,6 +35,11 @@ from danta.services.intraday_report import (
     build_intraday_report,
     market_cap_top_universe,
 )
+from danta.services.recommendation_performance import (
+    RecommendationPerformanceTracker,
+)
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +51,9 @@ class DailyPipelineResult:
     data_as_of: datetime
     fundamental_snapshot_count: int
     fundamental_unavailable_count: int
+    performance_snapshot_count: int = 0
+    performance_completed_outcome_count: int = 0
+    recommendation_edge_status: str = "INSUFFICIENT_SAMPLE"
 
 
 async def run_daily_pipeline(
@@ -62,7 +71,10 @@ async def run_daily_pipeline(
     emit = progress if progress is not None else lambda _message: None
     load_krx_environment(settings)
     emit("collecting KRX 21-trading-day dataset")
-    dataset = PykrxMarketDataClient().collect(required_days=21)
+    dataset = PykrxMarketDataClient().collect(
+        as_of=_latest_completed_dataset_date(),
+        required_days=21,
+    )
     universe = market_cap_top_universe(dataset, limit=200)
     if len(universe) != 200:
         raise RuntimeError(f"expected 200 market-cap symbols, got {len(universe)}")
@@ -149,6 +161,11 @@ async def run_daily_pipeline(
     reviewed = apply_ai_review(quantitative, review)
     _write_model(report_output, reviewed.model_dump(mode="json"))
     _write_model(review_output, review.model_dump(mode="json"))
+    emit("freezing top-50 AI decisions and updating recommendation performance")
+    performance = RecommendationPerformanceTracker(
+        settings.recommendation_performance_root,
+        round_trip_cost_bps=settings.recommendation_round_trip_cost_bps,
+    ).update(reviewed, store)
     dashboard_path = build_dashboard(reviewed, dashboard_output)
     return DailyPipelineResult(
         report_path=report_output,
@@ -160,6 +177,9 @@ async def run_daily_pipeline(
         data_as_of=reviewed.data_as_of,
         fundamental_snapshot_count=len(fundamentals.snapshots),
         fundamental_unavailable_count=len(fundamentals.unavailable_symbols),
+        performance_snapshot_count=performance.snapshot_count,
+        performance_completed_outcome_count=performance.completed_outcome_count,
+        recommendation_edge_status=performance.recommendation_edge_status,
     )
 
 
@@ -171,3 +191,12 @@ def _write_model(path: Path, value: object) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _latest_completed_dataset_date(now: datetime | None = None) -> date:
+    current = (now or datetime.now(KST)).astimezone(KST)
+    # The current trading day belongs to the 16:00 close batch. Manual intraday
+    # runs must not interpret a partial session as a completed daily snapshot.
+    if current.time() < time(16, 0):
+        return current.date() - timedelta(days=1)
+    return current.date()

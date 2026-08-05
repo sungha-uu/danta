@@ -24,13 +24,17 @@ class AppSettings(BaseModel):
     smtp_config_path: Path = Path(
         ".secrets/imported_financial_statement_analysis/email_config.json"
     )
-    krx_credentials_path: Path = Path(
-        ".secrets/imported_financial_statement_analysis/key.txt"
-    )
+    krx_credentials_path: Path = Path(".secrets/imported_financial_statement_analysis/key.txt")
     smtp_enabled: bool = True
     log_level: str = "INFO"
     buy_requires_user_approval: bool = True
     unattended_auto_buy_enabled: bool = False
+    paper_autonomous_campaign_path: Path = Path("private/paper_autonomous_campaign.json")
+    paper_autonomous_kill_switch_path: Path = Path("private/PAPER_AUTONOMY_STOP")
+    paper_autonomous_report_path: Path = Path("data/candidate_intraday_ai_report.json")
+    paper_autonomous_poll_interval_seconds: int = Field(default=30, ge=5, le=300)
+    paper_daily_close_enabled: bool = True
+    paper_daily_close_root: Path = Path("data/paper-daily-close")
     auto_stop_sell_enabled: bool = True
     stop_loss_pct: Decimal = Decimal("7.0")
     stop_sell_requires_confirmation: bool = False
@@ -40,9 +44,14 @@ class AppSettings(BaseModel):
     order_poll_interval_seconds: Decimal = Field(default=Decimal("2.0"), ge=Decimal("1"))
     market_data_stale_seconds: int = Field(default=10, ge=2, le=60)
     fundamental_snapshot_path: Path = Path("data/fundamentals/latest.json")
-    dart_corp_code_cache_path: Path = Path(
-        "data/public-context/dart-corp-codes.json"
+    recommendation_performance_root: Path = Path(
+        "data/recommendation-performance"
     )
+    recommendation_round_trip_cost_bps: Decimal = Field(
+        default=Decimal("35"),
+        ge=0,
+    )
+    dart_corp_code_cache_path: Path = Path("data/public-context/dart-corp-codes.json")
     daily_run_root: Path = Path("data/daily-runs")
     dashboard_publish_repo: Path = Path("../danta_report")
     dashboard_public_url: str = "https://sungha-uu.github.io/danta_report/"
@@ -52,20 +61,18 @@ class AppSettings(BaseModel):
     market_transition_email_enabled: bool = False
     market_wide_poll_interval_seconds: int = Field(default=30, ge=10, le=300)
     market_pages_publish_enabled: bool = True
-    market_pages_publish_interval_seconds: int = Field(
-        default=300, ge=300, le=3600
-    )
+    market_pages_publish_interval_seconds: int = Field(default=300, ge=300, le=3600)
     market_pages_git_push_enabled: bool = True
     market_dashboard_publish_repo: Path = Path("../danta_market_status")
-    market_dashboard_public_url: str = (
-        "https://sungha-uu.github.io/danta_market_status/"
-    )
+    market_dashboard_public_url: str = "https://sungha-uu.github.io/danta_market_status/"
 
     @model_validator(mode="after")
     def enforce_immutable_safety_policy(self) -> AppSettings:
         errors: list[str] = []
         if not self.buy_requires_user_approval:
             errors.append("buy_requires_user_approval must be true")
+        # This legacy global switch remains locked. The only unattended path is
+        # a validated, expiring PAPER_AUTONOMOUS_CAMPAIGN authorization file.
         if self.unattended_auto_buy_enabled:
             errors.append("unattended_auto_buy_enabled must be false")
         if not self.auto_stop_sell_enabled:
@@ -185,9 +192,7 @@ def load_krx_environment(settings: AppSettings) -> None:
     try:
         lines = settings.krx_credentials_path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError as exc:
-        raise ValueError(
-            f"KRX credential file not found: {settings.krx_credentials_path}"
-        ) from exc
+        raise ValueError(f"KRX credential file not found: {settings.krx_credentials_path}") from exc
     values: dict[str, str] = {}
     for line in lines:
         stripped = line.strip()

@@ -27,9 +27,21 @@ async def test_closed_generation_is_not_reopened_and_next_generation_is_known() 
     await repository.save_position(opened)
     await repository.close_position(symbol="005930", generation=0)
 
-    assert await repository.latest_generations(["005930", "000660"]) == {
-        "005930": 0
-    }
+    assert await repository.position_average_entry_price(
+        symbol="005930",
+        generation=0,
+    ) == Decimal("100000")
+    assert await repository.closed_symbols_since(
+        ["005930", "000660"],
+        opened_since=opened.opened_at,
+    ) == {"005930"}
+    assert await repository.latest_generations(["005930", "000660"]) == {"005930": 0}
+    await repository.audit(
+        "ENTRY_FILL_EMAIL_SENT",
+        correlation_id="entry-test",
+        payload={"intent_key": "entry-test:005930:BUY:A0"},
+    )
+    assert await repository.sent_trade_notification_intent_keys() == {"entry-test:005930:BUY:A0"}
     with pytest.raises(RuntimeError, match="cannot be reopened"):
         await repository.save_position(opened)
     await engine.dispose()

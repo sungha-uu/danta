@@ -22,13 +22,19 @@ from danta.domain.market import MarketRisk
 from danta.domain.market_wide import MarketWideRiskLevel, MarketWideSnapshot
 from danta.domain.trading_session import (
     IntentSide,
+    OrchestratorState,
     OrderIntent,
     SymbolSession,
     SymbolState,
 )
 from danta.services.capital_allocator import CapitalAllocator
+from danta.services.command_store import CommandStatus, FileCommandStore, StoredCommand
 from danta.services.market_data_router import MarketDataRouter
 from danta.services.market_guard import MarketGuardDecision
+from danta.services.market_session import (
+    TradingSessionPhase,
+    trading_session_phase,
+)
 from danta.services.market_wide_monitor import (
     MarketStatusPublisher,
     MarketWideCollector,
@@ -37,14 +43,22 @@ from danta.services.market_wide_monitor import (
 )
 from danta.services.market_wide_repository import MarketWideRepository
 from danta.services.notifier import NotificationError, SmtpNotifier
-from danta.services.order_manager import BrokerReceipt, OrderManager
+from danta.services.order_manager import BrokerReceipt, OrderExecution, OrderManager
+from danta.services.paper_autonomous_campaign import (
+    PaperAutonomousCampaignController,
+)
 from danta.services.policy_registry import TradingPolicyRegistry
 from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.reconciliation import reconcile_positions
 from danta.services.runtime_repository import SqlRuntimeRepository
 from danta.services.sql_order_journal import SqlOrderJournal
+from danta.services.trade_notification_outbox import (
+    TradeNotificationKind,
+    TradeNotificationOutbox,
+)
 from danta.services.trading_orchestrator import TradingOrchestrator
 from danta.services.trading_runtime import ManagedPosition, OrderPump, TradingRuntimeCore
+from danta.services.unified_market_monitor import UnifiedTradingMonitor
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -57,8 +71,9 @@ class PaperTradingApplication:
         *,
         settings: AppSettings,
         credentials: KisCredentials,
-        mandate: EntryMandate,
+        mandate: EntryMandate | None,
         policies: TradingPolicyRegistry,
+        command_root: Path = Path("private/commands"),
     ) -> None:
         if settings.environment is not TradingEnvironment.PAPER:
             raise PermissionError("paper runtime requires paper application settings")
@@ -72,21 +87,25 @@ class PaperTradingApplication:
         self.credentials = credentials
         self.mandate = mandate
         self.policies = policies
+        self.command_store = FileCommandStore(command_root)
+        self.trade_notification_outbox = TradeNotificationOutbox(
+            command_root.parent / "notifications"
+        )
         self._notified_price_intents: set[str] = set()
         self._notified_buy_fill_intents: set[str] = set()
         self._notified_stop_intents: set[str] = set()
 
+    @property
+    def correlation_id(self) -> str:
+        return self.mandate.command_id if self.mandate is not None else "paper-account-runtime"
+
     async def run(self) -> None:
         engine, session_factory = create_engine_and_session(self.settings.database_url)
         async with engine.connect() as connection:
-            revision = await connection.scalar(
-                text("SELECT version_num FROM alembic_version")
-            )
-        if revision != "0003_market_wide_monitor":
+            revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+        if revision != "0004_runtime_recovery":
             await engine.dispose()
-            raise RuntimeError(
-                "database schema is not current; run alembic upgrade head"
-            )
+            raise RuntimeError("database schema is not current; run alembic upgrade head")
         repository = SqlRuntimeRepository(session_factory)
         market_repository = MarketWideRepository(session_factory)
         notifier: SmtpNotifier | None = None
@@ -96,20 +115,22 @@ class PaperTradingApplication:
             except (OSError, ValueError) as exc:
                 await repository.audit(
                     "ENTRY_PRICE_EMAIL_CONFIGURATION_ERROR",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={"error": type(exc).__name__},
                 )
         price_notifications: asyncio.Queue[tuple[str, str, int]] = asyncio.Queue()
-        buy_fill_notifications: asyncio.Queue[
-            tuple[str, str, int, int]
-        ] = asyncio.Queue()
-        stop_notifications: asyncio.Queue[
-            tuple[str, str, int, Decimal, str]
-        ] = asyncio.Queue()
+        buy_fill_notifications: asyncio.Queue[tuple[str, str, int, int]] = asyncio.Queue()
+        stop_notifications: asyncio.Queue[tuple[str, str, int, Decimal, str]] = asyncio.Queue()
+        if self.mandate is not None:
+            self.command_store.submit(self.mandate)
+        active_command = self.command_store.accept_next()
+        self.mandate = None if active_command is None else active_command.mandate
         selection_names = {
             selection.symbol: selection.name
-            for selection in self.mandate.selections
+            for selection in ([] if self.mandate is None else self.mandate.selections)
         }
+        recovery_command_id = None if active_command is None else active_command.mandate.command_id
+        recovery_selection_names = dict(selection_names)
         scheduler = PriorityIntentScheduler()
         orchestrator = TradingOrchestrator(
             capital_allocator=CapitalAllocator(),
@@ -131,9 +152,7 @@ class PaperTradingApplication:
             broker_by_symbol = {position.symbol: position for position in broker_positions}
             for stored in stored_positions:
                 broker_position = broker_by_symbol.get(stored.symbol)
-                sellable = (
-                    broker_position.sellable_quantity if broker_position is not None else 0
-                )
+                sellable = broker_position.sellable_quantity if broker_position is not None else 0
                 orchestrator.sessions[stored.symbol] = SymbolSession(
                     symbol=stored.symbol,
                     generation=stored.generation,
@@ -141,15 +160,13 @@ class PaperTradingApplication:
                     quantity=stored.quantity,
                     sellable_quantity=sellable,
                 )
-            reconciliation = reconcile_positions(
-                broker_positions, orchestrator.sessions
-            )
+            reconciliation = reconcile_positions(broker_positions, orchestrator.sessions)
             await orchestrator.reconcile_complete(
                 safe_for_new_entries=reconciliation.safe_for_new_entries
             )
             await repository.audit(
                 "STARTUP_RECONCILIATION",
-                correlation_id=self.mandate.command_id,
+                correlation_id=self.correlation_id,
                 payload={
                     "safe_for_new_entries": reconciliation.safe_for_new_entries,
                     "issues": [
@@ -165,23 +182,89 @@ class PaperTradingApplication:
             )
             for stored in stored_positions:
                 broker_position = broker_by_symbol.get(stored.symbol)
-                core.restore_position(
-                    ManagedPosition(
+                if broker_position is None:
+                    orchestrator.sessions[stored.symbol].state = SymbolState.QUARANTINED
+                    orchestrator.sessions[stored.symbol].quantity = 0
+                    orchestrator.sessions[stored.symbol].sellable_quantity = 0
+                    await repository.close_position(
                         symbol=stored.symbol,
                         generation=stored.generation,
-                        quantity=stored.quantity,
-                        sellable_quantity=(
-                            broker_position.sellable_quantity
-                            if broker_position is not None
-                            else 0
-                        ),
-                        average_entry_price=stored.average_entry_price,
-                        opened_at=stored.opened_at,
                     )
+                    continue
+                session = orchestrator.sessions[stored.symbol]
+                session.quantity = broker_position.quantity
+                session.sellable_quantity = broker_position.sellable_quantity
+                session.state = (
+                    SymbolState.POSITION_OPEN
+                    if stored.quantity == broker_position.quantity
+                    else SymbolState.QUARANTINED
                 )
-            if reconciliation.safe_for_new_entries:
+                recovered_position = ManagedPosition(
+                    symbol=stored.symbol,
+                    generation=stored.generation,
+                    quantity=broker_position.quantity,
+                    sellable_quantity=broker_position.sellable_quantity,
+                    average_entry_price=broker_position.average_price,
+                    opened_at=stored.opened_at,
+                    peak_return_pct=stored.peak_return_pct,
+                )
+                core.restore_position(recovered_position)
+                await repository.save_position(recovered_position)
+            if reconciliation.discovered_positions:
+                latest_discovered = await repository.latest_generations(
+                    [position.symbol for position in reconciliation.discovered_positions]
+                )
+                for position in reconciliation.discovered_positions:
+                    generation = latest_discovered.get(position.symbol, -1) + 1
+                    recovered = ManagedPosition(
+                        symbol=position.symbol,
+                        generation=generation,
+                        quantity=position.quantity,
+                        sellable_quantity=position.sellable_quantity,
+                        average_entry_price=position.average_price,
+                        opened_at=datetime.now(UTC),
+                    )
+                    orchestrator.sessions[position.symbol] = SymbolSession(
+                        symbol=position.symbol,
+                        generation=generation,
+                        state=SymbolState.QUARANTINED,
+                        quantity=position.quantity,
+                        sellable_quantity=position.sellable_quantity,
+                    )
+                    core.restore_position(recovered)
+                    await repository.save_position(recovered)
+            if active_command is not None and await self._startup_lifecycle_complete(
+                active_command=active_command,
+                broker=broker,
+                broker_position_symbols=set(broker_by_symbol),
+                repository=repository,
+            ):
+                completed_command_id = active_command.mandate.command_id
+                selected_symbols = [
+                    selection.symbol for selection in active_command.mandate.selections
+                ]
+                self.command_store.archive_active(
+                    completed_command_id,
+                    status=CommandStatus.COMPLETED,
+                    reason="STARTUP_CONFIRMED_LIFECYCLE_COMPLETE_AND_FLAT",
+                )
+                await repository.audit(
+                    "MANDATE_COMPLETED_ON_STARTUP",
+                    correlation_id=completed_command_id,
+                    payload={
+                        "symbols": selected_symbols,
+                        "reason": "KIS_FLAT_NO_OPEN_ORDERS_AND_DB_LIFECYCLE_CLOSED",
+                    },
+                )
+                active_command = None
+                self.mandate = None
+                selection_names = {}
+            if reconciliation.safe_for_new_entries and self.mandate is not None:
+                mandate_symbols = [
+                    selection.symbol for selection in self.mandate.selections
+                ]
                 latest_generations = await repository.latest_generations(
-                    [selection.symbol for selection in self.mandate.selections]
+                    mandate_symbols
                 )
                 for symbol, generation in latest_generations.items():
                     if symbol not in orchestrator.sessions:
@@ -196,9 +279,29 @@ class PaperTradingApplication:
                     reference_price=reference.entry_target_price_krw,
                 )
                 await core.activate_mandate(self.mandate, orderable_cash=cash.amount)
+                completed_symbols: set[str] = set()
+                if active_command is not None:
+                    accepted_at = active_command.accepted_at
+                    if accepted_at.tzinfo is None:
+                        accepted_at = accepted_at.replace(tzinfo=UTC)
+                    completed_symbols = await repository.closed_symbols_since(
+                        mandate_symbols,
+                        opened_since=accepted_at,
+                    )
+                    completed_symbols.difference_update(broker_by_symbol)
+                    if completed_symbols:
+                        core.restore_completed_symbols(completed_symbols)
+                        await repository.audit(
+                            "MANDATE_COMPLETED_LEGS_RESTORED",
+                            correlation_id=self.mandate.command_id,
+                            payload={
+                                "symbols": sorted(completed_symbols),
+                                "reason": "DB_LIFECYCLE_CLOSED_AND_KIS_FLAT",
+                            },
+                        )
                 await repository.audit(
                     "MANDATE_ACTIVATED",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={
                         "symbols": list(core.signals),
                         "orderable_cash": cash.amount,
@@ -206,21 +309,36 @@ class PaperTradingApplication:
                         "exit_policy": self.policies.exit.version,
                     },
                 )
-            elif not core.signals:
-                raise RuntimeError(
-                    "reconciliation failed and no internally managed position can be protected"
+            elif not reconciliation.safe_for_new_entries:
+                await orchestrator.reconcile_complete(safe_for_new_entries=False)
+            journal = SqlOrderJournal(session_factory)
+            await self._recover_orders(
+                core,
+                broker,
+                journal,
+                repository,
+                buy_fill_notifications,
+                stop_notifications,
+                recovery_command_id=recovery_command_id,
+                recovery_selection_names=recovery_selection_names,
+            )
+            if notifier is not None:
+                await self._replay_trade_notification_outbox(
+                    buy_fill_notifications,
+                    stop_notifications,
+                    repository,
                 )
             realtime = KisRealtimeClient(self.credentials)
             manager = OrderManager(
                 _KisOrderBrokerAdapter(broker),
-                SqlOrderJournal(session_factory),
+                journal,
             )
             pump = OrderPump(
                 core=core,
                 manager=manager,
                 on_error=lambda intent, error: repository.audit(
                     "ORDER_SUBMISSION_ERROR",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={
                         "symbol": intent.symbol,
                         "side": intent.side.value,
@@ -243,7 +361,7 @@ class PaperTradingApplication:
                 core,
                 on_error=lambda symbol, error: repository.audit(
                     "SYMBOL_MARKET_WORKER_ERROR",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={"symbol": symbol, "error": type(error).__name__},
                 ),
             )
@@ -251,17 +369,15 @@ class PaperTradingApplication:
             market_monitor = MarketWideMonitor(
                 collector=MarketWideCollector(broker),
                 repository=market_repository,
-                on_transition=lambda snapshot, decision, previous: (
-                    self._market_risk_transition(
-                        snapshot,
-                        decision,
-                        previous,
-                        # The standalone market-monitor process is the single
-                        # SMTP owner. The trading runtime still applies and
-                        # audits market risk, but must not duplicate emails.
-                        None,
-                        repository,
-                    )
+                on_transition=lambda snapshot, decision, previous: self._market_risk_transition(
+                    snapshot,
+                    decision,
+                    previous,
+                    # The standalone market-monitor process is the single
+                    # SMTP owner. The trading runtime still applies and
+                    # audits market risk, but must not duplicate emails.
+                    None,
+                    repository,
                 ),
             )
             market_publisher = (
@@ -275,8 +391,42 @@ class PaperTradingApplication:
             try:
                 async with asyncio.TaskGroup() as group:
                     group.create_task(
-                        self._consume_realtime(router, realtime, repository),
-                        name="danta-kis-realtime",
+                        UnifiedTradingMonitor(
+                            realtime=realtime,
+                            router=router,
+                            core=core,
+                            premarket_policy=self.policies.premarket.to_domain(),
+                            repository=repository,
+                            correlation_id="paper-account-runtime",
+                            opening_reconcile=lambda: self._opening_reconcile(
+                                core,
+                                broker,
+                                repository,
+                            ),
+                        ).run(),
+                        name="danta-unified-market-monitor",
+                    )
+                    group.create_task(
+                        self._watch_command_inbox(
+                            core,
+                            broker,
+                            router,
+                            repository,
+                            selection_names,
+                        ),
+                        name="danta-command-inbox",
+                    )
+                    group.create_task(
+                        PaperAutonomousCampaignController(
+                            settings=self.settings,
+                            credentials=self.credentials,
+                            command_store=self.command_store,
+                            core=core,
+                            repository=repository,
+                            notifier=notifier,
+                            broker=broker,
+                        ).run(),
+                        name="danta-paper-autonomous-campaign",
                     )
                     group.create_task(pump.run(), name="danta-order-pump")
                     group.create_task(
@@ -335,6 +485,327 @@ class PaperTradingApplication:
                 await realtime.close()
                 await engine.dispose()
 
+    async def _startup_lifecycle_complete(
+        self,
+        *,
+        active_command: StoredCommand,
+        broker: KisClient,
+        broker_position_symbols: set[str],
+        repository: SqlRuntimeRepository,
+    ) -> bool:
+        """Reject stale ACTIVE files whose entire broker lifecycle has ended.
+
+        KIS remains authoritative.  A command is terminal only when every selected
+        symbol is flat at KIS, every symbol has a DB position opened after command
+        acceptance and now closed, and no selected symbol has a remaining order.
+        Any KIS lookup failure propagates and prevents accidental re-entry.
+        """
+        symbols = [selection.symbol for selection in active_command.mandate.selections]
+        selected = set(symbols)
+        if selected & broker_position_symbols:
+            return False
+
+        accepted_at = active_command.accepted_at
+        if accepted_at.tzinfo is None:
+            accepted_at = accepted_at.replace(tzinfo=UTC)
+        closed = await repository.closed_symbols_since(
+            symbols,
+            opened_since=accepted_at,
+        )
+        if not selected.issubset(closed):
+            return False
+
+        trading_dates = {
+            accepted_at.astimezone(KST).strftime("%Y%m%d"),
+            datetime.now(KST).strftime("%Y%m%d"),
+        }
+        for trading_date in sorted(trading_dates):
+            statuses = await broker.daily_order_statuses(trading_date=trading_date)
+            if any(
+                status.symbol in selected and status.remaining_quantity > 0 for status in statuses
+            ):
+                return False
+        return True
+
+    async def _recover_orders(
+        self,
+        core: TradingRuntimeCore,
+        broker: KisClient,
+        journal: SqlOrderJournal,
+        repository: SqlRuntimeRepository,
+        buy_fill_notifications: asyncio.Queue[tuple[str, str, int, int]],
+        stop_notifications: asyncio.Queue[tuple[str, str, int, Decimal, str]],
+        *,
+        recovery_command_id: str | None,
+        recovery_selection_names: dict[str, str],
+    ) -> None:
+        """Reconnect durable intents to KIS order numbers before workers start."""
+        recoverable = await journal.load_recoverable()
+        if not recoverable:
+            await repository.audit(
+                "STARTUP_ORDER_RECOVERY",
+                correlation_id=self.correlation_id,
+                payload={"recoverable": 0, "linked": 0, "quarantined": 0},
+            )
+            return
+        dates = {item.intent.created_at.astimezone(KST).strftime("%Y%m%d") for item in recoverable}
+        dates.add(datetime.now(KST).strftime("%Y%m%d"))
+        by_date_and_number: dict[tuple[str, str], KisOrderStatus] = {}
+        for trading_date in sorted(dates):
+            for status in await broker.daily_order_statuses(trading_date=trading_date):
+                by_date_and_number[(trading_date, status.broker_order_no)] = status
+        linked = 0
+        quarantined = 0
+        recovered_notifications = 0
+        sent_notification_keys = await repository.sent_trade_notification_intent_keys()
+        for item in recoverable:
+            broker_no = item.broker_order_no
+            trading_date = item.intent.created_at.astimezone(KST).strftime("%Y%m%d")
+            recovered_status = (
+                None if broker_no is None else by_date_and_number.get((trading_date, broker_no))
+            )
+            if broker_no is None or recovered_status is None:
+                quarantined += 1
+                core.orchestrator.state = OrchestratorState.ENTRY_BLOCKED
+                session = core.orchestrator.sessions.get(item.intent.symbol)
+                if session is not None:
+                    session.state = SymbolState.QUARANTINED
+                await repository.audit(
+                    "RECOVERED_ORDER_QUARANTINED",
+                    correlation_id=self.correlation_id,
+                    payload={
+                        "intent_key": item.intent.idempotency_key,
+                        "symbol": item.intent.symbol,
+                        "reason": (
+                            "BROKER_ORDER_NUMBER_MISSING"
+                            if broker_no is None
+                            else "BROKER_STATUS_NOT_FOUND"
+                        ),
+                    },
+                )
+                continue
+            if recovered_status.remaining_quantity <= 0:
+                if (
+                    recovery_command_id is not None
+                    and item.intent.approval_id == recovery_command_id
+                    and item.intent.idempotency_key not in sent_notification_keys
+                    and recovered_status.filled_quantity > 0
+                ):
+                    recovered_notifications += await self._recover_completed_fill_email(
+                        item.intent,
+                        recovered_status,
+                        repository,
+                        buy_fill_notifications,
+                        stop_notifications,
+                        recovery_selection_names,
+                    )
+                continue
+            if item.intent.symbol not in core.orchestrator.sessions:
+                quarantined += 1
+                core.orchestrator.state = OrchestratorState.ENTRY_BLOCKED
+                await repository.audit(
+                    "RECOVERED_ORDER_QUARANTINED",
+                    correlation_id=self.correlation_id,
+                    payload={
+                        "intent_key": item.intent.idempotency_key,
+                        "symbol": item.intent.symbol,
+                        "reason": "SYMBOL_SESSION_MISSING",
+                    },
+                )
+                continue
+            core.restore_submission(
+                item.intent,
+                OrderExecution(
+                    idempotency_key=item.intent.idempotency_key,
+                    broker_order_no=broker_no,
+                    status=item.broker_status or "SUBMITTED",
+                ),
+                cumulative_filled=recovered_status.filled_quantity,
+                average_fill_price=recovered_status.average_fill_price,
+            )
+            linked += 1
+        await repository.audit(
+            "STARTUP_ORDER_RECOVERY",
+            correlation_id=self.correlation_id,
+            payload={
+                "recoverable": len(recoverable),
+                "linked": linked,
+                "quarantined": quarantined,
+                "recovered_notifications": recovered_notifications,
+            },
+        )
+
+    async def _recover_completed_fill_email(
+        self,
+        intent: OrderIntent,
+        status: KisOrderStatus,
+        repository: SqlRuntimeRepository,
+        buy_queue: asyncio.Queue[tuple[str, str, int, int]],
+        exit_queue: asyncio.Queue[tuple[str, str, int, Decimal, str]],
+        selection_names: dict[str, str],
+    ) -> int:
+        if intent.side is IntentSide.BUY:
+            await self._queue_buy_fill_notification(
+                intent,
+                status,
+                buy_queue,
+                selection_names,
+                repository,
+            )
+            return 1 if intent.idempotency_key in self._notified_buy_fill_intents else 0
+
+        average_entry_price = await repository.position_average_entry_price(
+            symbol=intent.symbol,
+            generation=intent.generation,
+        )
+        if average_entry_price is None:
+            await repository.audit(
+                "EXIT_FILL_EMAIL_RECOVERY_BLOCKED",
+                correlation_id=intent.approval_id,
+                payload={
+                    "intent_key": intent.idempotency_key,
+                    "reason": "AVERAGE_ENTRY_PRICE_NOT_FOUND",
+                },
+            )
+            return 0
+        recovered_position = ManagedPosition(
+            symbol=intent.symbol,
+            generation=intent.generation,
+            quantity=max(1, status.filled_quantity),
+            sellable_quantity=max(1, status.filled_quantity),
+            average_entry_price=average_entry_price,
+            opened_at=intent.created_at,
+        )
+        await self._queue_stop_loss_notification(
+            intent,
+            status,
+            recovered_position,
+            exit_queue,
+            selection_names,
+            repository,
+        )
+        return 1 if intent.idempotency_key in self._notified_stop_intents else 0
+
+    async def _watch_command_inbox(
+        self,
+        core: TradingRuntimeCore,
+        broker: KisClient,
+        router: MarketDataRouter,
+        repository: SqlRuntimeRepository,
+        selection_names: dict[str, str],
+    ) -> None:
+        """Accept a new mandate while the account runtime stays alive."""
+        while True:
+            try:
+                if self.mandate is not None:
+                    terminal_states = {
+                        SymbolState.CLOSED,
+                        SymbolState.INVALIDATED,
+                    }
+                    terminal = all(
+                        core.orchestrator.sessions[selection.symbol].state in terminal_states
+                        for selection in self.mandate.selections
+                    )
+                    pending = any(
+                        core.orchestrator.sessions[selection.symbol].state
+                        in {
+                            SymbolState.BUY_PENDING,
+                            SymbolState.PARTIALLY_FILLED,
+                            SymbolState.SELL_PENDING,
+                            SymbolState.QUARANTINED,
+                        }
+                        for selection in self.mandate.selections
+                    )
+                    if terminal and not pending:
+                        completed_id = self.mandate.command_id
+                        self.command_store.archive_active(
+                            completed_id,
+                            status=CommandStatus.COMPLETED,
+                            reason="ALL_SYMBOLS_TERMINAL_AND_FLAT",
+                        )
+                        terminal_symbols = [
+                            selection.symbol for selection in self.mandate.selections
+                        ]
+                        core.clear_terminal_mandate()
+                        self.mandate = None
+                        await router.stop_symbols(terminal_symbols)
+                        await repository.audit(
+                            "MANDATE_COMPLETED",
+                            correlation_id=completed_id,
+                            payload={"reason": "ALL_SYMBOLS_TERMINAL_AND_FLAT"},
+                        )
+                active = self.command_store.load_active()
+                if self.mandate is None and active is None:
+                    active = self.command_store.accept_next()
+                if self.mandate is None and active is not None:
+                    managed = {
+                        symbol
+                        for symbol, position in core.positions.items()
+                        if position.quantity > 0
+                    }
+                    requested = {selection.symbol for selection in active.mandate.selections}
+                    if len(managed | requested) > self.settings.maximum_managed_symbols:
+                        self.command_store.archive_active(
+                            active.mandate.command_id,
+                            status=CommandStatus.REJECTED,
+                            reason="ACCOUNT_SYMBOL_LIMIT_EXCEEDED",
+                        )
+                        await repository.audit(
+                            "MANDATE_REJECTED",
+                            correlation_id=active.mandate.command_id,
+                            payload={"reason": "ACCOUNT_SYMBOL_LIMIT_EXCEEDED"},
+                        )
+                    elif core.orchestrator.state is OrchestratorState.RUNNING:
+                        reference = active.mandate.selections[0]
+                        cash = await broker.orderable_cash(
+                            reference.symbol,
+                            reference_price=reference.entry_target_price_krw,
+                        )
+                        await core.activate_mandate(
+                            active.mandate,
+                            orderable_cash=cash.amount,
+                        )
+                        self.mandate = active.mandate
+                        selection_names.update(
+                            {
+                                selection.symbol: selection.name
+                                for selection in active.mandate.selections
+                            }
+                        )
+                        router.start(core.signals)
+                        await repository.audit(
+                            "MANDATE_ACTIVATED",
+                            correlation_id=active.mandate.command_id,
+                            payload={
+                                "symbols": list(core.signals),
+                                "orderable_cash": cash.amount,
+                                "source": "COMMAND_INBOX",
+                            },
+                        )
+                self.command_store.write_runtime_state(
+                    {
+                        "pid": __import__("os").getpid(),
+                        "orchestrator_state": core.orchestrator.state.value,
+                        "active_command_id": (
+                            None if self.mandate is None else self.mandate.command_id
+                        ),
+                        "managed_positions": sorted(core.positions),
+                        "pending_orders": sorted(core.submitted),
+                    }
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await repository.audit(
+                    "COMMAND_INBOX_ERROR",
+                    correlation_id=self.correlation_id,
+                    payload={
+                        "error": type(exc).__name__,
+                        "detail": str(exc)[:240],
+                    },
+                )
+            await self.command_store.wait_for_change()
+
     async def _run_market_wide_monitor(
         self,
         monitor: MarketWideMonitor,
@@ -356,19 +827,15 @@ class PaperTradingApplication:
                 )
                 await repository.audit(
                     "MARKET_WIDE_SNAPSHOT",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={
                         "risk_level": decision.level.value,
                         "entry_guard": decision.risk.value,
                         "stress_score": str(decision.stress_score),
                         "kospi_return_pct": str(snapshot.kospi_return_pct),
-                        "declining_issue_ratio": str(
-                            snapshot.declining_issue_ratio
-                        ),
+                        "declining_issue_ratio": str(snapshot.declining_issue_ratio),
                         "foreign_net_million": snapshot.investor.foreign,
-                        "pension_net_million": (
-                            snapshot.investor.pension_fund_etc
-                        ),
+                        "pension_net_million": (snapshot.investor.pension_fund_etc),
                         "program_net_million": snapshot.program.total,
                     },
                 )
@@ -377,13 +844,13 @@ class PaperTradingApplication:
                         target = await publisher.publish(snapshot, decision)
                         await repository.audit(
                             "MARKET_STATUS_PUBLISHED",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={"path": str(target)},
                         )
                     except Exception as exc:
                         await repository.audit(
                             "MARKET_STATUS_PUBLISH_ERROR",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={"error": type(exc).__name__},
                         )
                     finally:
@@ -394,7 +861,7 @@ class PaperTradingApplication:
                 core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("1"))
                 await repository.audit(
                     "MARKET_WIDE_MONITOR_ERROR",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={"error": type(exc).__name__},
                 )
             elapsed = loop.time() - started
@@ -410,7 +877,7 @@ class PaperTradingApplication:
     ) -> None:
         await repository.audit(
             "MARKET_RISK_STATE_CHANGED",
-            correlation_id=self.mandate.command_id,
+            correlation_id=self.correlation_id,
             payload={
                 "previous": None if previous is None else previous.value,
                 "current": decision.level.value,
@@ -420,7 +887,7 @@ class PaperTradingApplication:
         if not is_market_risk_email_transition(previous, decision.level):
             await repository.audit(
                 "MARKET_RISK_EMAIL_SUPPRESSED",
-                correlation_id=self.mandate.command_id,
+                correlation_id=self.correlation_id,
                 payload={
                     "previous": None if previous is None else previous.value,
                     "current": decision.level.value,
@@ -445,13 +912,13 @@ class PaperTradingApplication:
             )
             await repository.audit(
                 "MARKET_RISK_EMAIL_SENT",
-                correlation_id=self.mandate.command_id,
+                correlation_id=self.correlation_id,
                 payload={"recipient_count": receipt.recipient_count},
             )
         except (NotificationError, OSError) as exc:
             await repository.audit(
                 "MARKET_RISK_EMAIL_ERROR",
-                correlation_id=self.mandate.command_id,
+                correlation_id=self.correlation_id,
                 payload={"error": type(exc).__name__},
             )
 
@@ -478,7 +945,7 @@ class PaperTradingApplication:
         )
         await repository.audit(
             "ENTRY_LIMIT_PRICE_DETERMINED",
-            correlation_id=self.mandate.command_id,
+            correlation_id=self.correlation_id,
             payload={
                 "symbol": intent.symbol,
                 "limit_price": intent.limit_price,
@@ -504,7 +971,7 @@ class PaperTradingApplication:
                         )
                         await repository.audit(
                             "ENTRY_LIMIT_PRICE_EMAIL_SENT",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "intent_key": intent_key,
                                 "recipient_count": receipt.recipient_count,
@@ -514,7 +981,7 @@ class PaperTradingApplication:
                     except (NotificationError, OSError) as exc:
                         await repository.audit(
                             "ENTRY_LIMIT_PRICE_EMAIL_ERROR",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "intent_key": intent_key,
                                 "attempt": attempt + 1,
@@ -543,16 +1010,28 @@ class PaperTradingApplication:
             or intent.idempotency_key in self._notified_stop_intents
         ):
             return
-        self._notified_stop_intents.add(intent.idempotency_key)
         return_pct = (
             (status.average_fill_price - position_before.average_entry_price)
             / position_before.average_entry_price
             * Decimal("100")
         )
+        name = selection_names.get(intent.symbol, intent.symbol)
+        outbox = getattr(self, "trade_notification_outbox", None)
+        if outbox is not None and not outbox.enqueue_exit(
+            intent_key=intent.idempotency_key,
+            correlation_id=self.correlation_id,
+            name=name,
+            price=int(status.average_fill_price),
+            return_pct=return_pct,
+            cause=intent.cause,
+        ):
+            self._notified_stop_intents.add(intent.idempotency_key)
+            return
+        self._notified_stop_intents.add(intent.idempotency_key)
         await queue.put(
             (
                 intent.idempotency_key,
-                selection_names.get(intent.symbol, intent.symbol),
+                name,
                 int(status.average_fill_price),
                 return_pct,
                 intent.cause,
@@ -560,7 +1039,7 @@ class PaperTradingApplication:
         )
         await repository.audit(
             "EXIT_FILL_EMAIL_QUEUED",
-            correlation_id=self.mandate.command_id,
+            correlation_id=self.correlation_id,
             payload={
                 "symbol": intent.symbol,
                 "average_fill_price": int(status.average_fill_price),
@@ -585,17 +1064,28 @@ class PaperTradingApplication:
             or intent.idempotency_key in self._notified_buy_fill_intents
         ):
             return
+        name = selection_names.get(intent.symbol, intent.symbol)
+        outbox = getattr(self, "trade_notification_outbox", None)
+        if outbox is not None and not outbox.enqueue_buy(
+            intent_key=intent.idempotency_key,
+            correlation_id=self.correlation_id,
+            name=name,
+            price=int(status.average_fill_price),
+            quantity=status.filled_quantity,
+        ):
+            self._notified_buy_fill_intents.add(intent.idempotency_key)
+            return
         self._notified_buy_fill_intents.add(intent.idempotency_key)
         item = (
             intent.idempotency_key,
-            selection_names.get(intent.symbol, intent.symbol),
+            name,
             int(status.average_fill_price),
             status.filled_quantity,
         )
         await queue.put(item)
         await repository.audit(
             "ENTRY_FILL_EMAIL_QUEUED",
-            correlation_id=self.mandate.command_id,
+            correlation_id=self.correlation_id,
             payload={
                 "symbol": intent.symbol,
                 "average_fill_price": int(status.average_fill_price),
@@ -620,9 +1110,15 @@ class PaperTradingApplication:
                             notifier.send_buy_completed,
                             [(name, price, quantity)],
                         )
+                        outbox = getattr(self, "trade_notification_outbox", None)
+                        if outbox is not None:
+                            outbox.mark_sent(
+                                kind=TradeNotificationKind.BUY,
+                                intent_key=intent_key,
+                            )
                         await repository.audit(
                             "ENTRY_FILL_EMAIL_SENT",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "intent_key": intent_key,
                                 "recipient_count": receipt.recipient_count,
@@ -632,7 +1128,7 @@ class PaperTradingApplication:
                     except (NotificationError, OSError) as exc:
                         await repository.audit(
                             "ENTRY_FILL_EMAIL_ERROR",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "intent_key": intent_key,
                                 "attempt": attempt + 1,
@@ -670,9 +1166,15 @@ class PaperTradingApplication:
                                 notifier.send_exit_completed,
                                 [(name, price, return_pct, cause)],
                             )
+                        outbox = getattr(self, "trade_notification_outbox", None)
+                        if outbox is not None:
+                            outbox.mark_sent(
+                                kind=TradeNotificationKind.EXIT,
+                                intent_key=intent_key,
+                            )
                         await repository.audit(
                             "EXIT_FILL_EMAIL_SENT",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "intent_key": intent_key,
                                 "cause": cause,
@@ -683,7 +1185,7 @@ class PaperTradingApplication:
                     except (NotificationError, OSError) as exc:
                         await repository.audit(
                             "EXIT_FILL_EMAIL_ERROR",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "intent_key": intent_key,
                                 "cause": cause,
@@ -696,23 +1198,92 @@ class PaperTradingApplication:
             finally:
                 queue.task_done()
 
-    async def _consume_realtime(
+    async def _replay_trade_notification_outbox(
         self,
-        router: MarketDataRouter,
-        realtime: KisRealtimeClient,
+        buy_queue: asyncio.Queue[tuple[str, str, int, int]],
+        exit_queue: asyncio.Queue[tuple[str, str, int, Decimal, str]],
         repository: SqlRuntimeRepository,
     ) -> None:
-        while True:
-            try:
-                async for event in realtime.stream(list(router.queues)):
-                    await router.route(event)
-            except Exception as exc:
-                await repository.audit(
-                    "KIS_REALTIME_STREAM_ERROR",
-                    correlation_id=self.mandate.command_id,
-                    payload={"error": type(exc).__name__},
+        for item in self.trade_notification_outbox.load_pending():
+            if item.kind is TradeNotificationKind.BUY:
+                if item.quantity is None:
+                    raise RuntimeError("durable buy notification has no quantity")
+                self._notified_buy_fill_intents.add(item.intent_key)
+                await buy_queue.put((item.intent_key, item.name, item.price, item.quantity))
+            else:
+                if item.return_pct is None or item.cause is None:
+                    raise RuntimeError("durable exit notification is incomplete")
+                self._notified_stop_intents.add(item.intent_key)
+                await exit_queue.put(
+                    (
+                        item.intent_key,
+                        item.name,
+                        item.price,
+                        item.return_pct,
+                        item.cause,
+                    )
                 )
-                await asyncio.sleep(5)
+            await repository.audit(
+                "TRADE_FILL_EMAIL_REPLAYED",
+                correlation_id=item.correlation_id,
+                payload={
+                    "intent_key": item.intent_key,
+                    "kind": item.kind.value,
+                },
+            )
+
+    async def _opening_reconcile(
+        self,
+        core: TradingRuntimeCore,
+        broker: KisClient,
+        repository: SqlRuntimeRepository,
+    ) -> bool:
+        """Reconcile account state immediately before releasing opening exits."""
+        try:
+            broker_positions = await broker.positions()
+        except KisApiError as exc:
+            await core.orchestrator.reconcile_complete(safe_for_new_entries=False)
+            await repository.audit(
+                "OPENING_ACCOUNT_RECONCILIATION_ERROR",
+                correlation_id=self.correlation_id,
+                payload={
+                    "error": type(exc).__name__,
+                    "status_code": exc.status_code,
+                },
+            )
+            return False
+        result = reconcile_positions(
+            broker_positions,
+            core.orchestrator.sessions,
+        )
+        await core.orchestrator.reconcile_complete(safe_for_new_entries=result.safe_for_new_entries)
+        if result.safe_for_new_entries:
+            by_symbol = {item.symbol: item for item in broker_positions}
+            for symbol, position in core.positions.items():
+                broker_position = by_symbol.get(symbol)
+                if broker_position is None:
+                    continue
+                position.sellable_quantity = broker_position.sellable_quantity
+                position.average_entry_price = broker_position.average_price
+                session = core.orchestrator.sessions[symbol]
+                session.sellable_quantity = broker_position.sellable_quantity
+        await repository.audit(
+            "OPENING_ACCOUNT_RECONCILED",
+            correlation_id=self.correlation_id,
+            payload={
+                "safe_for_new_entries": result.safe_for_new_entries,
+                "issues": [
+                    {
+                        "symbol": issue.symbol,
+                        "code": issue.code,
+                        "broker_quantity": issue.broker_quantity,
+                        "internal_quantity": issue.internal_quantity,
+                    }
+                    for issue in result.issues
+                ],
+            },
+        )
+        return result.safe_for_new_entries
 
     async def _poll_orders(
         self,
@@ -721,23 +1292,22 @@ class PaperTradingApplication:
         manager: OrderManager,
         repository: SqlRuntimeRepository,
         buy_fill_notifications: asyncio.Queue[tuple[str, str, int, int]],
-        stop_notifications: asyncio.Queue[
-            tuple[str, str, int, Decimal, str]
-        ],
+        stop_notifications: asyncio.Queue[tuple[str, str, int, Decimal, str]],
         selection_names: dict[str, str],
     ) -> None:
         interval = float(self.settings.order_poll_interval_seconds)
         backoff = interval
         while True:
+            if not core.submitted:
+                await asyncio.sleep(max(5.0, interval))
+                continue
             trading_date = datetime.now(KST).strftime("%Y%m%d")
             try:
-                statuses = await broker.daily_order_statuses(
-                    trading_date=trading_date
-                )
+                statuses = await broker.daily_order_statuses(trading_date=trading_date)
             except KisApiError as exc:
                 await repository.audit(
                     "KIS_ORDER_STATUS_POLL_ERROR",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={
                         "error": type(exc).__name__,
                         "status_code": exc.status_code,
@@ -762,7 +1332,7 @@ class PaperTradingApplication:
                     core.record_cancellation_requested(status.broker_order_no)
                     await repository.audit(
                         "BUY_REMAINDER_CANCEL_SUBMITTED",
-                        correlation_id=self.mandate.command_id,
+                        correlation_id=self.correlation_id,
                         payload={
                             "symbol": status.symbol,
                             "original_order_no": status.broker_order_no,
@@ -772,9 +1342,7 @@ class PaperTradingApplication:
                     )
                 position_before = core.positions.get(status.symbol)
                 generation = submitted.intent.generation
-                delta = core.apply_order_status(
-                    status, observed_at=datetime.now(UTC)
-                )
+                delta = core.apply_order_status(status, observed_at=datetime.now(UTC))
                 if delta > 0:
                     await self._queue_buy_fill_notification(
                         submitted.intent,
@@ -792,23 +1360,22 @@ class PaperTradingApplication:
                         repository,
                     )
                 if submitted.intent.side.value == "BUY":
-                    if delta > 0:
+                    if (
+                        delta > 0
+                        and submitted.intent.idempotency_key not in core.recovered_order_keys
+                    ):
                         reservation_id = f"{submitted.intent.idempotency_key}:CAPITAL"
                         await core.orchestrator.capital_allocator.consume_partial(
                             reservation_id,
                             amount=submitted.last_fill_value,
                         )
                         if status.remaining_quantity == 0:
-                            await core.orchestrator.capital_allocator.release(
-                                reservation_id
-                            )
-                    cancellation_finalized = await core.finalize_buy_cancellation(
-                        status
-                    )
+                            await core.orchestrator.capital_allocator.release(reservation_id)
+                    cancellation_finalized = await core.finalize_buy_cancellation(status)
                     if cancellation_finalized:
                         await repository.audit(
                             "BUY_REMAINDER_CANCEL_CONFIRMED",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "symbol": status.symbol,
                                 "original_order_no": status.broker_order_no,
@@ -816,6 +1383,10 @@ class PaperTradingApplication:
                             },
                         )
                 if delta <= 0:
+                    if status.remaining_quantity == 0:
+                        core.order_number_to_key.pop(status.broker_order_no, None)
+                        core.submitted.pop(key, None)
+                        core.recovered_order_keys.discard(key)
                     continue
                 position = core.positions.get(status.symbol)
                 if position is None:
@@ -827,7 +1398,7 @@ class PaperTradingApplication:
                     await repository.save_position(position)
                 await repository.audit(
                     "ORDER_FILL_APPLIED",
-                    correlation_id=self.mandate.command_id,
+                    correlation_id=self.correlation_id,
                     payload={
                         "symbol": status.symbol,
                         "side": submitted.intent.side.value,
@@ -837,6 +1408,10 @@ class PaperTradingApplication:
                         "had_position_before": position_before is not None,
                     },
                 )
+                if status.remaining_quantity == 0:
+                    core.order_number_to_key.pop(status.broker_order_no, None)
+                    core.submitted.pop(key, None)
+                    core.recovered_order_keys.discard(key)
             await asyncio.sleep(interval)
 
     async def _hard_stop_watchdog(
@@ -845,7 +1420,13 @@ class PaperTradingApplication:
         broker: KisClient,
         repository: SqlRuntimeRepository,
     ) -> None:
+        persisted_peaks = {
+            symbol: position.peak_return_pct for symbol, position in core.positions.items()
+        }
         while True:
+            if trading_session_phase(datetime.now(UTC)) is not TradingSessionPhase.KRX_REGULAR:
+                await asyncio.sleep(30.0)
+                continue
             for symbol in list(core.positions):
                 try:
                     quote = await broker.current_price(symbol)
@@ -857,17 +1438,24 @@ class PaperTradingApplication:
                     if intent is not None:
                         await repository.audit(
                             "REST_HARD_STOP_ENQUEUED",
-                            correlation_id=self.mandate.command_id,
+                            correlation_id=self.correlation_id,
                             payload={
                                 "symbol": symbol,
                                 "price": quote.price,
                                 "intent_key": intent.idempotency_key,
                             },
                         )
+                    position = core.positions.get(symbol)
+                    if (
+                        position is not None
+                        and persisted_peaks.get(symbol) != position.peak_return_pct
+                    ):
+                        await repository.save_position(position)
+                        persisted_peaks[symbol] = position.peak_return_pct
                 except Exception as exc:
                     await repository.audit(
                         "REST_HARD_STOP_WATCHDOG_ERROR",
-                        correlation_id=self.mandate.command_id,
+                        correlation_id=self.correlation_id,
                         payload={"symbol": symbol, "error": type(exc).__name__},
                     )
             await asyncio.sleep(float(self.settings.order_poll_interval_seconds))

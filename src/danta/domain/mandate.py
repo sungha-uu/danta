@@ -16,7 +16,11 @@ class EntrySelection(BaseModel):
     symbol: str = Field(pattern=r"^[0-9A-Z]{6}$")
     name: str = Field(min_length=1, max_length=80)
     entry_target_price_krw: int = Field(gt=0)
-    entry_price_source: Literal["BOX_LOW_AUTO", "USER_EDITED"]
+    entry_price_source: Literal[
+        "BOX_LOW_AUTO",
+        "USER_EDITED",
+        "PAPER_AUTONOMOUS_REPORT_PRICE",
+    ]
     allocation_pct: Decimal = Field(gt=0, le=100)
     ai_grade: str = Field(min_length=1, max_length=40)
     box_low: Decimal = Field(gt=0)
@@ -43,9 +47,7 @@ class EntryMandate(BaseModel):
     selected_symbol_count: int = Field(ge=1, le=3)
     entry_trigger: Literal["LAST_PRICE_LTE_TARGET"]
     validity_policy: Literal["UNTIL_FILLED_OR_USER_CANCELLED"]
-    partial_fill_policy: Literal[
-        "PROTECT_FILLED_CANCEL_REMAINDER_ON_SAFETY_DETERIORATION"
-    ]
+    partial_fill_policy: Literal["PROTECT_FILLED_CANCEL_REMAINDER_ON_SAFETY_DETERIORATION"]
     duplicate_guard: Literal["INTERNAL_ON_INGEST"]
     hard_stop_pct: Decimal
     profit_policy: Literal["ACTIVE_VERSIONED_LOCAL_ENGINE"]
@@ -119,9 +121,7 @@ def plan_entries(mandate: EntryMandate, *, orderable_cash: int) -> list[PlannedE
         raise ValueError("orderable_cash must be positive")
     plans: list[PlannedEntry] = []
     for selection in mandate.selections:
-        allocated_cash = int(
-            Decimal(orderable_cash) * selection.allocation_pct / Decimal("100")
-        )
+        allocated_cash = int(Decimal(orderable_cash) * selection.allocation_pct / Decimal("100"))
         quantity = allocated_cash // selection.entry_target_price_krw
         if quantity <= 0:
             raise ValueError(
