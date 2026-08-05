@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from danta.adapters.kis.client import KisOrderStatus
 from danta.adapters.kis.realtime import MarketVenue, OrderBookTick, TradeTick
 from danta.domain.entry import EntryPolicy
@@ -194,6 +196,48 @@ async def test_runtime_enters_tracks_fill_and_hard_stops() -> None:
     assert sell is not None
     assert sell.side is IntentSide.SELL
     assert sell.cause == "HARD_STOP_MINUS_7"
+
+
+async def test_market_risk_entry_stop_stays_latched_until_operator_acknowledges() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1_000_000)
+    now = regular_session_time()
+
+    core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("0.9"))
+    core.require_market_entry_resume_confirmation()
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
+
+    assert await core.process_event(trade(99_000, now), now=now) is None
+    core.acknowledge_market_entry_resume()
+    resumed = await core.process_event(trade(99_000, now), now=now)
+    assert resumed is not None
+    assert resumed.side is IntentSide.BUY
+
+
+def test_market_entry_resume_cannot_be_acknowledged_while_risk_off() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("1"))
+    core.require_market_entry_resume_confirmation()
+
+    with pytest.raises(RuntimeError, match="still RISK_OFF"):
+        core.acknowledge_market_entry_resume()
 
 
 async def test_watchdog_enforces_minus_five_floor_without_websocket_signals() -> None:

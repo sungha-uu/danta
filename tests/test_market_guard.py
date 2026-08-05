@@ -58,3 +58,29 @@ def test_incomplete_market_feed_fails_closed_for_new_entries() -> None:
     )
     assert decision.risk is MarketRisk.RISK_OFF
     assert decision.level is MarketWideRiskLevel.RISK_OFF
+
+
+def test_rapid_foreign_outflow_enters_caution_before_breadth_breaks() -> None:
+    decision = MarketRegimeGuard().observe(
+        MarketGuardObservation(
+            Decimal("-0.3"),
+            Decimal("0.45"),
+            foreign_delta_5m=-120_000,
+        )
+    )
+    assert decision.risk is MarketRisk.CAUTION
+    assert "FOREIGN_SELLING_ACCELERATING_5M" in decision.reason_codes
+
+
+def test_rapid_foreign_outflow_with_market_weakness_confirms_risk_off() -> None:
+    guard = MarketRegimeGuard()
+    observation = MarketGuardObservation(
+        Decimal("-1.6"),
+        Decimal("0.70"),
+        foreign_delta_5m=-350_000,
+    )
+    assert guard.observe(observation).risk is MarketRisk.CAUTION
+    assert guard.observe(observation).risk is MarketRisk.CAUTION
+    decision = guard.observe(observation)
+    assert decision.risk is MarketRisk.RISK_OFF
+    assert "FOREIGN_SELLING_ACCELERATING_5M" in decision.reason_codes

@@ -100,6 +100,7 @@ class TradingRuntimeCore:
         self.box_valid: dict[str, bool] = {}
         self.market_risk = MarketRisk.NORMAL
         self.market_stress_score = Decimal("0")
+        self.market_entry_resume_required = False
 
     async def activate_mandate(
         self,
@@ -139,6 +140,16 @@ class TradingRuntimeCore:
             raise ValueError("stress_score must be between 0 and 1")
         self.market_risk = risk
         self.market_stress_score = stress_score
+
+    def require_market_entry_resume_confirmation(self) -> None:
+        """Latch new entries off until an explicit operator acknowledgement."""
+        self.market_entry_resume_required = True
+
+    def acknowledge_market_entry_resume(self) -> None:
+        """Clear the latch only after the live market guard has recovered."""
+        if self.market_risk is MarketRisk.RISK_OFF:
+            raise RuntimeError("market risk is still RISK_OFF")
+        self.market_entry_resume_required = False
 
     def reset_market_signals(self) -> None:
         """Start a new venue/session window without changing trading state."""
@@ -239,9 +250,14 @@ class TradingRuntimeCore:
         if not signal.ready:
             return None
         observed_now = now or datetime.now(UTC)
+        entry_market_risk = (
+            MarketRisk.RISK_OFF
+            if self.market_entry_resume_required
+            else self.market_risk
+        )
         snapshot = signal.snapshot(
             now=observed_now,
-            market_risk=self.market_risk,
+            market_risk=entry_market_risk,
             market_stress_score=self.market_stress_score,
             box_valid=self.box_valid[event.symbol],
             data_fresh=True,
@@ -308,7 +324,7 @@ class TradingRuntimeCore:
                 sell_pressure_score=snapshot.sell_pressure_score,
                 weakness_score=snapshot.weakness_score,
                 market_stress_score=snapshot.market_stress_score,
-                market_risk=snapshot.market_risk,
+                market_risk=self.market_risk,
                 box_valid=snapshot.box_valid,
                 data_fresh=snapshot.data_fresh,
                 observed_at=snapshot.observed_at,

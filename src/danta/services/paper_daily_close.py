@@ -23,10 +23,7 @@ from danta.config import (
 from danta.dashboard.builder import load_dashboard_report
 from danta.ports.broker import Quote
 from danta.services.notifier import SmtpNotifier
-from danta.services.paper_autonomous_campaign import (
-    PaperAutonomousCampaignAuthorization,
-    load_campaign_authorization,
-)
+from danta.services.paper_autonomous_campaign import load_campaign_authorization
 from danta.services.runtime_repository import StoredPosition
 
 KST = ZoneInfo("Asia/Seoul")
@@ -91,7 +88,7 @@ class PaperDailyHolding(BaseModel):
 
 
 class PaperDailyCloseReport(BaseModel):
-    schema_version: Literal["paper-daily-close-v1"] = "paper-daily-close-v1"
+    schema_version: Literal["paper-daily-close-v2"] = "paper-daily-close-v2"
     campaign_id: str
     trading_date: str
     generated_at: datetime
@@ -109,8 +106,9 @@ class PaperDailyCloseReport(BaseModel):
     asset_change_return_pct: Decimal
     today_buy_amount: int
     today_sell_amount: int
-    campaign_baseline_net_asset: int
-    campaign_cumulative_return_pct: Decimal
+    initial_capital_amount: int
+    cumulative_profit_loss_amount: int
+    cumulative_return_pct: Decimal
     reconciliation_status: Literal["MATCHED", "MISMATCH", "NOT_CHECKED"]
     reconciliation_detail: str
 
@@ -121,13 +119,6 @@ class PaperDailyCloseResult(BaseModel):
     report_path: str | None = None
     recipient_count: int = 0
     detail: str
-
-
-class _CampaignBaseline(BaseModel):
-    schema_version: Literal[1] = 1
-    campaign_id: str
-    created_at: datetime
-    net_asset_amount: int = Field(gt=0)
 
 
 async def run_paper_daily_close(
@@ -248,16 +239,11 @@ async def run_paper_daily_close(
         if summary.purchase_amount > 0
         else Decimal("0")
     )
-    baseline = _load_or_create_baseline(
-        root,
-        authorization,
-        net_asset_amount=summary.net_asset_amount,
-        created_at=current,
-    )
+    initial_capital = settings.autonomous_initial_capital_krw
     cumulative = (
         (
             Decimal(summary.net_asset_amount)
-            / Decimal(baseline.net_asset_amount)
+            / Decimal(initial_capital)
             - Decimal("1")
         )
         * HUNDRED
@@ -283,8 +269,9 @@ async def run_paper_daily_close(
         asset_change_return_pct=_pct(summary.asset_change_return_pct),
         today_buy_amount=summary.today_buy_amount,
         today_sell_amount=summary.today_sell_amount,
-        campaign_baseline_net_asset=baseline.net_asset_amount,
-        campaign_cumulative_return_pct=_pct(cumulative),
+        initial_capital_amount=initial_capital,
+        cumulative_profit_loss_amount=summary.net_asset_amount - initial_capital,
+        cumulative_return_pct=_pct(cumulative),
         reconciliation_status=reconciliation_status,
         reconciliation_detail=reconciliation_detail,
     )
@@ -354,9 +341,9 @@ def format_paper_daily_close(report: PaperDailyCloseReport) -> str:
             f"계좌 순자산: {report.net_asset_amount:,}원",
             f"당일 자산증감: {report.asset_change_amount:+,}원 "
             f"({report.asset_change_return_pct:+.2f}%)",
-            f"캠페인 기준 순자산: {report.campaign_baseline_net_asset:,}원",
-            f"캠페인 누적수익률: "
-            f"{report.campaign_cumulative_return_pct:+.2f}%",
+            f"자율매매 최초 원금: {report.initial_capital_amount:,}원",
+            f"자율매매 누적손익: {report.cumulative_profit_loss_amount:+,}원",
+            f"자율매매 누적수익률: {report.cumulative_return_pct:+.2f}%",
             "",
             f"[잔고 대조] {report.reconciliation_status}",
             report.reconciliation_detail,
@@ -391,29 +378,6 @@ def _load_names(report_path: Path) -> dict[str, str]:
         item.code: item.name
         for item in [*report.candidates, *report.extended_watchlist]
     }
-
-
-def _load_or_create_baseline(
-    root: Path,
-    authorization: PaperAutonomousCampaignAuthorization,
-    *,
-    net_asset_amount: int,
-    created_at: datetime,
-) -> _CampaignBaseline:
-    if net_asset_amount <= 0:
-        raise PaperDailyCloseError("KIS net asset amount must be positive")
-    path = root / "baselines" / f"{authorization.campaign_id}.json"
-    if path.exists():
-        return _CampaignBaseline.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
-    baseline = _CampaignBaseline(
-        campaign_id=authorization.campaign_id,
-        created_at=created_at,
-        net_asset_amount=net_asset_amount,
-    )
-    _write_model(path, baseline)
-    return baseline
 
 
 def _reconcile(

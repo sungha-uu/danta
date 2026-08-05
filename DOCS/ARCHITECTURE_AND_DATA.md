@@ -9,6 +9,17 @@
 - GitHub Pages와 실계좌 인프라를 보안 경계로 분리한다.
 - KIS 필드·TR ID·환경별 한도 변경을 어댑터에 격리한다.
 
+상위 시스템 번호는 다음과 같다.
+
+| 번호 | 시스템 | 구현 경계 |
+| --- | --- | --- |
+| 1 | 시장 센싱 | `MarketWideCollector`·`MarketWideMonitor`·`MarketRegimeGuard` |
+| 2 | 자율매매 | 후보·진입·`TradingOrchestrator`·OMS·손절/익절·복구 |
+| 3-1 | 단기 후보 대시보드 | 공개 정적 `danta_report` |
+| 3-2 | KOSPI 시장·자금 대시보드 | 공개 5분 지연 `danta_market_status` |
+| 3-3 | 계좌·자율매매 실적 대시보드 | 비공개 계좌 스냅샷·체결·손익 화면, 공개 Pages 금지 |
+| 4 | 안전·감사 기반 | DB·Outbox·멱등키·대조·품질 보증·전략 버전 |
+
 ```mermaid
 flowchart LR
     subgraph EXT["외부"]
@@ -151,6 +162,7 @@ domain <- application <- adapters <- entrypoints
 | `ai_policy_decisions` | 유효기간이 있는 AI `ALLOW/BLOCK`·근거·입력 해시 |
 | `order_intents`, `broker_orders`, `fills` | 주문 의도·KIS 주문·체결 |
 | `positions`, `risk_events` | 포지션 세대와 손절·익절 판단 |
+| `market_entry_resume_latch` | 시장 위험 신규매수 잠금의 발생시각·등급·사유와 사용자 재개 확인 |
 | `ai_usage_snapshots`, `ai_invocations` | Codex 잔여량 수기 스냅샷과 API 토큰·비용 |
 | `assurance_runs`, `assurance_checks` | 일일 품질 실행·개별 체크 판정·증거·신규매수 허용 상태 |
 | `strategy_versions`, `promotion_decisions` | 실전 안정판·모의 그림자·개선판 버전과 승격·롤백 승인 |
@@ -173,7 +185,8 @@ ORDER_PARTIALLY_FILLED, POSITION_OPENED, HARD_STOP_TRIGGERED,
 PROFIT_MODE_ARMED, PROFIT_FLOOR_RAISED, PROFIT_EXIT_TRIGGERED,
 TIME_EXIT_TRIGGERED, POSITION_CLOSED, PROVIDER_DEGRADED,
 STOP_CONTEXT_ASSESSMENT_REQUESTED, SYMBOL_QUARANTINED,
-MARKET_RISK_OFF_ENTERED, ACCOUNT_RECONCILIATION_FAILED,
+MARKET_RISK_OFF_ENTERED, MARKET_ENTRY_RESUME_CONFIRMATION_REQUIRED,
+MARKET_ENTRY_RESUMED_BY_USER, ACCOUNT_RECONCILIATION_FAILED,
 AI_BUDGET_YELLOW, AI_BUDGET_RED, AI_REVIEW_QUOTA_DEGRADED,
 ASSURANCE_RUN_STARTED, ASSURANCE_CHECK_FAILED,
 ASSURANCE_REPORT_CREATED, DAILY_ASSURANCE_SENT,
@@ -298,6 +311,11 @@ flowchart LR
 
 원본 단위는 KIS 응답의 거래대금 단위인 백만원으로 보존한다. `market_wide_snapshots` 테이블에는 핵심 조회 열과 전체 공개 가능 payload를 함께 저장한다. 최근 5분·15분 변화량은 누적 순매수의 차분으로 계산하며 절대 누적액과 분리한다.
 
+시장 가드 v3는 외국인 5분 증감이 -1,000억원 이하이면 주의 신호로, -3,000억원
+이하이면서 KOSPI -1.5% 이하 또는 하락종목 비율 65% 이상이면 3회 확인 후
+`RISK_OFF`로 사용한다. 급유출 수치는 누적 외국인 비율과 별도 보존해 장 초반
+거래대금 분모가 작은 구간의 왜곡을 추적한다.
+
 ```text
 KIS REST -> MarketWideCollector -> MarketWideMonitor
                                   -> market_wide_snapshots
@@ -307,6 +325,12 @@ KIS REST -> MarketWideCollector -> MarketWideMonitor
 ```
 
 GitHub 게시 실패, SMTP 실패, AI 중단은 시장 위험 판단과 주문 보호 경로에 영향을 주지 않는다. 공개 JSON 스키마는 `danta-market-status-v1`이며 계좌·보유수량·주문·키를 포함하지 않는다.
+
+`RISK_OFF/PANIC` 또는 시장 공급자 불완전이 확정되면 런타임은
+`private/MARKET_ENTRY_RESUME_REQUIRED`를 원자적으로 생성한다. 이 래치는 프로세스
+재시작 뒤에도 신규매수만 차단한다. 이후 센싱 값이 `NORMAL`로 회복되어도 파일을
+자동 삭제하지 않으며 사용자가 `market-entry-gate resume --execute`로 확인한 뒤에만
+재개한다. 확인 시점에도 위험이 남아 있으면 다음 폴링에서 즉시 다시 잠긴다.
 
 ## 수급의 질과 연속성
 

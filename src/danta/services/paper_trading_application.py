@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -61,6 +62,35 @@ from danta.services.trading_runtime import ManagedPosition, OrderPump, TradingRu
 from danta.services.unified_market_monitor import UnifiedTradingMonitor
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def _ensure_market_resume_latch(
+    path: Path,
+    *,
+    level: MarketWideRiskLevel,
+    reasons: tuple[str, ...],
+) -> bool:
+    """Persist the first risk trip until an operator explicitly removes it."""
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "triggered_at": datetime.now(UTC).isoformat(),
+                "risk_level": level.value,
+                "reason_codes": list(reasons),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+    return True
 
 
 class PaperTradingApplication:
@@ -142,6 +172,8 @@ class PaperTradingApplication:
             entry_policy=self.policies.entry.to_domain(),
             exit_policy=self.policies.exit.to_domain(),
         )
+        if self.settings.market_entry_resume_required_path.exists():
+            core.require_market_entry_resume_confirmation()
         async with KisClient(
             self.credentials,
             token_cache_path=Path("data/kis-token-cache.json"),
@@ -825,6 +857,26 @@ class PaperTradingApplication:
                     decision.risk,
                     stress_score=decision.stress_score,
                 )
+                latch_created = False
+                if decision.risk is MarketRisk.RISK_OFF:
+                    latch_created = _ensure_market_resume_latch(
+                        self.settings.market_entry_resume_required_path,
+                        level=decision.level,
+                        reasons=decision.reason_codes,
+                    )
+                if self.settings.market_entry_resume_required_path.exists():
+                    core.require_market_entry_resume_confirmation()
+                elif core.market_entry_resume_required:
+                    core.acknowledge_market_entry_resume()
+                if latch_created:
+                    await repository.audit(
+                        "MARKET_ENTRY_RESUME_CONFIRMATION_REQUIRED",
+                        correlation_id=self.correlation_id,
+                        payload={
+                            "risk_level": decision.level.value,
+                            "reason_codes": list(decision.reason_codes),
+                        },
+                    )
                 await repository.audit(
                     "MARKET_WIDE_SNAPSHOT",
                     correlation_id=self.correlation_id,
@@ -859,6 +911,12 @@ class PaperTradingApplication:
                 # A broken market-wide feed blocks only new entries. Position
                 # monitoring and protective exits continue in their own tasks.
                 core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("1"))
+                core.require_market_entry_resume_confirmation()
+                _ensure_market_resume_latch(
+                    self.settings.market_entry_resume_required_path,
+                    level=MarketWideRiskLevel.RISK_OFF,
+                    reasons=("MARKET_WIDE_MONITOR_ERROR",),
+                )
                 await repository.audit(
                     "MARKET_WIDE_MONITOR_ERROR",
                     correlation_id=self.correlation_id,
@@ -866,7 +924,6 @@ class PaperTradingApplication:
                 )
             elapsed = loop.time() - started
             await asyncio.sleep(max(1.0, poll_interval - elapsed))
-
     async def _market_risk_transition(
         self,
         snapshot: MarketWideSnapshot,

@@ -10,7 +10,7 @@ from danta.domain.market_wide import MarketWideRiskLevel
 
 @dataclass(frozen=True, slots=True)
 class MarketGuardPolicy:
-    version: str = "kospi-market-guard-paper-v2"
+    version: str = "kospi-market-guard-v3-foreign-acceleration"
     caution_return_pct: Decimal = Decimal("-1.5")
     risk_off_return_pct: Decimal = Decimal("-2.5")
     panic_return_pct: Decimal = Decimal("-5.0")
@@ -18,6 +18,8 @@ class MarketGuardPolicy:
     risk_off_decline_ratio: Decimal = Decimal("0.80")
     caution_foreign_net_ratio: Decimal = Decimal("-0.01")
     risk_off_foreign_net_ratio: Decimal = Decimal("-0.02")
+    caution_foreign_delta_5m_million: int = -100_000
+    risk_off_foreign_delta_5m_million: int = -300_000
     confirmation_samples: int = 3
 
 
@@ -77,6 +79,14 @@ class MarketRegimeGuard:
             value.kospi_return_pct <= self.policy.caution_return_pct
             and value.declining_issue_ratio >= self.policy.caution_decline_ratio
             and value.foreign_net_ratio <= self.policy.risk_off_foreign_net_ratio
+        ) or (
+            value.foreign_delta_5m
+            <= self.policy.risk_off_foreign_delta_5m_million
+            and (
+                value.kospi_return_pct <= self.policy.caution_return_pct
+                or value.declining_issue_ratio
+                >= self.policy.caution_decline_ratio
+            )
         ):
             instantaneous = MarketRisk.RISK_OFF
             level = MarketWideRiskLevel.RISK_OFF
@@ -84,14 +94,26 @@ class MarketRegimeGuard:
                 "KOSPI_SHARP_DROP",
                 "MARKET_BREADTH_COLLAPSE",
             )
+            if (
+                value.foreign_delta_5m
+                <= self.policy.risk_off_foreign_delta_5m_million
+            ):
+                reasons += ("FOREIGN_SELLING_ACCELERATING_5M",)
         elif (
             value.kospi_return_pct <= self.policy.caution_return_pct
             or value.declining_issue_ratio >= self.policy.caution_decline_ratio
             or value.foreign_net_ratio <= self.policy.caution_foreign_net_ratio
+            or value.foreign_delta_5m
+            <= self.policy.caution_foreign_delta_5m_million
         ):
             instantaneous = MarketRisk.CAUTION
             level = MarketWideRiskLevel.CAUTION
             reasons = ("MARKET_STRESS_ELEVATED",)
+            if (
+                value.foreign_delta_5m
+                <= self.policy.caution_foreign_delta_5m_million
+            ):
+                reasons += ("FOREIGN_SELLING_ACCELERATING_5M",)
         else:
             instantaneous = MarketRisk.NORMAL
             level = MarketWideRiskLevel.NORMAL

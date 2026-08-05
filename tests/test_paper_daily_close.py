@@ -210,7 +210,9 @@ async def test_paper_daily_close_sends_once_and_persists_summary(
     assert len(notifier.bodies) == 1
     assert "[당일 매수 체결]" in notifier.bodies[0]
     assert "[현재 보유종목]" in notifier.bodies[0]
-    assert "캠페인 누적수익률: +0.00%" in notifier.bodies[0]
+    assert "자율매매 최초 원금: 50,000,000원" in notifier.bodies[0]
+    assert "자율매매 누적손익: -48,580,000원" in notifier.bodies[0]
+    assert "자율매매 누적수익률: -97.16%" in notifier.bodies[0]
     assert Path(first.report_path or "").exists()
 
 

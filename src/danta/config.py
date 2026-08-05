@@ -33,6 +33,7 @@ class AppSettings(BaseModel):
     paper_autonomous_kill_switch_path: Path = Path("private/PAPER_AUTONOMY_STOP")
     paper_autonomous_report_path: Path = Path("data/candidate_intraday_ai_report.json")
     paper_autonomous_poll_interval_seconds: int = Field(default=30, ge=5, le=300)
+    autonomous_initial_capital_krw: int = Field(default=50_000_000, gt=0)
     paper_daily_close_enabled: bool = True
     paper_daily_close_root: Path = Path("data/paper-daily-close")
     auto_stop_sell_enabled: bool = True
@@ -65,6 +66,9 @@ class AppSettings(BaseModel):
     market_pages_git_push_enabled: bool = True
     market_dashboard_publish_repo: Path = Path("../danta_market_status")
     market_dashboard_public_url: str = "https://sungha-uu.github.io/danta_market_status/"
+    market_entry_resume_required_path: Path = Path(
+        "private/MARKET_ENTRY_RESUME_REQUIRED"
+    )
 
     @model_validator(mode="after")
     def enforce_immutable_safety_policy(self) -> AppSettings:

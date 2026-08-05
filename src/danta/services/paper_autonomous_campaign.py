@@ -368,6 +368,8 @@ class PaperAutonomousCampaignController:
             return "ACCOUNT_NOT_FLAT"
         if self.core.orchestrator.state is not OrchestratorState.RUNNING:
             return "ORCHESTRATOR_NOT_READY"
+        if self.core.market_entry_resume_required:
+            return "MARKET_RESUME_CONFIRMATION_REQUIRED"
         if self.core.market_risk is not MarketRisk.NORMAL:
             return "MARKET_RISK_NOT_NORMAL"
         return None

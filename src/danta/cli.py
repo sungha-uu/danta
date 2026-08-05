@@ -324,6 +324,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required for authorize and resume",
     )
+    market_entry_gate = subparsers.add_parser(
+        "market-entry-gate",
+        help="inspect or acknowledge the latched market-wide new-entry stop",
+    )
+    market_entry_gate.add_argument("action", choices=("status", "resume"))
+    market_entry_gate.add_argument(
+        "--execute",
+        action="store_true",
+        help="required for resume after the operator reviews market conditions",
+    )
     performance = subparsers.add_parser(
         "recommendation-performance",
         help="freeze and evaluate the fixed 14-day top-50 AI review cohort",
@@ -379,6 +389,29 @@ async def _doctor(live: bool, symbol: str) -> int:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "market-entry-gate":
+        settings = load_settings()
+        latch = settings.market_entry_resume_required_path
+        if args.action == "status":
+            print(
+                latch.read_text(encoding="utf-8")
+                if latch.exists()
+                else json.dumps(
+                    {"resume_required": False},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return
+        if not args.execute:
+            print("market entry resume requires --execute", file=sys.stderr)
+            raise SystemExit(19)
+        latch.unlink(missing_ok=True)
+        print(
+            "market-wide new-entry stop acknowledged; the live guard will "
+            "re-latch it if risk remains"
+        )
+        return
     if args.command == "paper-autonomy":
         try:
             settings = load_settings()

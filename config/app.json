@@ -9,6 +9,7 @@
   "log_level": "INFO",
   "buy_requires_user_approval": true,
   "unattended_auto_buy_enabled": false,
+  "autonomous_initial_capital_krw": 50000000,
   "auto_stop_sell_enabled": true,
   "stop_loss_pct": "7.0",
   "stop_sell_requires_confirmation": false,
@@ -28,5 +29,6 @@
   "market_pages_publish_interval_seconds": 300,
   "market_pages_git_push_enabled": true,
   "market_dashboard_publish_repo": "../danta_market_status",
-  "market_dashboard_public_url": "https://sungha-uu.github.io/danta_market_status/"
+  "market_dashboard_public_url": "https://sungha-uu.github.io/danta_market_status/",
+  "market_entry_resume_required_path": "private/MARKET_ENTRY_RESUME_REQUIRED"
 }

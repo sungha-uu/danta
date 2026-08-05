@@ -117,6 +117,7 @@ async def test_controller_submits_one_agent_reviewed_batch_per_report(
         positions={},
         submitted={},
         market_risk=MarketRisk.NORMAL,
+        market_entry_resume_required=False,
         orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
     )
     store = FileCommandStore(tmp_path / "commands")
@@ -189,6 +190,7 @@ async def test_kill_switch_blocks_only_new_campaign_mandate(
             positions={},
             submitted={},
             market_risk=MarketRisk.NORMAL,
+            market_entry_resume_required=False,
             orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
         ),
         repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
