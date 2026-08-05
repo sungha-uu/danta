@@ -30,7 +30,7 @@ td:nth-child(2),td:nth-child(4),td:nth-child(7){{text-align:left}}.badge{{displa
 a{{color:#2d5faf;font-weight:700}}.note{{color:#68748b;font-size:13px;margin-top:14px}}
 @media(max-width:900px){{main{{padding:10px}}.table-wrap{{overflow:auto}}table{{min-width:1200px}}}}
 </style></head><body><header><h1>Danta 통합 운영 현황</h1>
-<div>안전 코어부터 세 개의 공개 대시보드까지 한 화면에서 확인합니다. · 기준 {generated}</div></header>
+<div>안전 코어부터 연결된 공개 대시보드까지 한 화면에서 확인합니다. · 기준 {generated}</div></header>
 <main><section class="summary"><div class="card">정상<br><b>{report.normal_count}</b></div>
 <div class="card">확인 필요<br><b>{report.attention_count}</b></div></section>
 <div class="table-wrap"><table><thead><tr><th>번호</th><th>시스템</th><th>상태</th><th>현재 작업</th><th>최근 성공</th><th>다음 실행</th><th>문제·조치</th></tr></thead>
@@ -59,7 +59,7 @@ def _row_html(item: dict[str, object]) -> str:
     name = escape(str(item["name"]))
     name_cell = (
         f'<a href="{escape(str(url))}">{name}</a>'
-        if url and number in {2, 4, 5, 6}
+        if url and number in {3, 4, 5, 6, 7}
         else name
     )
     return (

@@ -60,6 +60,9 @@ def collect_operations_health(
     daily_success = _latest_json(settings.daily_run_root, "*success*.json")
     candidate_at = _file_time(settings.paper_autonomous_report_path)
     performance_at = _latest_report_time(settings.paper_daily_close_root / "reports")
+    financial_analysis_at = _file_time(
+        settings.financial_analysis_dashboard_index_path
+    )
     campaign = _read_json(settings.paper_autonomous_campaign_path)
     campaign_active = bool(campaign) and not settings.paper_autonomous_kill_switch_path.exists()
     managed_positions = _as_list(runtime.get("managed_positions"))
@@ -78,6 +81,17 @@ def collect_operations_health(
     trade_status: HealthLevel = "정상" if runtime_fresh and campaign_active else "주의"
     candidate_status: HealthLevel = "정상" if candidate_at else "오류"
     performance_status: HealthLevel = "정상" if performance_at else "주의"
+    financial_analysis_fresh = (
+        financial_analysis_at is not None
+        and current - financial_analysis_at < timedelta(days=2)
+    )
+    financial_analysis_status: HealthLevel = (
+        "정상"
+        if financial_analysis_fresh
+        else "오류"
+        if financial_analysis_at is None
+        else "주의"
+    )
 
     rows = [
         SystemHealthRow(
@@ -95,6 +109,17 @@ def collect_operations_health(
         ),
         SystemHealthRow(
             number=2,
+            name="자율 매매 시스템",
+            status=trade_status,
+            current_work=(
+                f"보유 {len(managed_positions)} · 대기주문 {len(pending_orders)}"
+            ),
+            last_success=_format_time(runtime_updated),
+            next_run="상시 · 시간대별 KRX/NXT 자동 전환",
+            issue="" if campaign_active else "자율 모의투자 캠페인이 중지 또는 만료됨",
+        ),
+        SystemHealthRow(
+            number=3,
             name="시장 센싱 시스템",
             status=market_status,
             current_work=(
@@ -106,17 +131,6 @@ def collect_operations_health(
             next_run="장중 30초 수집 · 공개판 5분",
             issue="" if market_fresh else "시장 데이터가 10분 이상 갱신되지 않음",
             dashboard_url=settings.market_dashboard_public_url,
-        ),
-        SystemHealthRow(
-            number=3,
-            name="자율 매매 시스템",
-            status=trade_status,
-            current_work=(
-                f"보유 {len(managed_positions)} · 대기주문 {len(pending_orders)}"
-            ),
-            last_success=_format_time(runtime_updated),
-            next_run="상시 · 시간대별 KRX/NXT 자동 전환",
-            issue="" if campaign_active else "자율 모의투자 캠페인이 중지 또는 만료됨",
         ),
         SystemHealthRow(
             number=4,
@@ -147,6 +161,22 @@ def collect_operations_health(
             next_run="15분 지연 · 장마감 확정",
             issue="" if performance_at else "공개 실적 스냅샷 최초 생성 필요",
             dashboard_url=settings.performance_dashboard_public_url,
+        ),
+        SystemHealthRow(
+            number=7,
+            name="AI 종목 추천 및 재무제표",
+            status=financial_analysis_status,
+            current_work="KOSPI 재무제표 분석 · 적정가 · AI 종목 추천",
+            last_success=_format_time(financial_analysis_at),
+            next_run="독립 프로젝트의 일일 보고서 갱신",
+            issue=(
+                ""
+                if financial_analysis_fresh
+                else "재무제표 대시보드 파일이 없음"
+                if financial_analysis_at is None
+                else "재무제표 대시보드 갱신이 2일 이상 지연됨"
+            ),
+            dashboard_url=settings.financial_analysis_dashboard_public_url,
         ),
     ]
     normal = sum(row.status == "정상" for row in rows)

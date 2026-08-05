@@ -47,7 +47,9 @@ def test_public_performance_page_is_utf8_and_sanitized(tmp_path: Path) -> None:
     assert "trade-buy" in html
     assert "trade-sell" in html
     assert "x.side==='BUY'?'trade-buy':'trade-sell'" in html
-    assert "매도수익률" in html
+    assert "체결가 옆 괄호 수익률" in html
+    assert "'체결가','매도수익률'" not in html
+    assert "signedPct" in html
     assert "수수료·세금 전" in html
     assert "font-weight:400" in html
     assert "한국투자증권" not in html
@@ -92,7 +94,7 @@ def test_public_performance_rejects_sensitive_fields() -> None:
         validate_public_performance({"account_no": "12345678"})
 
 
-def test_operations_dashboard_contains_six_numbered_systems(tmp_path: Path) -> None:
+def test_operations_dashboard_contains_seven_numbered_systems(tmp_path: Path) -> None:
     rows = [
         SystemHealthRow(
             number=index,
@@ -104,7 +106,7 @@ def test_operations_dashboard_contains_six_numbered_systems(tmp_path: Path) -> N
             issue="",
             dashboard_url="https://example.test/",
         )
-        for index in range(1, 7)
+        for index in range(1, 8)
     ]
     report = OperationsHealthReport(
         generated_at=datetime(2026, 8, 5, 15, 45, tzinfo=KST),
@@ -115,6 +117,6 @@ def test_operations_dashboard_contains_six_numbered_systems(tmp_path: Path) -> N
     path = build_operations_dashboard(report, tmp_path)
     html = path.read_text(encoding="utf-8")
     assert "Danta 통합 운영 현황" in html
-    assert html.count("시스템 ") == 6
+    assert html.count("시스템 ") == 7
     assert "<th>바로가기</th>" not in html
-    assert html.count('href="https://example.test/"') == 4
+    assert html.count('href="https://example.test/"') == 5

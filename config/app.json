@@ -34,6 +34,8 @@
   "operations_dashboard_public_url": "https://sungha-uu.github.io/danta_operations/",
   "performance_dashboard_publish_repo": "../danta_performance",
   "performance_dashboard_public_url": "https://sungha-uu.github.io/danta_performance/",
+  "financial_analysis_dashboard_index_path": "../financial_statement_analysis_daily_report/index.html",
+  "financial_analysis_dashboard_public_url": "https://sungha-uu.github.io/financial_statement_analysis_daily_report/",
   "public_dashboard_refresh_interval_seconds": 900,
   "market_entry_resume_required_path": "private/MARKET_ENTRY_RESUME_REQUIRED"
 }

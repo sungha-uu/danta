@@ -70,6 +70,12 @@ class AppSettings(BaseModel):
     operations_dashboard_public_url: str = "https://sungha-uu.github.io/danta_operations/"
     performance_dashboard_publish_repo: Path = Path("../danta_performance")
     performance_dashboard_public_url: str = "https://sungha-uu.github.io/danta_performance/"
+    financial_analysis_dashboard_index_path: Path = Path(
+        "../financial_statement_analysis_daily_report/index.html"
+    )
+    financial_analysis_dashboard_public_url: str = (
+        "https://sungha-uu.github.io/financial_statement_analysis_daily_report/"
+    )
     public_dashboard_refresh_interval_seconds: int = Field(
         default=900, ge=900, le=3600
     )
