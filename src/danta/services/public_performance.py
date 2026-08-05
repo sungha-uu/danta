@@ -4,9 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sqlite3
 from collections.abc import Awaitable, Callable
-from datetime import datetime
-from decimal import Decimal
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from functools import partial
 from html import escape
 from pathlib import Path
@@ -57,6 +58,7 @@ class PublicTrade(BaseModel):
     side: Literal["BUY", "SELL"]
     quantity: int = Field(gt=0)
     average_fill_price: int = Field(gt=0)
+    realized_return_pct: Decimal | None = None
 
 
 class PublicDailyPerformance(BaseModel):
@@ -94,6 +96,7 @@ async def collect_public_performance(
 ) -> PublicPerformanceReport:
     current = (now or datetime.now(KST)).astimezone(KST)
     names = _load_names(settings.paper_autonomous_report_path)
+    realized_returns = _load_realized_returns(settings.database_url)
     account = await _kis_read(lambda: broker.account_snapshot())
     holdings: list[PublicHolding] = []
     for position in account.positions:
@@ -133,6 +136,14 @@ async def collect_public_performance(
             side=status.side,  # type: ignore[arg-type]
             quantity=status.filled_quantity,
             average_fill_price=int(status.average_fill_price),
+            realized_return_pct=realized_returns.get(
+                (
+                    current.date().isoformat(),
+                    status.symbol,
+                    status.filled_quantity,
+                    int(status.average_fill_price),
+                )
+            ),
         )
         for status in statuses
         if status.side in {"BUY", "SELL"}
@@ -142,6 +153,7 @@ async def collect_public_performance(
     historical_trades, history = _load_public_history(
         settings.paper_daily_close_root / "reports",
         names,
+        realized_returns,
     )
     trades = _deduplicate_trades([*current_trades, *historical_trades])[:100]
     summary = account.summary
@@ -230,6 +242,7 @@ def validate_public_performance(payload: object) -> None:
 def _load_public_history(
     root: Path,
     names: dict[str, str],
+    realized_returns: dict[tuple[str, str, int, int], Decimal],
 ) -> tuple[list[PublicTrade], list[PublicDailyPerformance]]:
     trades: list[PublicTrade] = []
     history: list[PublicDailyPerformance] = []
@@ -268,6 +281,9 @@ def _load_public_history(
                     side=str(fill["side"]),  # type: ignore[arg-type]
                     quantity=quantity,
                     average_fill_price=price,
+                    realized_return_pct=realized_returns.get(
+                        (date, symbol, quantity, price)
+                    ),
                 )
             )
     history.sort(key=lambda item: item.trading_date)
@@ -310,6 +326,44 @@ def _pct(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"))
 
 
+def _load_realized_returns(
+    database_url: str,
+) -> dict[tuple[str, str, int, int], Decimal]:
+    if not database_url.startswith("sqlite"):
+        return {}
+    path = database_url.rsplit("///", 1)[-1]
+    query = """
+        SELECT oi.created_at, oi.symbol, f.quantity, f.price,
+               p.average_entry_price
+        FROM fills AS f
+        JOIN broker_orders AS bo ON bo.id = f.broker_order_id
+        JOIN order_intents AS oi ON oi.id = bo.order_intent_id
+        JOIN positions AS p
+          ON p.symbol = oi.symbol AND p.generation = oi.generation
+        WHERE oi.side = 'SELL' AND p.average_entry_price > 0
+    """
+    try:
+        with sqlite3.connect(path) as connection:
+            rows = connection.execute(query).fetchall()
+    except (OSError, sqlite3.Error):
+        return {}
+    result: dict[tuple[str, str, int, int], Decimal] = {}
+    for created_at, symbol, quantity, price, average_entry_price in rows:
+        try:
+            order_timestamp = datetime.fromisoformat(str(created_at))
+            if order_timestamp.tzinfo is None:
+                order_timestamp = order_timestamp.replace(tzinfo=UTC)
+            order_date = order_timestamp.astimezone(KST).date().isoformat()
+            average = Decimal(str(average_entry_price))
+            return_pct = (Decimal(str(price)) - average) / average * HUNDRED
+            result[(order_date, str(symbol), int(quantity), int(price))] = _pct(
+                return_pct
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+    return result
+
+
 async def _kis_read(operation: Callable[[], Awaitable[T]]) -> T:
     """Retry read-only snapshots across the unified runtime's KIS rate slots."""
     for attempt in range(8):
@@ -330,4 +384,4 @@ def _performance_html(
 ) -> str:
     generated = escape(report.generated_at.astimezone(KST).strftime("%Y-%m-%d %H:%M"))
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Danta 자율매매 실적</title><style>
-:root{{--navy:#111b2b;--blue:#2d477b;--bg:#f3f6fa;--line:#d9e0ea;--red:#b9433b}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:#152036;font-family:Arial,'Malgun Gothic',sans-serif}}header{{background:var(--navy);color:#fff;padding:22px 28px;display:flex;justify-content:space-between;align-items:center}}header h1{{margin:0;font-size:28px}}a{{color:inherit}}main{{padding:22px;max-width:1600px;margin:auto}}.note{{color:#647087;font-size:13px}}.kpis{{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:12px;margin:18px 0}}.card{{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;box-shadow:0 2px 8px #1720330b}}.label{{color:#68748b;font-size:13px}}.value{{font-size:24px;font-weight:800;margin-top:8px}}.positive{{color:var(--red)}}.negative{{color:#3568c5}}.trade-buy{{color:#b9433b;font-weight:700}}.trade-sell{{color:#3568c5;font-weight:700}}h2{{margin:28px 0 12px}}table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line)}}th{{background:#2c3f70;color:#fff;padding:12px}}td{{padding:11px;border-bottom:1px solid var(--line);text-align:center}}tbody tr:nth-child(even){{background:#f8f9fc}}@media(max-width:900px){{.kpis{{grid-template-columns:repeat(2,1fr)}}main{{padding:12px}}table{{font-size:12px}}}}</style></head><body><header><h1>Danta 자율매매 실적</h1><a href="{escape(operations_url)}">통합 운영 현황으로</a></header><main><div class="note">공개용 15분 지연 요약 · 계좌번호·증권사·주문번호·승인정보 미포함 · 기준 {generated}</div><section class="kpis" id="kpis"></section><h2>현재 보유종목</h2><div id="holdings"></div><h2>최근 매수·매도</h2><div id="trades"></div><h2>일별 누적 성과</h2><div id="history"></div></main><script>const D={encoded};const won=n=>Number(n).toLocaleString('ko-KR')+'원';const pct=n=>(Number(n)<0?'-':'')+Math.abs(Number(n)).toFixed(2)+'%';const cls=n=>Number(n)<0?'negative':Number(n)>0?'positive':'';const KP=[['최초 투자금',won(D.initial_capital_amount)],['현재 순자산',won(D.net_asset_amount)],['현재 투자금',won(D.invested_amount)],['누적손익',won(D.cumulative_profit_loss_amount)],['누적수익률',pct(D.cumulative_return_pct)],['현금 비율',pct(D.cash_ratio_pct)]];document.querySelector('#kpis').innerHTML=KP.map((x,i)=>`<div class="card"><div class="label">${{x[0]}}</div><div class="value ${{i===3||i===4?cls(i===3?D.cumulative_profit_loss_amount:D.cumulative_return_pct):''}}">${{x[1]}}</div></div>`).join('');const table=(heads,rows)=>`<table><thead><tr>${{heads.map(x=>`<th>${{x}}</th>`).join('')}}</tr></thead><tbody>${{rows.join('')||`<tr><td colspan="${{heads.length}}">내역 없음</td></tr>`}}</tbody></table>`;document.querySelector('#holdings').innerHTML=table(['종목','수량','평균가','현재가','평가금액','평가손익','수익률'],D.holdings.map(x=>`<tr><td>${{x.name}} (${{x.symbol}})</td><td>${{x.quantity.toLocaleString()}}</td><td>${{won(x.average_price)}}</td><td>${{won(x.current_price)}}</td><td>${{won(x.evaluation_amount)}}</td><td class="${{cls(x.profit_loss_amount)}}">${{won(x.profit_loss_amount)}}</td><td class="${{cls(x.return_pct)}}">${{pct(x.return_pct)}}</td></tr>`));document.querySelector('#trades').innerHTML=table(['일자','시간','종목','구분','수량','체결가'],D.recent_trades.map(x=>`<tr><td>${{x.trading_date}}</td><td>${{x.order_time}}</td><td>${{x.name}} (${{x.symbol}})</td><td class="${{x.side==='BUY'?'trade-buy':'trade-sell'}}">${{x.side==='BUY'?'매수':'매도'}}</td><td class="${{x.side==='BUY'?'trade-buy':'trade-sell'}}">${{x.quantity.toLocaleString()}}</td><td class="${{x.side==='BUY'?'trade-buy':'trade-sell'}}">${{won(x.average_fill_price)}}</td></tr>`));document.querySelector('#history').innerHTML=table(['일자','순자산','누적손익','누적수익률'],[...D.daily_history].reverse().map(x=>`<tr><td>${{x.trading_date}}</td><td>${{won(x.net_asset_amount)}}</td><td class="${{cls(x.cumulative_profit_loss_amount)}}">${{won(x.cumulative_profit_loss_amount)}}</td><td class="${{cls(x.cumulative_return_pct)}}">${{pct(x.cumulative_return_pct)}}</td></tr>`));</script></body></html>"""
+:root{{--navy:#111b2b;--blue:#2d477b;--bg:#f3f6fa;--line:#d9e0ea;--red:#b9433b}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:#152036;font-family:Arial,'Malgun Gothic',sans-serif}}header{{background:var(--navy);color:#fff;padding:22px 28px;display:flex;justify-content:space-between;align-items:center}}header h1{{margin:0;font-size:28px}}a{{color:inherit}}main{{padding:22px;max-width:1600px;margin:auto}}.note{{color:#647087;font-size:13px}}.kpis{{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:12px;margin:18px 0}}.card{{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;box-shadow:0 2px 8px #1720330b}}.label{{color:#68748b;font-size:13px}}.value{{font-size:24px;font-weight:800;margin-top:8px}}.positive{{color:var(--red)}}.negative{{color:#3568c5}}tr.trade-buy td{{color:#b9433b;font-weight:400}}tr.trade-sell td{{color:#3568c5;font-weight:400}}h2{{margin:28px 0 12px}}table{{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line)}}th{{background:#2c3f70;color:#fff;padding:12px}}td{{padding:11px;border-bottom:1px solid var(--line);text-align:center}}tbody tr:nth-child(even){{background:#f8f9fc}}@media(max-width:900px){{.kpis{{grid-template-columns:repeat(2,1fr)}}main{{padding:12px}}table{{font-size:12px}}}}</style></head><body><header><h1>Danta 자율매매 실적</h1><a href="{escape(operations_url)}">통합 운영 현황으로</a></header><main><div class="note">공개용 15분 지연 요약 · 계좌번호·증권사·주문번호·승인정보 미포함 · 기준 {generated}</div><section class="kpis" id="kpis"></section><h2>현재 보유종목</h2><div id="holdings"></div><h2>최근 매수·매도</h2><div class="note">매도수익률은 해당 포지션 평균매입가 대비 실제 매도 체결가 기준이며 수수료·세금 전입니다.</div><div id="trades"></div><h2>일별 누적 성과</h2><div id="history"></div></main><script>const D={encoded};const won=n=>Number(n).toLocaleString('ko-KR')+'원';const pct=n=>(Number(n)<0?'-':'')+Math.abs(Number(n)).toFixed(2)+'%';const cls=n=>Number(n)<0?'negative':Number(n)>0?'positive':'';const KP=[['최초 투자금',won(D.initial_capital_amount)],['현재 순자산',won(D.net_asset_amount)],['현재 투자금',won(D.invested_amount)],['누적손익',won(D.cumulative_profit_loss_amount)],['누적수익률',pct(D.cumulative_return_pct)],['현금 비율',pct(D.cash_ratio_pct)]];document.querySelector('#kpis').innerHTML=KP.map((x,i)=>`<div class="card"><div class="label">${{x[0]}}</div><div class="value ${{i===3||i===4?cls(i===3?D.cumulative_profit_loss_amount:D.cumulative_return_pct):''}}">${{x[1]}}</div></div>`).join('');const table=(heads,rows)=>`<table><thead><tr>${{heads.map(x=>`<th>${{x}}</th>`).join('')}}</tr></thead><tbody>${{rows.join('')||`<tr><td colspan="${{heads.length}}">내역 없음</td></tr>`}}</tbody></table>`;document.querySelector('#holdings').innerHTML=table(['종목','수량','평균가','현재가','평가금액','평가손익','수익률'],D.holdings.map(x=>`<tr><td>${{x.name}} (${{x.symbol}})</td><td>${{x.quantity.toLocaleString()}}</td><td>${{won(x.average_price)}}</td><td>${{won(x.current_price)}}</td><td>${{won(x.evaluation_amount)}}</td><td class="${{cls(x.profit_loss_amount)}}">${{won(x.profit_loss_amount)}}</td><td class="${{cls(x.return_pct)}}">${{pct(x.return_pct)}}</td></tr>`));document.querySelector('#trades').innerHTML=table(['일자','시간','종목','구분','수량','체결가','매도수익률'],D.recent_trades.map(x=>`<tr class="${{x.side==='BUY'?'trade-buy':'trade-sell'}}"><td>${{x.trading_date}}</td><td>${{x.order_time}}</td><td>${{x.name}} (${{x.symbol}})</td><td>${{x.side==='BUY'?'매수':'매도'}}</td><td>${{x.quantity.toLocaleString()}}</td><td>${{won(x.average_fill_price)}}</td><td>${{x.realized_return_pct===null?'-':pct(x.realized_return_pct)}}</td></tr>`));document.querySelector('#history').innerHTML=table(['일자','순자산','누적손익','누적수익률'],[...D.daily_history].reverse().map(x=>`<tr><td>${{x.trading_date}}</td><td>${{won(x.net_asset_amount)}}</td><td class="${{cls(x.cumulative_profit_loss_amount)}}">${{won(x.cumulative_profit_loss_amount)}}</td><td class="${{cls(x.cumulative_return_pct)}}">${{pct(x.cumulative_return_pct)}}</td></tr>`));</script></body></html>"""
