@@ -215,6 +215,7 @@ class SmtpNotifier:
             "ADAPTIVE_PROFIT_FLOOR": "수익 보호",
             "PROFIT_TARGET": "익절",
             "TIME_EXIT": "시간 청산",
+            "USER_REQUESTED_FLATTEN": "사용자 요청 전량 청산",
         }
         lines: list[str] = []
         for name, price, return_pct, cause in trades:

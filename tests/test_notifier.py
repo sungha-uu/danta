@@ -262,6 +262,32 @@ def test_profit_exit_notification_contains_reason(monkeypatch: object) -> None:
     )
 
 
+def test_user_requested_flatten_notification_uses_korean_reason(
+    monkeypatch: object,
+) -> None:
+    from decimal import Decimal
+
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_exit_completed(
+        [("SK이터닉스", 55_600, Decimal("1.46"), "USER_REQUESTED_FLATTEN")]
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert plain_body.get_content().strip() == (
+        "SK이터닉스 55,600원 1.5% 사용자 요청 전량 청산"
+    )
+    assert plain_body.get_content_charset() == "utf-8"
+    assert plain_body["Content-Transfer-Encoding"] == "base64"
+
+
 def test_daily_close_notification_uses_exact_subject(
     monkeypatch: object,
 ) -> None:
