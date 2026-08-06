@@ -61,7 +61,7 @@ def test_hard_stop_works_even_when_adaptive_policy_is_not_approved() -> None:
     assert decision.quantity == 10
 
 
-def test_minus_five_is_unconditional_protective_exit() -> None:
+def test_minus_five_exits_without_strong_recovery() -> None:
     decision = evaluate_exit(
         _snapshot(
             last_price=95000,
@@ -75,6 +75,52 @@ def test_minus_five_is_unconditional_protective_exit() -> None:
     assert decision.action is ExitAction.SELL_MARKET
     assert decision.urgency is ExitUrgency.PROTECTIVE
     assert decision.quantity == 10
+    assert decision.reason_codes == ("HARD_DEFENSE_MINUS_5",)
+
+
+def test_minus_five_allows_only_bounded_strong_recovery_observation() -> None:
+    observing = evaluate_exit(
+        _snapshot(
+            last_price=95000,
+            best_bid=95000,
+            buy_recovery_score=Decimal("0.8"),
+            sell_pressure_score=Decimal("0.1"),
+            weakness_score=Decimal("0.1"),
+            strong_defense_elapsed_seconds=14,
+        ),
+        policy=_policy(),
+    )
+    assert observing.action is ExitAction.HOLD
+    assert observing.reason_codes == ("MINUS_5_STRONG_RECOVERY_OBSERVATION",)
+
+    expired = evaluate_exit(
+        _snapshot(
+            last_price=95000,
+            best_bid=95000,
+            buy_recovery_score=Decimal("0.8"),
+            sell_pressure_score=Decimal("0.1"),
+            weakness_score=Decimal("0.1"),
+            strong_defense_elapsed_seconds=15,
+        ),
+        policy=_policy(),
+    )
+    assert expired.action is ExitAction.SELL_MARKET
+    assert expired.reason_codes == ("HARD_DEFENSE_MINUS_5",)
+
+
+def test_minus_five_recovery_exception_never_overrides_risk_off() -> None:
+    decision = evaluate_exit(
+        _snapshot(
+            last_price=95000,
+            best_bid=95000,
+            buy_recovery_score=Decimal("0.9"),
+            sell_pressure_score=Decimal("0.05"),
+            weakness_score=Decimal("0.05"),
+            market_risk=MarketRisk.RISK_OFF,
+        ),
+        policy=_policy(),
+    )
+    assert decision.action is ExitAction.SELL_MARKET
     assert decision.reason_codes == ("HARD_DEFENSE_MINUS_5",)
 
 
@@ -132,6 +178,29 @@ def test_profit_floor_requires_peak_giveback_and_weakness() -> None:
             weakness_score=Decimal("0.8"),
         ),
         policy=_policy(),
+    )
+    assert decision.action is ExitAction.SELL_MARKET
+    assert decision.reason_codes == ("ADAPTIVE_PROFIT_FLOOR",)
+
+
+def test_profit_protection_arms_at_three_with_tighter_early_giveback() -> None:
+    policy = _policy()
+    policy = ExitPolicy(
+        **{
+            field: getattr(policy, field)
+            for field in policy.__dataclass_fields__
+            if field != "profit_arm_pct"
+        },
+        profit_arm_pct=Decimal("3"),
+    )
+    decision = evaluate_exit(
+        _snapshot(
+            last_price=102000,
+            best_bid=102000,
+            peak_return_pct=Decimal("3.2"),
+            weakness_score=Decimal("0.8"),
+        ),
+        policy=policy,
     )
     assert decision.action is ExitAction.SELL_MARKET
     assert decision.reason_codes == ("ADAPTIVE_PROFIT_FLOOR",)

@@ -55,6 +55,12 @@ class ExitPolicyConfig(BaseModel):
     profit_giveback_pct: Decimal = Field(gt=0)
     profit_weakness_score: Decimal = Field(ge=0, le=1)
     max_holding_minutes: int = Field(gt=0)
+    strong_recovery_score: Decimal = Field(default=Decimal("0.72"), ge=0, le=1)
+    strong_recovery_observation_seconds: int = Field(default=15, gt=0)
+    profit_early_giveback_pct: Decimal = Field(default=Decimal("1.0"), gt=0)
+    profit_standard_arm_pct: Decimal = Field(default=Decimal("5.0"), ge=0)
+    profit_trend_arm_pct: Decimal = Field(default=Decimal("8.0"), ge=0)
+    profit_trend_giveback_pct: Decimal = Field(default=Decimal("2.0"), gt=0)
 
     def approved_for(self, environment: TradingEnvironment) -> bool:
         return (
@@ -76,6 +82,12 @@ class ExitPolicyConfig(BaseModel):
             profit_giveback_pct=self.profit_giveback_pct,
             profit_weakness_score=self.profit_weakness_score,
             max_holding_minutes=self.max_holding_minutes,
+            strong_recovery_score=self.strong_recovery_score,
+            strong_recovery_observation_seconds=self.strong_recovery_observation_seconds,
+            profit_early_giveback_pct=self.profit_early_giveback_pct,
+            profit_standard_arm_pct=self.profit_standard_arm_pct,
+            profit_trend_arm_pct=self.profit_trend_arm_pct,
+            profit_trend_giveback_pct=self.profit_trend_giveback_pct,
         )
 
 

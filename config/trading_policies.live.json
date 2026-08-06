@@ -10,15 +10,21 @@
     "max_spread_bps": "35"
   },
   "exit": {
-    "version": "exit-defense-profit-live-v1-trading-minutes",
+    "version": "exit-defense-profit-live-v2-recovery-gated-arm-3",
     "approved_for_live": true,
     "early_loss_pct": "-3.0",
     "strong_loss_pct": "-5.0",
     "early_defense_score": "0.62",
     "strong_sell_pressure": "0.72",
     "panic_market_stress": "0.75",
-    "profit_arm_pct": "5.0",
+    "strong_recovery_score": "0.72",
+    "strong_recovery_observation_seconds": 15,
+    "profit_arm_pct": "3.0",
+    "profit_early_giveback_pct": "1.0",
+    "profit_standard_arm_pct": "5.0",
     "profit_giveback_pct": "1.5",
+    "profit_trend_arm_pct": "8.0",
+    "profit_trend_giveback_pct": "2.0",
     "profit_weakness_score": "0.62",
     "max_holding_minutes": 1440
   },

@@ -48,6 +48,7 @@ class ManagedPosition:
     average_entry_price: Decimal
     opened_at: datetime
     peak_return_pct: Decimal = Decimal("0")
+    strong_defense_started_at: datetime | None = None
 
     def apply_buy_fill(self, *, quantity: int, price: Decimal) -> None:
         if quantity <= 0 or price <= 0:
@@ -307,6 +308,19 @@ class TradingRuntimeCore:
             * Decimal("100")
         )
         position.peak_return_pct = max(position.peak_return_pct, current_return)
+        if current_return <= self.exit_policy.strong_loss_pct:
+            if position.strong_defense_started_at is None:
+                position.strong_defense_started_at = observed_now
+        else:
+            position.strong_defense_started_at = None
+        strong_defense_elapsed_seconds = (
+            0
+            if position.strong_defense_started_at is None
+            else max(
+                0,
+                int((observed_now - position.strong_defense_started_at).total_seconds()),
+            )
+        )
         held_minutes = krx_regular_trading_minutes_between(
             position.opened_at,
             observed_now,
@@ -330,6 +344,8 @@ class TradingRuntimeCore:
                 box_valid=snapshot.box_valid,
                 data_fresh=snapshot.data_fresh,
                 observed_at=snapshot.observed_at,
+                buy_recovery_score=snapshot.buy_recovery_score,
+                strong_defense_elapsed_seconds=strong_defense_elapsed_seconds,
             ),
             policy=self.exit_policy,
         )

@@ -73,6 +73,12 @@ class ExitPolicy:
     profit_giveback_pct: Decimal
     profit_weakness_score: Decimal
     max_holding_minutes: int
+    strong_recovery_score: Decimal = Decimal("0.72")
+    strong_recovery_observation_seconds: int = 15
+    profit_early_giveback_pct: Decimal = Decimal("1.0")
+    profit_standard_arm_pct: Decimal = Decimal("5.0")
+    profit_trend_arm_pct: Decimal = Decimal("8.0")
+    profit_trend_giveback_pct: Decimal = Decimal("2.0")
 
     def __post_init__(self) -> None:
         if not self.version:
@@ -84,12 +90,23 @@ class ExitPolicy:
             "strong_sell_pressure",
             "panic_market_stress",
             "profit_weakness_score",
+            "strong_recovery_score",
         ):
             value = getattr(self, name)
             if value < 0 or value > 1:
                 raise ValueError(f"{name} must be between 0 and 1")
         if self.profit_arm_pct < 0 or self.profit_giveback_pct <= 0:
             raise ValueError("profit thresholds must be non-negative")
+        if not (
+            self.profit_arm_pct
+            <= self.profit_standard_arm_pct
+            <= self.profit_trend_arm_pct
+        ):
+            raise ValueError("profit arm thresholds must be ordered")
+        if self.profit_early_giveback_pct <= 0 or self.profit_trend_giveback_pct <= 0:
+            raise ValueError("profit giveback thresholds must be positive")
+        if self.strong_recovery_observation_seconds <= 0:
+            raise ValueError("strong recovery observation must be positive")
         if self.max_holding_minutes <= 0:
             raise ValueError("max_holding_minutes must be positive")
 
@@ -113,6 +130,8 @@ class PositionRiskSnapshot:
     box_valid: bool
     data_fresh: bool
     observed_at: datetime
+    buy_recovery_score: Decimal = Decimal("0")
+    strong_defense_elapsed_seconds: int = 0
 
     def __post_init__(self) -> None:
         if self.average_entry_price <= 0:
@@ -127,10 +146,17 @@ class PositionRiskSnapshot:
             raise ValueError("held_minutes must not be negative")
         if self.observed_at.tzinfo is None:
             raise ValueError("observed_at must be timezone-aware")
-        for name in ("sell_pressure_score", "weakness_score", "market_stress_score"):
+        for name in (
+            "sell_pressure_score",
+            "weakness_score",
+            "market_stress_score",
+            "buy_recovery_score",
+        ):
             value = getattr(self, name)
             if value < 0 or value > 1:
                 raise ValueError(f"{name} must be between 0 and 1")
+        if self.strong_defense_elapsed_seconds < 0:
+            raise ValueError("strong defense elapsed seconds must not be negative")
 
     @property
     def executable_return_pct(self) -> Decimal:
@@ -208,6 +234,26 @@ def evaluate_exit(snapshot: PositionRiskSnapshot, *, policy: ExitPolicy) -> Exit
             ("BOX_INVALIDATED",),
         )
     if return_pct <= policy.strong_loss_pct:
+        strong_recovery = (
+            snapshot.data_fresh
+            and snapshot.market_risk is not MarketRisk.RISK_OFF
+            and snapshot.buy_recovery_score >= policy.strong_recovery_score
+            and snapshot.sell_pressure_score
+            <= Decimal("1") - policy.strong_recovery_score
+            and snapshot.weakness_score <= Decimal("1") - policy.strong_recovery_score
+            and snapshot.strong_defense_elapsed_seconds
+            < policy.strong_recovery_observation_seconds
+        )
+        if strong_recovery:
+            return ExitDecision(
+                snapshot.symbol,
+                snapshot.generation,
+                ExitAction.HOLD,
+                ExitUrgency.PROTECTIVE,
+                0,
+                policy.version,
+                ("MINUS_5_STRONG_RECOVERY_OBSERVATION",),
+            )
         return ExitDecision(
             snapshot.symbol,
             snapshot.generation,
@@ -246,7 +292,13 @@ def evaluate_exit(snapshot: PositionRiskSnapshot, *, policy: ExitPolicy) -> Exit
             policy.version,
             ("MAX_HOLDING_TIME",),
         )
-    profit_floor = snapshot.peak_return_pct - policy.profit_giveback_pct
+    if snapshot.peak_return_pct >= policy.profit_trend_arm_pct:
+        profit_giveback_pct = policy.profit_trend_giveback_pct
+    elif snapshot.peak_return_pct >= policy.profit_standard_arm_pct:
+        profit_giveback_pct = policy.profit_giveback_pct
+    else:
+        profit_giveback_pct = policy.profit_early_giveback_pct
+    profit_floor = snapshot.peak_return_pct - profit_giveback_pct
     if (
         snapshot.peak_return_pct >= policy.profit_arm_pct
         and return_pct <= profit_floor
