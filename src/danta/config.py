@@ -33,6 +33,14 @@ class AppSettings(BaseModel):
     autonomous_kill_switch_path: Path = Path("private/live/AUTONOMY_STOP")
     autonomous_report_path: Path = Path("data/candidate_intraday_ai_report.json")
     autonomous_poll_interval_seconds: int = Field(default=30, ge=5, le=300)
+    intraday_overlay_enabled: bool = True
+    intraday_overlay_interval_seconds: int = Field(default=1800, ge=300, le=3600)
+    intraday_overlay_request_interval_seconds: Decimal = Field(
+        default=Decimal("0.10"), ge=Decimal("0.05"), le=Decimal("1.0")
+    )
+    intraday_overlay_path: Path = Path("private/live/intraday_candidate_overlay.json")
+    intraday_overlay_public_enabled: bool = True
+    intraday_overlay_public_interval_seconds: int = Field(default=3600, ge=1800, le=7200)
     daily_close_enabled: bool = True
     daily_close_root: Path = Path("data/live-daily-close")
     kis_token_cache_path: Path = Path(".secrets/kis/.cache/prod_token.json")

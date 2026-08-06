@@ -531,6 +531,51 @@ class KisClient:
             )
         return result
 
+    async def recent_minute_bars(
+        self, symbol: str, *, trading_date: str, end_time: str
+    ) -> list[KisMinuteBar]:
+        """Fetch one recent KRX minute page for a low-cost incremental overlay."""
+        self._validate_symbol(symbol)
+        self._validate_date(trading_date)
+        if len(end_time) != 6 or not end_time.isdigit() or not "090000" <= end_time <= "153000":
+            raise ValueError("end_time must be HHMMSS within the regular KRX session")
+        body = await self._authorized_request(
+            "GET", MINUTE_DAILY_CHART_PATH, tr_id="FHKST03010230",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_HOUR_1": end_time, "FID_INPUT_DATE_1": trading_date,
+                "FID_PW_DATA_INCU_YN": "Y", "FID_FAKE_TICK_INCU_YN": "",
+            },
+        )
+        rows = body.get("output2")
+        if not isinstance(rows, list):
+            raise KisApiError("KIS recent minute response did not include output2")
+        result: list[KisMinuteBar] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_date = str(row.get("stck_bsop_date", ""))
+            row_time = str(row.get("stck_cntg_hour", ""))
+            if row_date != trading_date or not "090000" <= row_time <= end_time:
+                continue
+            try:
+                bar = KisMinuteBar(
+                    trading_date=row_date, trading_time=row_time,
+                    open=int(row.get("stck_oprc", "0") or "0"),
+                    high=int(row.get("stck_hgpr", "0") or "0"),
+                    low=int(row.get("stck_lwpr", "0") or "0"),
+                    close=int(row.get("stck_prpr", "0") or "0"),
+                    volume=int(row.get("cntg_vol", "0") or "0"),
+                    accumulated_trading_value=int(row.get("acml_tr_pbmn", "0") or "0"),
+                )
+            except (TypeError, ValueError) as exc:
+                raise KisApiError("KIS recent minute response has invalid numbers") from exc
+            if min(bar.open, bar.high, bar.low, bar.close) > 0:
+                result.append(bar)
+        if not result:
+            raise KisApiError(f"KIS recent minute response contained no bars for {symbol}")
+        return sorted(result, key=lambda item: item.trading_time)
+
     async def account_snapshot(self) -> KisAccountSnapshot:
         tr_id = (
             "VTTC8434R" if self.credentials.environment is TradingEnvironment.PAPER else "TTTC8434R"

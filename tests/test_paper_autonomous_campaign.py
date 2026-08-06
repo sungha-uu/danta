@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from danta.config import AppSettings, KisCredentials
+from danta.dashboard.builder import load_dashboard_report
 from danta.domain.market import MarketRisk
 from danta.domain.trading_session import OrchestratorState
 from danta.ports.broker import Quote
@@ -182,6 +184,102 @@ async def test_controller_submits_one_agent_reviewed_batch_per_report(
         reason="TEST",
     )
     assert await controller.tick(now + timedelta(minutes=1)) is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "reviewed.json"
+    shutil.copy(Path("data/candidate_intraday_ai_report.json"), report_path)
+    report = load_dashboard_report(report_path)
+    candidates = [*report.candidates, *report.extended_watchlist]
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate.context_status == "READY"
+        and candidate.windows["14"].structure_status == "READY"
+        and candidate.windows["14"].ai_grade in {"STRONG_RECOMMEND", "RECOMMEND"}
+        and candidate.windows["14"].rank is not None
+        and candidate.windows["14"].rank <= 50
+    ]
+    assert len(candidates) == 200
+    assert eligible
+
+    authorization_path = tmp_path / "campaign.json"
+    overlay_path = tmp_path / "overlay.json"
+    now = datetime(2026, 7, 30, 1, 0, tzinfo=UTC)
+    authorization = create_campaign_authorization(now=now - timedelta(minutes=1))
+    write_campaign_authorization(authorization, authorization_path)
+    rows = [
+        {
+            "symbol": candidate.code,
+            "live_rank_14d": 200,
+            "live_price": int(candidate.current_price),
+            "live_position_pct": "50.0",
+        }
+        for candidate in candidates
+    ]
+    chosen = eligible[-1]
+    chosen_row = next(row for row in rows if row["symbol"] == chosen.code)
+    chosen_row.update(
+        {
+            "live_rank_14d": 1,
+            "live_price": int(chosen.current_price) + 100,
+            "live_position_pct": "5.0",
+        }
+    )
+
+    def write_overlay(revision: str, observed_at: datetime) -> None:
+        overlay_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "revision": revision,
+                    "observed_at": observed_at.isoformat(),
+                    "report_data_as_of": report.data_as_of.isoformat(),
+                    "coverage": 200,
+                    "failed_symbols": [],
+                    "rows": rows,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_overlay("revision-1", now)
+    settings = AppSettings(
+        paper_autonomous_campaign_path=authorization_path,
+        paper_autonomous_kill_switch_path=tmp_path / "STOP",
+        paper_autonomous_report_path=report_path,
+        intraday_overlay_path=overlay_path,
+    )
+    core = SimpleNamespace(
+        positions={}, submitted={}, market_risk=MarketRisk.NORMAL,
+        market_guard_initialized=True, market_entry_resume_required=False,
+        orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
+    )
+    store = FileCommandStore(tmp_path / "commands")
+    controller = PaperAutonomousCampaignController(
+        settings=settings,
+        credentials=_credentials(),
+        command_store=store,
+        core=core,  # type: ignore[arg-type]
+        repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
+        broker=_LiveQuoteBroker(),  # type: ignore[arg-type]
+    )
+
+    first = await controller.tick(now)
+    assert first is not None
+    assert first.selections[0].symbol == chosen.code
+    assert first.selections[0].rank == 1
+    store.accept_next()
+    store.archive_active(first.command_id, status=CommandStatus.COMPLETED, reason="TEST")
+
+    later = now + timedelta(minutes=30)
+    write_overlay("revision-2", later)
+    second = await controller.tick(later)
+    assert second is not None
+    assert second.command_id != first.command_id
 
 
 @pytest.mark.asyncio

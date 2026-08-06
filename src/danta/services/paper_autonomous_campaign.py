@@ -6,7 +6,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -26,8 +26,20 @@ from danta.services.runtime_repository import SqlRuntimeRepository
 from danta.services.trading_runtime import TradingRuntimeCore
 
 AUTONOMOUS_GRADES = frozenset({"STRONG_RECOMMEND", "RECOMMEND"})
-AUTONOMOUS_SELECTION_VERSION = "autonomous-rank-first-live-v1"
+AUTONOMOUS_SELECTION_VERSION = "autonomous-intraday-overlay-v2"
 KST = ZoneInfo("Asia/Seoul")
+
+
+class IntradayOverlayRow(TypedDict):
+    symbol: str
+    live_rank_14d: int
+    live_price: int
+    live_position_pct: Decimal
+
+
+class IntradayOverlayPayload(TypedDict):
+    revision: str
+    rows: list[IntradayOverlayRow]
 
 
 class AutonomousCampaignAuthorization(BaseModel):
@@ -39,7 +51,7 @@ class AutonomousCampaignAuthorization(BaseModel):
     expires_at: datetime
     enabled: bool = True
     max_concurrent_positions: int = Field(default=3, ge=1, le=3)
-    max_daily_batches: int = Field(default=1, ge=1, le=3)
+    max_daily_batches: int = Field(default=3, ge=1, le=3)
     max_capital_pct: Decimal = Field(default=Decimal("100.0"), gt=0, le=100)
     approved_grades: tuple[Literal["STRONG_RECOMMEND", "RECOMMEND"], ...] = (
         "STRONG_RECOMMEND",
@@ -204,8 +216,13 @@ class AutonomousCampaignController:
             await self._blocked(authorization, "LIVE_QUOTE_PROVIDER_UNAVAILABLE")
             return None
 
+        overlay = self._load_intraday_overlay(report_key, now)
+        overlay_revision = str(overlay["revision"]) if overlay is not None else None
+        submission_key = (
+            f"{report_key}|{overlay_revision}" if overlay_revision is not None else report_key
+        )
         trading_day = now.astimezone(KST).date().isoformat()
-        if report_key in state.submitted_reports:
+        if submission_key in state.submitted_reports:
             return None
         if state.daily_batches.get(trading_day, 0) >= authorization.max_daily_batches:
             await self._blocked(authorization, "DAILY_BATCH_LIMIT")
@@ -223,35 +240,48 @@ class AutonomousCampaignController:
         ]
         live_candidates: list[tuple[int, int, Decimal, CandidateView, int]] = []
         overlay_rows: list[dict[str, object]] = []
+        live_rows = (
+            {str(row["symbol"]): row for row in overlay["rows"]}
+            if overlay is not None
+            else {}
+        )
         for candidate in eligible:
             metrics = candidate.windows["14"]
             if metrics.box_low is None or metrics.box_high is None or metrics.rank is None:
                 continue
-            try:
-                quote = await self.broker.current_price(candidate.code)
-            except KisApiError as exc:
-                await self.repository.audit(
-                    "AUTONOMOUS_LIVE_QUOTE_ERROR",
-                    correlation_id=authorization.campaign_id,
-                    payload={
-                        "symbol": candidate.code,
-                        "error": type(exc).__name__,
-                    },
+            live_row = live_rows.get(candidate.code)
+            if live_row is not None:
+                live_price = live_row["live_price"]
+                live_rank = live_row["live_rank_14d"]
+                position_pct = live_row["live_position_pct"]
+            else:
+                try:
+                    quote = await self.broker.current_price(candidate.code)
+                except KisApiError as exc:
+                    await self.repository.audit(
+                        "AUTONOMOUS_LIVE_QUOTE_ERROR",
+                        correlation_id=authorization.campaign_id,
+                        payload={
+                            "symbol": candidate.code,
+                            "error": type(exc).__name__,
+                        },
+                    )
+                    continue
+                live_price = quote.price
+                live_rank = metrics.rank
+                position_pct = (
+                    (Decimal(live_price) - metrics.box_low)
+                    / (metrics.box_high - metrics.box_low)
+                    * Decimal("100")
                 )
-                continue
-            position_pct = (
-                (Decimal(quote.price) - metrics.box_low)
-                / (metrics.box_high - metrics.box_low)
-                * Decimal("100")
-            )
             grade_priority = 0 if metrics.ai_grade == "STRONG_RECOMMEND" else 1
             live_candidates.append(
                 (
-                    metrics.rank,
+                    live_rank,
                     grade_priority,
                     position_pct,
                     candidate,
-                    quote.price,
+                    live_price,
                 )
             )
             overlay_rows.append(
@@ -259,10 +289,11 @@ class AutonomousCampaignController:
                     "symbol": candidate.code,
                     "name": candidate.name,
                     "base_price": str(candidate.current_price),
-                    "live_price": quote.price,
+                    "live_price": live_price,
                     "live_position_pct": str(position_pct.quantize(Decimal("0.01"))),
                     "ai_grade": metrics.ai_grade,
-                    "rank_14d": metrics.rank,
+                    "base_rank_14d": metrics.rank,
+                    "live_rank_14d": live_rank,
                 }
             )
         # AI approval remains mandatory, but repeated-rise rank must decide which
@@ -297,7 +328,7 @@ class AutonomousCampaignController:
                 continue
             selections.append(
                 EntrySelection(
-                    rank=metrics.rank,
+                    rank=live_item[0],
                     symbol=candidate.code,
                     name=candidate.name,
                     entry_target_price_krw=live_price,
@@ -340,10 +371,13 @@ class AutonomousCampaignController:
             hard_stop_pct=Decimal("-7.0"),
             profit_policy="ACTIVE_VERSIONED_LOCAL_ENGINE",
             selections=selections,
-            request=f"AUTONOMOUS_TRADING_CAMPAIGN:{authorization.campaign_id}",
+            request=(
+                f"AUTONOMOUS_TRADING_CAMPAIGN:{authorization.campaign_id}"
+                f":{overlay_revision or report_key}"
+            ),
         )
         self.command_store.submit(mandate)
-        state.submitted_reports.append(report_key)
+        state.submitted_reports = [*state.submitted_reports, submission_key][-100:]
         state.daily_batches[trading_day] = state.daily_batches.get(trading_day, 0) + 1
         state.updated_at = now
         _atomic_json(self.state_path, state.model_dump(mode="json"))
@@ -354,6 +388,7 @@ class AutonomousCampaignController:
                 "command_id": mandate.command_id,
                 "selection_version": AUTONOMOUS_SELECTION_VERSION,
                 "report_data_as_of": report_key,
+                "overlay_revision": overlay_revision,
                 "symbols": [item.symbol for item in selections],
             },
         )
@@ -367,6 +402,55 @@ class AutonomousCampaignController:
         )
         await self._notify_prices(authorization, selections)
         return mandate
+
+    def _load_intraday_overlay(
+        self,
+        report_key: str,
+        now: datetime,
+    ) -> IntradayOverlayPayload | None:
+        path = self.settings.intraday_overlay_path
+        if not path.exists():
+            return None
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return None
+            observed_at = datetime.fromisoformat(str(raw["observed_at"]))
+            raw_rows = raw["rows"]
+            if not isinstance(raw_rows, list):
+                return None
+            if observed_at.tzinfo is None:
+                return None
+            if str(raw["report_data_as_of"]) != report_key:
+                return None
+            rows: list[IntradayOverlayRow] = []
+            for item in raw_rows:
+                if not isinstance(item, dict) or not item.get("symbol"):
+                    continue
+                row = IntradayOverlayRow(
+                    symbol=str(item["symbol"]),
+                    live_rank_14d=int(str(item["live_rank_14d"])),
+                    live_price=int(str(item["live_price"])),
+                    live_position_pct=Decimal(str(item["live_position_pct"])),
+                )
+                if (
+                    len(row["symbol"]) != 6
+                    or not row["symbol"].isdigit()
+                    or not 1 <= row["live_rank_14d"] <= 200
+                    or row["live_price"] <= 0
+                ):
+                    continue
+                rows.append(row)
+            symbols = {row["symbol"] for row in rows}
+            if int(str(raw["coverage"])) < 180 or len(rows) < 180 or len(symbols) < 180:
+                return None
+            max_age = timedelta(seconds=self.settings.intraday_overlay_interval_seconds + 300)
+            age = now.astimezone(UTC) - observed_at.astimezone(UTC)
+            if age > max_age or age < -timedelta(minutes=2):
+                return None
+            return {"revision": str(raw["revision"]), "rows": rows}
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            return None
 
     def _blocking_reason(
         self,

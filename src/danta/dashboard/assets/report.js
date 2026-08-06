@@ -612,6 +612,50 @@
     renderSortHeaders();
   }
 
+  async function refreshIntradayOverlay() {
+    try {
+      const response = await fetch(`./intraday_overlay.json?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const overlay = await response.json();
+      if (overlay.report_data_as_of !== report.data_as_of
+          || Number(overlay.coverage) < 180
+          || !Array.isArray(overlay.rows)
+          || overlay.rows.length < 180) return;
+      const byCode = new Map(candidates.map((candidate) => [candidate.code, candidate]));
+      const metricFields = [
+        "box_low", "box_high", "target_price_10pct", "amplitude_pct",
+        "average_up_swing_pct", "up_swing_count", "average_time_to_6pct_hours",
+        "median_daily_range_pct", "max_daily_range_pct", "median_daily_rebound_pct",
+        "max_daily_rebound_pct", "reach_days_5pct", "reach_days_10pct",
+        "reach_days_15pct", "current_vs_window_high_pct", "lower_trend_pct",
+        "closes", "chart_bars",
+      ];
+      overlay.rows.forEach((row) => {
+        const candidate = byCode.get(row.symbol);
+        if (!candidate || !candidate.windows?.["14"]) return;
+        candidate.current_price = row.live_price;
+        const metrics = candidate.windows["14"];
+        metrics.rank = row.live_rank_14d;
+        metrics.position_pct = row.live_position_pct;
+        metricFields.forEach((field) => {
+          if (Object.hasOwn(row, field)) metrics[field] = row[field];
+        });
+        if (Array.isArray(row.closes) && row.closes.length > 1) {
+          const first = Number(row.closes[0]);
+          const last = Number(row.closes[row.closes.length - 1]);
+          if (first > 0) metrics.return_pct = ((last / first) - 1) * 100;
+        }
+        metrics.lower_trend = Number(row.lower_trend_pct) >= 0 ? "상승" : "하락";
+      });
+      $("#dataAsOf").textContent = `기준 ${formatDate(report.data_as_of)} · 장중 ${formatDate(overlay.observed_at)}`;
+      renderAll();
+    } catch {
+      // Static Pages keeps the last complete 16:00 report when overlay fetch fails.
+    }
+  }
+
   $$("[data-sort-key] button").forEach((button) => button.addEventListener("click", () => {
     const key = button.closest("[data-sort-key]").dataset.sortKey;
     if (state.sortKey !== key) {
@@ -742,4 +786,6 @@
     $("#reviewCommentHeader").textContent = "에이전트 코멘트";
   }
   renderAll();
+  void refreshIntradayOverlay();
+  window.setInterval(refreshIntradayOverlay, 300000);
 })();

@@ -34,6 +34,7 @@ from danta.services.autonomous_campaign import (
 )
 from danta.services.capital_allocator import CapitalAllocator
 from danta.services.command_store import CommandStatus, FileCommandStore, StoredCommand
+from danta.services.intraday_candidate_overlay import IntradayCandidateOverlay
 from danta.services.market_data_router import MarketDataRouter
 from danta.services.market_guard import MarketGuardDecision
 from danta.services.market_session import (
@@ -501,6 +502,15 @@ class TradingApplication:
                         ).run(),
                         name="danta-autonomous-campaign",
                     )
+                    if self.settings.intraday_overlay_enabled:
+                        group.create_task(
+                            IntradayCandidateOverlay(
+                                settings=self.settings,
+                                broker=broker,
+                                repository=repository,
+                            ).run(),
+                            name="danta-intraday-candidate-overlay",
+                        )
                     group.create_task(pump.run(), name="danta-order-pump")
                     group.create_task(
                         self._poll_orders(
