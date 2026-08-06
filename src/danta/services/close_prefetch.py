@@ -3,24 +3,19 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from danta.adapters.kis.client import KisClient
-from danta.adapters.krx.client import PykrxMarketDataClient
 from danta.config import (
     AppSettings,
     load_kis_credentials,
-    load_krx_environment,
 )
+from danta.db.session import create_engine_and_session
 from danta.services.daily_operations import _exclusive_lock
-from danta.services.intraday_report import (
-    MinuteBarStore,
-    backfill_minute_bars,
-    market_cap_top_universe,
-)
+from danta.services.intraday_candidate_overlay import IntradayCandidateOverlay
+from danta.services.runtime_repository import SqlRuntimeRepository
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -60,34 +55,42 @@ async def run_close_prefetch(
             symbol_count=0,
         )
     with _exclusive_lock(settings.daily_run_root / "close-prefetch.lock"):
-        load_krx_environment(settings)
-        dataset = PykrxMarketDataClient().collect(required_days=21)
-        if dataset.trading_dates[-1] != current.date() and not force:
-            return ClosePrefetchResult(
-                status="NON_TRADING_DAY",
-                trade_date=trade_date,
-                completed_at=datetime.now(KST).isoformat(),
-                symbol_count=0,
-            )
-        universe = market_cap_top_universe(dataset, limit=200)
         credentials = load_kis_credentials(settings)
-        async with KisClient(
-            credentials,
-            token_cache_path=Path("data/kis-token-cache.json"),
-        ) as client:
-            await backfill_minute_bars(
-                client,
-                MinuteBarStore(Path("data/intraday/1m")),
-                universe,
-                [current.date()],
-                window_days=7,
-                progress=emit,
-            )
+        engine, session_factory = create_engine_and_session(settings.database_url)
+        try:
+            async with KisClient(
+                credentials,
+                token_cache_path=settings.kis_token_cache_path,
+            ) as client:
+                reference = await client.daily_bars(
+                    "005930",
+                    start_date=current.strftime("%Y%m%d"),
+                    end_date=current.strftime("%Y%m%d"),
+                )
+                if not any(item.trading_date == current.strftime("%Y%m%d") for item in reference):
+                    return ClosePrefetchResult(
+                        status="NON_TRADING_DAY",
+                        trade_date=trade_date,
+                        completed_at=datetime.now(KST).isoformat(),
+                        symbol_count=0,
+                    )
+                emit("collecting and publishing final 15:30 KIS intraday overlay")
+                payload = await IntradayCandidateOverlay(
+                    settings=settings,
+                    broker=client,
+                    repository=SqlRuntimeRepository(session_factory),
+                ).refresh(current.astimezone(UTC))
+        finally:
+            await engine.dispose()
+        coverage = payload.get("coverage")
+        if not isinstance(coverage, int):
+            raise RuntimeError("final intraday overlay did not report integer coverage")
+        symbol_count = coverage
         result = ClosePrefetchResult(
             status="COMPLETED",
             trade_date=trade_date,
             completed_at=datetime.now(KST).isoformat(),
-            symbol_count=len(universe),
+            symbol_count=symbol_count,
         )
         temporary = marker.with_suffix(".tmp")
         temporary.write_text(

@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Runner = Join-Path $ProjectRoot "scripts\run_daily_refresh.ps1"
+$PrefetchRunner = Join-Path $ProjectRoot "scripts\run_close_prefetch.ps1"
 $DailyCloseRunner = Join-Path $ProjectRoot "scripts\run_daily_close.ps1"
 $PowerShell = (Get-Command powershell.exe).Source
 $Action = New-ScheduledTaskAction `
@@ -15,7 +16,7 @@ $Action = New-ScheduledTaskAction `
     -WorkingDirectory $ProjectRoot
 $PrefetchAction = New-ScheduledTaskAction `
     -Execute $PowerShell `
-    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command `"Set-Location -LiteralPath '$ProjectRoot'; & '$ProjectRoot\.venv\Scripts\danta.exe' close-prefetch`"" `
+    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PrefetchRunner`"" `
     -WorkingDirectory $ProjectRoot
 $DailyCloseAction = New-ScheduledTaskAction `
     -Execute $PowerShell `
