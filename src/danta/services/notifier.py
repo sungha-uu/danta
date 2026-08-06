@@ -129,8 +129,35 @@ class SmtpNotifier:
         message = EmailMessage()
         message["From"] = self._config.sender
         message["To"] = ", ".join(self._config.recipients)
-        message["Subject"] = "자율 모의투자 종목 선정완료."
+        message["Subject"] = "자율매매 종목 선정완료."
         _set_utf8_content(message, "\n".join(lines))
+        self._deliver(message)
+        return NotificationReceipt(recipient_count=len(self._config.recipients))
+
+    def send_autonomous_entry_paused(
+        self,
+        *,
+        reason: str,
+        dashboard_url: str,
+    ) -> NotificationReceipt:
+        reason_labels = {
+            "MARKET_RESUME_CONFIRMATION_REQUIRED": "시장 위험 재개 확인 대기",
+            "MARKET_RISK_NOT_NORMAL": "현재 시장 상태가 정상 단계가 아님",
+            "KILL_SWITCH_ACTIVE": "자율매매 신규진입 중지 스위치 활성",
+            "ORCHESTRATOR_NOT_READY": "거래 코어 준비 상태 이상",
+        }
+        label = reason_labels.get(reason, reason)
+        message = EmailMessage()
+        message["From"] = self._config.sender
+        message["To"] = ", ".join(self._config.recipients)
+        message["Subject"] = "자율매매 신규진입 보류."
+        _set_utf8_content(
+            message,
+            "현재 신규 종목 선정·지정가 산정·자동매수를 보류합니다.\n"
+            f"사유: {label}\n"
+            "기존 보유종목의 손절·익절 보호 감시는 계속됩니다.\n"
+            f"시장 현황: {dashboard_url}",
+        )
         self._deliver(message)
         return NotificationReceipt(recipient_count=len(self._config.recipients))
 

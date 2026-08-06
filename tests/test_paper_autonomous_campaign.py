@@ -25,6 +25,7 @@ class _RecordingNotifier:
     def __init__(self) -> None:
         self.prices: list[tuple[str, int]] = []
         self.selections: list[tuple[str, str, int, object]] = []
+        self.paused_reasons: list[str] = []
         self.calls: list[str] = []
 
     def send_autonomous_selection_completed(
@@ -43,6 +44,17 @@ class _RecordingNotifier:
         self.calls.append("prices")
         return SimpleNamespace(recipient_count=1)
 
+    def send_autonomous_entry_paused(
+        self,
+        *,
+        reason: str,
+        dashboard_url: str,
+    ) -> SimpleNamespace:
+        assert dashboard_url.startswith("https://")
+        self.paused_reasons.append(reason)
+        self.calls.append("paused")
+        return SimpleNamespace(recipient_count=1)
+
 
 class _LiveQuoteBroker:
     async def current_price(self, symbol: str) -> Quote:
@@ -57,6 +69,15 @@ class _LiveQuoteBroker:
             change_rate=None,
             raw_timestamp=None,
         )
+
+
+class _RiskChangingBroker(_LiveQuoteBroker):
+    def __init__(self, core: SimpleNamespace) -> None:
+        self.core = core
+
+    async def current_price(self, symbol: str) -> Quote:
+        self.core.market_risk = MarketRisk.CAUTION
+        return await super().current_price(symbol)
 
 
 def _credentials(environment: str = "paper") -> KisCredentials:
@@ -164,6 +185,45 @@ async def test_controller_submits_one_agent_reviewed_batch_per_report(
 
 
 @pytest.mark.asyncio
+async def test_market_change_during_quote_collection_blocks_submission(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "reviewed.json"
+    shutil.copy(Path("data/candidate_intraday_ai_report.json"), report)
+    authorization_path = tmp_path / "campaign.json"
+    now = datetime(2026, 8, 6, 1, 0, tzinfo=UTC)
+    write_campaign_authorization(
+        create_campaign_authorization(now=now - timedelta(minutes=1)),
+        authorization_path,
+    )
+    settings = AppSettings(
+        paper_autonomous_campaign_path=authorization_path,
+        paper_autonomous_kill_switch_path=tmp_path / "STOP",
+        paper_autonomous_report_path=report,
+    )
+    core = SimpleNamespace(
+        positions={},
+        submitted={},
+        market_risk=MarketRisk.NORMAL,
+        market_guard_initialized=True,
+        market_entry_resume_required=False,
+        orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
+    )
+    store = FileCommandStore(tmp_path / "commands")
+    controller = PaperAutonomousCampaignController(
+        settings=settings,
+        credentials=_credentials(),
+        command_store=store,
+        core=core,  # type: ignore[arg-type]
+        repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
+        broker=_RiskChangingBroker(core),  # type: ignore[arg-type]
+    )
+
+    assert await controller.tick(now) is None
+    assert store.load_active() is None
+
+
+@pytest.mark.asyncio
 async def test_kill_switch_blocks_only_new_campaign_mandate(
     tmp_path: Path,
 ) -> None:
@@ -196,3 +256,40 @@ async def test_kill_switch_blocks_only_new_campaign_mandate(
         repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
     )
     assert await controller.tick(now) is None
+
+
+@pytest.mark.asyncio
+async def test_market_pause_email_is_sent_once_per_trading_day(
+    tmp_path: Path,
+) -> None:
+    authorization_path = tmp_path / "campaign.json"
+    now = datetime(2026, 8, 6, 1, 0, tzinfo=UTC)  # 10:00 KST
+    write_campaign_authorization(
+        create_campaign_authorization(now=now - timedelta(minutes=1)),
+        authorization_path,
+    )
+    settings = AppSettings(
+        paper_autonomous_campaign_path=authorization_path,
+        paper_autonomous_kill_switch_path=tmp_path / "STOP",
+    )
+    notifier = _RecordingNotifier()
+    controller = PaperAutonomousCampaignController(
+        settings=settings,
+        credentials=_credentials(),
+        command_store=FileCommandStore(tmp_path / "commands"),
+        core=SimpleNamespace(  # type: ignore[arg-type]
+            positions={},
+            submitted={},
+            market_risk=MarketRisk.CAUTION,
+            market_entry_resume_required=False,
+            orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
+        ),
+        repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
+        notifier=notifier,  # type: ignore[arg-type]
+    )
+
+    assert await controller.tick(now) is None
+    assert await controller.tick(now + timedelta(minutes=1)) is None
+
+    assert notifier.paused_reasons == ["MARKET_RISK_NOT_NORMAL"]
+    assert notifier.calls == ["paused"]

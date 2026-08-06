@@ -150,13 +150,36 @@ def test_autonomous_selection_notification_is_simple_and_exact(
 
     message = FakeSmtp.instances[-1].message
     assert message is not None
-    assert message["Subject"] == "자율 모의투자 종목 선정완료."
+    assert message["Subject"] == "자율매매 종목 선정완료."
     plain_body = message.get_body(preferencelist=("plain",))
     assert plain_body is not None
     assert plain_body.get_content().strip() == (
         "SK하이닉스 STRONG_RECOMMEND 1,450,000원 박스위치 18.2%\n"
         "삼성전자 RECOMMEND 208,500원 박스위치 31.0%"
     )
+
+
+def test_autonomous_entry_paused_notification_explains_the_block(
+    monkeypatch: object,
+) -> None:
+    from pytest import MonkeyPatch
+
+    assert isinstance(monkeypatch, MonkeyPatch)
+    FakeSmtp.instances.clear()
+    monkeypatch.setattr("smtplib.SMTP_SSL", FakeSmtp)
+
+    SmtpNotifier(_config(use_ssl=True)).send_autonomous_entry_paused(
+        reason="MARKET_RISK_NOT_NORMAL",
+        dashboard_url="https://example.test/market/",
+    )
+
+    message = FakeSmtp.instances[-1].message
+    assert message is not None
+    assert message["Subject"] == "자율매매 신규진입 보류."
+    plain_body = message.get_body(preferencelist=("plain",))
+    assert plain_body is not None
+    assert "현재 시장 상태가 정상 단계가 아님" in plain_body.get_content()
+    assert "기존 보유종목의 손절·익절 보호 감시는 계속" in plain_body.get_content()
 
 
 def test_stop_loss_notification_contains_fill_and_return(monkeypatch: object) -> None:

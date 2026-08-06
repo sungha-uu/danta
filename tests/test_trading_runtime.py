@@ -88,6 +88,24 @@ def exit_policy() -> ExitPolicy:
     )
 
 
+@pytest.mark.asyncio
+async def test_market_guard_is_not_initialized_until_first_snapshot() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+
+    assert not core.market_guard_initialized
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0.1"))
+    assert core.market_guard_initialized
+
+
 def trade(price: int, now: datetime) -> TradeTick:
     return TradeTick(
         symbol="005930",

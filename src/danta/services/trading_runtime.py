@@ -100,6 +100,7 @@ class TradingRuntimeCore:
         self.box_valid: dict[str, bool] = {}
         self.market_risk = MarketRisk.NORMAL
         self.market_stress_score = Decimal("0")
+        self.market_guard_initialized = False
         self.market_entry_resume_required = False
 
     async def activate_mandate(
@@ -140,6 +141,7 @@ class TradingRuntimeCore:
             raise ValueError("stress_score must be between 0 and 1")
         self.market_risk = risk
         self.market_stress_score = stress_score
+        self.market_guard_initialized = True
 
     def require_market_entry_resume_confirmation(self) -> None:
         """Latch new entries off until an explicit operator acknowledgement."""

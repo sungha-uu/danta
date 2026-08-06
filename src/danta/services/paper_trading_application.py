@@ -28,6 +28,7 @@ from danta.domain.trading_session import (
     SymbolSession,
     SymbolState,
 )
+from danta.ports.broker import AccountPosition
 from danta.services.autonomous_campaign import (
     AutonomousCampaignController,
 )
@@ -91,6 +92,25 @@ def _ensure_market_resume_latch(
     )
     temporary.replace(path)
     return True
+
+
+def _market_monitor_error_requires_latch(observed_at: datetime) -> bool:
+    """Only a regular-session sensing failure may persistently stop new entries."""
+    return trading_session_phase(observed_at) is TradingSessionPhase.KRX_REGULAR
+
+
+def _recovery_capital_snapshot(
+    available_cash: int,
+    broker_positions: list[AccountPosition],
+    mandate_symbols: set[str],
+) -> int:
+    """Rebuild the mandate's capital base without treating held value as new cash."""
+    held_cost = sum(
+        int(position.average_price * position.quantity)
+        for position in broker_positions
+        if position.symbol in mandate_symbols
+    )
+    return available_cash + held_cost
 
 
 class TradingApplication:
@@ -320,7 +340,15 @@ class TradingApplication:
                     reference.symbol,
                     reference_price=reference.entry_target_price_krw,
                 )
-                await core.activate_mandate(self.mandate, orderable_cash=cash.amount)
+                recovery_capital = _recovery_capital_snapshot(
+                    cash.amount,
+                    broker_positions,
+                    set(mandate_symbols),
+                )
+                await core.activate_mandate(
+                    self.mandate,
+                    orderable_cash=recovery_capital,
+                )
                 completed_symbols: set[str] = set()
                 if active_command is not None:
                     accepted_at = active_command.accepted_at
@@ -347,6 +375,7 @@ class TradingApplication:
                     payload={
                         "symbols": list(core.signals),
                         "orderable_cash": cash.amount,
+                        "recovery_capital_snapshot": recovery_capital,
                         "entry_policy": self.policies.entry.version,
                         "exit_policy": self.policies.exit.version,
                     },
@@ -933,17 +962,25 @@ class TradingApplication:
             except Exception as exc:
                 # A broken market-wide feed blocks only new entries. Position
                 # monitoring and protective exits continue in their own tasks.
-                core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("1"))
-                core.require_market_entry_resume_confirmation()
-                _ensure_market_resume_latch(
-                    self.settings.market_entry_resume_required_path,
-                    level=MarketWideRiskLevel.RISK_OFF,
-                    reasons=("MARKET_WIDE_MONITOR_ERROR",),
-                )
+                observed_at = datetime.now(UTC)
+                latch_required = _market_monitor_error_requires_latch(observed_at)
+                if latch_required:
+                    core.set_market_guard(MarketRisk.RISK_OFF, stress_score=Decimal("1"))
+                    core.require_market_entry_resume_confirmation()
+                    _ensure_market_resume_latch(
+                        self.settings.market_entry_resume_required_path,
+                        level=MarketWideRiskLevel.RISK_OFF,
+                        reasons=("MARKET_WIDE_MONITOR_ERROR",),
+                    )
                 await repository.audit(
                     "MARKET_WIDE_MONITOR_ERROR",
                     correlation_id=self.correlation_id,
-                    payload={"error": type(exc).__name__},
+                    payload={
+                        "error": type(exc).__name__,
+                        "detail": str(exc)[:240],
+                        "session_phase": trading_session_phase(observed_at).value,
+                        "persistent_entry_latch": latch_required,
+                    },
                 )
             elapsed = loop.time() - started
             await asyncio.sleep(max(1.0, poll_interval - elapsed))

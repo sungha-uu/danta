@@ -71,6 +71,7 @@ class AutonomousCampaignState(BaseModel):
     campaign_id: str
     submitted_reports: list[str] = Field(default_factory=list, max_length=100)
     daily_batches: dict[str, int] = Field(default_factory=dict)
+    notification_keys: list[str] = Field(default_factory=list, max_length=100)
     updated_at: datetime
 
 
@@ -176,6 +177,7 @@ class AutonomousCampaignController:
         authorization = load_campaign_authorization(self.settings, self.credentials)
         if authorization is None:
             return None
+        state = self._load_state(authorization)
         reason = self._blocking_reason(authorization, now)
         if reason is not None:
             if reason != self._last_block_reason:
@@ -184,6 +186,7 @@ class AutonomousCampaignController:
                     correlation_id=authorization.campaign_id,
                     payload={"reason": reason},
                 )
+                await self._notify_entry_paused(authorization, state, reason, now)
                 self._last_block_reason = reason
             return None
         self._last_block_reason = None
@@ -201,7 +204,6 @@ class AutonomousCampaignController:
             await self._blocked(authorization, "LIVE_QUOTE_PROVIDER_UNAVAILABLE")
             return None
 
-        state = self._load_state(authorization)
         trading_day = now.astimezone(KST).date().isoformat()
         if report_key in state.submitted_reports:
             return None
@@ -313,6 +315,13 @@ class AutonomousCampaignController:
         if not selections:
             await self._blocked(authorization, "NO_VALID_SELECTIONS")
             return None
+        # Quote collection may overlap a market-state transition. Re-check at
+        # the durable command boundary instead of trusting the earlier state.
+        reason = self._blocking_reason(authorization, now)
+        if reason is not None:
+            await self._blocked(authorization, reason)
+            self._last_block_reason = reason
+            return None
         total = sum((item.allocation_pct for item in selections), Decimal("0"))
         mandate = EntryMandate(
             report_data_as_of=report.data_as_of,
@@ -376,6 +385,8 @@ class AutonomousCampaignController:
             return "ACCOUNT_NOT_FLAT"
         if self.core.orchestrator.state is not OrchestratorState.RUNNING:
             return "ORCHESTRATOR_NOT_READY"
+        if not getattr(self.core, "market_guard_initialized", True):
+            return "MARKET_GUARD_NOT_INITIALIZED"
         if self.core.market_entry_resume_required:
             return "MARKET_RESUME_CONFIRMATION_REQUIRED"
         if self.core.market_risk is not MarketRisk.NORMAL:
@@ -428,6 +439,64 @@ class AutonomousCampaignController:
                     "AUTONOMOUS_PRICE_EMAIL_ERROR",
                     correlation_id=authorization.campaign_id,
                     payload={
+                        "attempt": attempt + 1,
+                        "error": type(exc).__name__,
+                    },
+                )
+                if attempt < len(retry_delays):
+                    await asyncio.sleep(retry_delays[attempt])
+
+    async def _notify_entry_paused(
+        self,
+        authorization: AutonomousCampaignAuthorization,
+        state: AutonomousCampaignState,
+        reason: str,
+        now: datetime,
+    ) -> None:
+        notify_reasons = {
+            "MARKET_RESUME_CONFIRMATION_REQUIRED",
+            "MARKET_RISK_NOT_NORMAL",
+            "KILL_SWITCH_ACTIVE",
+            "ORCHESTRATOR_NOT_READY",
+        }
+        if reason not in notify_reasons:
+            return
+        notification_key = f"{now.astimezone(KST).date().isoformat()}:ENTRY_PAUSED"
+        if notification_key in state.notification_keys:
+            return
+        if self.notifier is None:
+            await self.repository.audit(
+                "AUTONOMOUS_ENTRY_PAUSED_EMAIL_SKIPPED",
+                correlation_id=authorization.campaign_id,
+                payload={"reason": "SMTP_DISABLED_OR_UNAVAILABLE"},
+            )
+            return
+        retry_delays = (2.0, 10.0)
+        for attempt in range(3):
+            try:
+                receipt = await asyncio.to_thread(
+                    self.notifier.send_autonomous_entry_paused,
+                    reason=reason,
+                    dashboard_url=self.settings.market_dashboard_public_url,
+                )
+                state.notification_keys.append(notification_key)
+                state.updated_at = now
+                _atomic_json(self.state_path, state.model_dump(mode="json"))
+                await self.repository.audit(
+                    "AUTONOMOUS_ENTRY_PAUSED_EMAIL_SENT",
+                    correlation_id=authorization.campaign_id,
+                    payload={
+                        "reason": reason,
+                        "recipient_count": receipt.recipient_count,
+                    },
+                )
+                return
+            except (NotificationError, OSError) as exc:
+                await self.repository.audit(
+                    "AUTONOMOUS_ENTRY_PAUSED_EMAIL_ERROR",
+                    correlation_id=authorization.campaign_id,
+                    payload={
+                        "reason": reason,
                         "attempt": attempt + 1,
                         "error": type(exc).__name__,
                     },

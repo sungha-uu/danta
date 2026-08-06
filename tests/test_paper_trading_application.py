@@ -9,10 +9,36 @@ import pytest
 
 from danta.adapters.kis.client import KisApiError
 from danta.domain.trading_session import IntentSide
+from danta.ports.broker import AccountPosition
 from danta.services import paper_trading_application as application_module
 from danta.services.command_store import CommandStatus, StoredCommand
 from danta.services.paper_trading_application import PaperTradingApplication
 from danta.services.trade_notification_outbox import TradeNotificationOutbox
+
+
+def test_market_monitor_error_latches_only_during_regular_session() -> None:
+    assert not application_module._market_monitor_error_requires_latch(
+        datetime(2026, 8, 5, 20, 30, tzinfo=UTC)  # 05:30 KST
+    )
+    assert application_module._market_monitor_error_requires_latch(
+        datetime(2026, 8, 6, 0, 30, tzinfo=UTC)  # 09:30 KST
+    )
+
+
+def test_recovery_capital_includes_held_cost_without_exposing_it_as_cash() -> None:
+    positions = [
+        AccountPosition("475150", 30, 30, Decimal("54800")),
+        AccountPosition("322000", 12, 12, Decimal("129500")),
+        AccountPosition("999999", 1, 1, Decimal("500000")),
+    ]
+
+    recovered = application_module._recovery_capital_snapshot(
+        125_000,
+        positions,
+        {"475150", "322000"},
+    )
+
+    assert recovered == 125_000 + (30 * 54_800) + (12 * 129_500)
 
 
 class _RateLimitedBroker:
