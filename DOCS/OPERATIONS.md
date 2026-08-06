@@ -10,6 +10,25 @@
 - 런타임 시작 조건: Alembic `0005_fill_ledger`, 실전 정책 승인, 실전 캠페인, KIS/DB 대조 PASS
 - 모의투자 예약 작업은 `Danta-Daily-Close-1535` 실계좌 마감 작업으로 교체했다.
 
+### 다음 거래일 우선 종목 예약
+
+다음 거래일에 자율매매가 먼저 검토할 종목은 비공개 명령으로 최대 3개까지
+예약한다. 아래 예시는 2026-08-07에 SK하이닉스를 우선 검토한다.
+
+```powershell
+.\.venv\Scripts\danta.exe autonomy prefer --symbols 000660 --trading-date 2026-08-07 --execute
+.\.venv\Scripts\danta.exe autonomy status
+```
+
+예약을 취소할 때는 다음을 실행한다.
+
+```powershell
+.\.venv\Scripts\danta.exe autonomy clear-preference --execute
+```
+
+이 예약은 해당 거래일 후보 정렬만 바꾼다. 추천 등급, 시장 위험, 데이터 신선도,
+계좌 대조와 진입 엔진을 통과하지 못하면 지정가나 주문을 강제로 만들지 않는다.
+
 ### 2026-07-29 지정가 이메일 작업 사용량 기록
 
 - 측정시각: 2026-07-29 08:27 KST

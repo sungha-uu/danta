@@ -5,7 +5,7 @@ import asyncio
 import json
 import sys
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -30,9 +30,13 @@ from danta.services.active_box_walk_forward import run_active_box_walk_forward
 from danta.services.ai_review import apply_ai_review, load_ai_review
 from danta.services.assurance import build_assurance_report, write_assurance_report
 from danta.services.autonomous_campaign import (
+    AutonomousCandidatePreference,
+    candidate_preference_path,
     create_campaign_authorization,
     load_campaign_authorization,
+    read_candidate_preference,
     write_campaign_authorization,
+    write_candidate_preference,
 )
 from danta.services.candidate_report import CandidateReportError, build_quant_report
 from danta.services.candidate_validation import (
@@ -287,9 +291,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     autonomy.add_argument(
         "action",
-        choices=("authorize", "stop", "resume", "status"),
+        choices=("authorize", "stop", "resume", "status", "prefer", "clear-preference"),
     )
     autonomy.add_argument("--days", type=int, default=90)
+    autonomy.add_argument(
+        "--symbols",
+        nargs="+",
+        help="one to three six-digit symbols to prioritize for one trading day",
+    )
+    autonomy.add_argument(
+        "--trading-date",
+        type=date.fromisoformat,
+        help="preference date in YYYY-MM-DD; defaults to the next weekday",
+    )
     autonomy.add_argument(
         "--execute",
         action="store_true",
@@ -348,6 +362,13 @@ def _parser() -> argparse.ArgumentParser:
         help="commit and push both configured GitHub Pages repositories",
     )
     return parser
+
+
+def _next_weekday(current: date) -> date:
+    candidate = current + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
 
 
 async def _doctor(live: bool, symbol: str) -> int:
@@ -434,6 +455,35 @@ def main() -> None:
                     )
                 )
                 return
+            if args.action == "prefer":
+                if not args.execute:
+                    raise PermissionError("candidate preference requires --execute")
+                symbols = tuple(args.symbols or ())
+                local_now = datetime.now().astimezone()
+                trading_date = args.trading_date or _next_weekday(local_now.date())
+                preference = AutonomousCandidatePreference(
+                    trading_date=trading_date,
+                    symbols=symbols,
+                    created_at=local_now,
+                )
+                write_candidate_preference(
+                    preference,
+                    candidate_preference_path(settings),
+                )
+                print(
+                    json.dumps(
+                        preference.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return
+            if args.action == "clear-preference":
+                if not args.execute:
+                    raise PermissionError("clearing candidate preference requires --execute")
+                candidate_preference_path(settings).unlink(missing_ok=True)
+                print("autonomous candidate preference cleared")
+                return
             if args.action == "stop":
                 settings.autonomous_kill_switch_path.parent.mkdir(
                     parents=True,
@@ -457,6 +507,7 @@ def main() -> None:
                 print("autonomous new entries resumed")
                 return
             loaded_authorization = load_campaign_authorization(settings, credentials)
+            loaded_preference = read_candidate_preference(settings)
             print(
                 json.dumps(
                     {
@@ -466,6 +517,11 @@ def main() -> None:
                             else loaded_authorization.model_dump(mode="json")
                         ),
                         "kill_switch": (settings.autonomous_kill_switch_path.exists()),
+                        "candidate_preference": (
+                            None
+                            if loaded_preference is None
+                            else loaded_preference.model_dump(mode="json")
+                        ),
                     },
                     ensure_ascii=False,
                     indent=2,

@@ -16,10 +16,13 @@ from danta.domain.trading_session import OrchestratorState
 from danta.ports.broker import Quote
 from danta.services.command_store import CommandStatus, FileCommandStore
 from danta.services.paper_autonomous_campaign import (
+    AutonomousCandidatePreference,
     PaperAutonomousCampaignController,
+    candidate_preference_path,
     create_campaign_authorization,
     load_campaign_authorization,
     write_campaign_authorization,
+    write_candidate_preference,
 )
 
 
@@ -276,10 +279,36 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
     store.archive_active(first.command_id, status=CommandStatus.COMPLETED, reason="TEST")
 
     later = now + timedelta(minutes=30)
+    preferred = next(candidate for candidate in eligible if candidate.code != chosen.code)
+    write_candidate_preference(
+        AutonomousCandidatePreference(
+            trading_date=later.astimezone().date(),
+            symbols=(preferred.code,),
+            created_at=later,
+        ),
+        candidate_preference_path(settings),
+    )
     write_overlay("revision-2", later)
     second = await controller.tick(later)
     assert second is not None
     assert second.command_id != first.command_id
+    assert second.selections[0].symbol == preferred.code
+
+
+def test_candidate_preference_rejects_duplicate_or_invalid_symbols() -> None:
+    now = datetime(2026, 8, 6, tzinfo=UTC)
+    with pytest.raises(ValueError, match="unique"):
+        AutonomousCandidatePreference(
+            trading_date=now.date(),
+            symbols=("000660", "000660"),
+            created_at=now,
+        )
+    with pytest.raises(ValueError, match="six digits"):
+        AutonomousCandidatePreference(
+            trading_date=now.date(),
+            symbols=("660",),
+            created_at=now,
+        )
 
 
 @pytest.mark.asyncio

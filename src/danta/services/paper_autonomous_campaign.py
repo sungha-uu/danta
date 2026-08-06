@@ -10,7 +10,7 @@ from typing import Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from danta.adapters.kis.client import KisApiError, KisClient
 from danta.config import AppSettings, KisCredentials, TradingEnvironment
@@ -85,6 +85,69 @@ class AutonomousCampaignState(BaseModel):
     daily_batches: dict[str, int] = Field(default_factory=dict)
     notification_keys: list[str] = Field(default_factory=list, max_length=100)
     updated_at: datetime
+
+
+class AutonomousCandidatePreference(BaseModel):
+    """One-day user preference that changes candidate ordering, not safety gates."""
+
+    schema_version: Literal[1] = 1
+    authority: Literal["USER_CANDIDATE_PREFERENCE"] = "USER_CANDIDATE_PREFERENCE"
+    trading_date: date
+    symbols: tuple[str, ...] = Field(min_length=1, max_length=3)
+    created_at: datetime
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(values)) != len(values):
+            raise ValueError("preference symbols must be unique")
+        if any(len(symbol) != 6 or not symbol.isdigit() for symbol in values):
+            raise ValueError("preference symbols must be six digits")
+        return values
+
+    @field_validator("created_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("preference created_at must be timezone-aware")
+        return value
+
+
+def candidate_preference_path(settings: AppSettings) -> Path:
+    return settings.autonomous_campaign_path.with_name(
+        "autonomous_candidate_preference.json"
+    )
+
+
+def write_candidate_preference(
+    preference: AutonomousCandidatePreference,
+    path: Path,
+) -> None:
+    _atomic_json(path, preference.model_dump(mode="json"))
+
+
+def load_candidate_preference(
+    settings: AppSettings,
+    now: datetime,
+) -> AutonomousCandidatePreference | None:
+    preference = read_candidate_preference(settings)
+    if preference is None:
+        return None
+    if preference.trading_date != now.astimezone(KST).date():
+        return None
+    return preference
+
+
+def read_candidate_preference(
+    settings: AppSettings,
+) -> AutonomousCandidatePreference | None:
+    path = candidate_preference_path(settings)
+    if not path.exists():
+        return None
+    preference = AutonomousCandidatePreference.model_validate_json(
+        path.read_text(encoding="utf-8")
+    )
+    return preference
 
 
 def create_campaign_authorization(
@@ -238,6 +301,12 @@ class AutonomousCampaignController:
             and candidate.windows["14"].rank is not None
             and candidate.windows["14"].rank <= 50
         ]
+        preference = load_candidate_preference(self.settings, now)
+        preference_order = (
+            {symbol: index for index, symbol in enumerate(preference.symbols)}
+            if preference is not None
+            else {}
+        )
         live_candidates: list[tuple[int, int, Decimal, CandidateView, int]] = []
         overlay_rows: list[dict[str, object]] = []
         live_rows = (
@@ -299,7 +368,15 @@ class AutonomousCampaignController:
         # AI approval remains mandatory, but repeated-rise rank must decide which
         # approved opportunities receive scarce autonomous slots. Otherwise a
         # low-position rank-40 candidate can displace a rank-2 candidate.
-        live_candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        live_candidates.sort(
+            key=lambda item: (
+                0 if item[3].code in preference_order else 1,
+                preference_order.get(item[3].code, item[0]),
+                item[0],
+                item[1],
+                item[2],
+            )
+        )
         selected = live_candidates[: authorization.max_concurrent_positions]
         if not selected:
             await self._blocked(authorization, "NO_APPROVED_CANDIDATES")
@@ -390,6 +467,10 @@ class AutonomousCampaignController:
                 "report_data_as_of": report_key,
                 "overlay_revision": overlay_revision,
                 "symbols": [item.symbol for item in selections],
+                "preferred_symbols": list(preference_order),
+                "preferred_symbols_selected": [
+                    item.symbol for item in selections if item.symbol in preference_order
+                ],
             },
         )
         selected_positions = {
