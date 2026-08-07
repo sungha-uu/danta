@@ -85,6 +85,46 @@ class _RiskChangingBroker(_LiveQuoteBroker):
         return await super().current_price(symbol)
 
 
+def _write_ready_flow_overlay(
+    report_path: Path,
+    overlay_path: Path,
+    observed_at: datetime,
+    *,
+    revision: str = "test-flow-revision",
+) -> None:
+    report = load_dashboard_report(report_path)
+    candidates = [*report.candidates, *report.extended_watchlist]
+    rows = []
+    for candidate in candidates:
+        metrics = candidate.windows["14"]
+        rows.append(
+            {
+                "symbol": candidate.code,
+                "live_rank_14d": metrics.rank or 200,
+                "live_price": int(candidate.current_price),
+                "live_position_pct": "25.0",
+                "discount_from_window_high_pct": "12.0",
+                "intraday_flow_status": "READY",
+                "intraday_combined_net_qty": 10_000,
+                "intraday_flow_strength_pct": "1.0",
+            }
+        )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "revision": revision,
+                "observed_at": observed_at.isoformat(),
+                "report_data_as_of": report.data_as_of.isoformat(),
+                "coverage": len(rows),
+                "failed_symbols": [],
+                "rows": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _credentials(environment: str = "paper") -> KisCredentials:
     return KisCredentials(
         environment=environment,
@@ -131,13 +171,16 @@ async def test_controller_submits_one_agent_reviewed_batch_per_report(
     report = tmp_path / "reviewed.json"
     shutil.copy(Path("data/candidate_intraday_ai_report.json"), report)
     authorization_path = tmp_path / "campaign.json"
+    overlay_path = tmp_path / "overlay.json"
     now = datetime(2026, 7, 30, 1, 0, tzinfo=UTC)  # 10:00 KST
     authorization = create_campaign_authorization(now=now - timedelta(minutes=1))
     write_campaign_authorization(authorization, authorization_path)
+    _write_ready_flow_overlay(report, overlay_path, now)
     settings = AppSettings(
         paper_autonomous_campaign_path=authorization_path,
         paper_autonomous_kill_switch_path=tmp_path / "STOP",
         paper_autonomous_report_path=report,
+        intraday_overlay_path=overlay_path,
     )
     core = SimpleNamespace(
         positions={},
@@ -220,10 +263,24 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
             "live_rank_14d": 200,
             "live_price": int(candidate.current_price),
             "live_position_pct": "50.0",
+            "discount_from_window_high_pct": "10.0",
+            "intraday_flow_status": "READY",
+            "intraday_combined_net_qty": 10_000,
+            "intraday_flow_strength_pct": "1.0",
         }
         for candidate in candidates
     ]
     chosen = eligible[-1]
+    rejected_outflow = eligible[0]
+    rejected_row = next(row for row in rows if row["symbol"] == rejected_outflow.code)
+    rejected_row.update(
+        {
+            "live_rank_14d": 1,
+            "discount_from_window_high_pct": "40.0",
+            "intraday_combined_net_qty": -50_000,
+            "intraday_flow_strength_pct": "-5.0",
+        }
+    )
     chosen_row = next(row for row in rows if row["symbol"] == chosen.code)
     chosen_row.update(
         {
@@ -237,7 +294,7 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
         overlay_path.write_text(
             json.dumps(
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "revision": revision,
                     "observed_at": observed_at.isoformat(),
                     "report_data_as_of": report.data_as_of.isoformat(),
@@ -274,12 +331,17 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
     first = await controller.tick(now)
     assert first is not None
     assert first.selections[0].symbol == chosen.code
+    assert all(item.symbol != rejected_outflow.code for item in first.selections)
     assert first.selections[0].rank == 1
     store.accept_next()
     store.archive_active(first.command_id, status=CommandStatus.COMPLETED, reason="TEST")
 
     later = now + timedelta(minutes=30)
-    preferred = next(candidate for candidate in eligible if candidate.code != chosen.code)
+    preferred = next(
+        candidate
+        for candidate in eligible
+        if candidate.code not in {chosen.code, rejected_outflow.code}
+    )
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     report_rows = [
         *report_payload["candidates"],

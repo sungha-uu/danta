@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from danta.adapters.kis.client import KisApiError, KisClient
+from danta.adapters.kis.client import KisClient
 from danta.config import AppSettings, KisCredentials, TradingEnvironment
 from danta.dashboard.builder import load_dashboard_report
 from danta.dashboard.models import CandidateView
@@ -26,7 +26,8 @@ from danta.services.runtime_repository import SqlRuntimeRepository
 from danta.services.trading_runtime import TradingRuntimeCore
 
 AUTONOMOUS_GRADES = frozenset({"STRONG_RECOMMEND", "RECOMMEND"})
-AUTONOMOUS_SELECTION_VERSION = "autonomous-intraday-overlay-v2"
+AUTONOMOUS_SELECTION_VERSION = "autonomous-intraday-flow-gated-v3"
+MIN_INTRADAY_COMBINED_FLOW_STRENGTH_PCT = Decimal("0.50")
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -35,6 +36,10 @@ class IntradayOverlayRow(TypedDict):
     live_rank_14d: int
     live_price: int
     live_position_pct: Decimal
+    discount_from_window_high_pct: Decimal
+    intraday_flow_status: str
+    intraday_combined_net_qty: int
+    intraday_flow_strength_pct: Decimal
 
 
 class IntradayOverlayPayload(TypedDict):
@@ -283,6 +288,9 @@ class AutonomousCampaignController:
             return None
 
         overlay = self._load_intraday_overlay(report_key, now)
+        if overlay is None:
+            await self._blocked(authorization, "FRESH_INTRADAY_FLOW_OVERLAY_REQUIRED")
+            return None
         overlay_revision = str(overlay["revision"]) if overlay is not None else None
         submission_key = (
             f"{report_key}|{overlay_revision}" if overlay_revision is not None else report_key
@@ -323,7 +331,9 @@ class AutonomousCampaignController:
                 if candidate.code in preference_order and candidate.code not in eligible_codes
             ]
             eligible.extend(required)
-        live_candidates: list[tuple[int, int, Decimal, CandidateView, int]] = []
+        live_candidates: list[
+            tuple[int, int, Decimal, CandidateView, int, Decimal, Decimal]
+        ] = []
         overlay_rows: list[dict[str, object]] = []
         live_rows = (
             {str(row["symbol"]): row for row in overlay["rows"]}
@@ -339,26 +349,18 @@ class AutonomousCampaignController:
                 live_price = live_row["live_price"]
                 live_rank = live_row["live_rank_14d"]
                 position_pct = live_row["live_position_pct"]
+                discount_from_high_pct = live_row["discount_from_window_high_pct"]
+                flow_status = live_row["intraday_flow_status"]
+                combined_net_qty = live_row["intraday_combined_net_qty"]
+                flow_strength_pct = live_row["intraday_flow_strength_pct"]
             else:
-                try:
-                    quote = await self.broker.current_price(candidate.code)
-                except KisApiError as exc:
-                    await self.repository.audit(
-                        "AUTONOMOUS_LIVE_QUOTE_ERROR",
-                        correlation_id=authorization.campaign_id,
-                        payload={
-                            "symbol": candidate.code,
-                            "error": type(exc).__name__,
-                        },
-                    )
-                    continue
-                live_price = quote.price
-                live_rank = metrics.rank
-                position_pct = (
-                    (Decimal(live_price) - metrics.box_low)
-                    / (metrics.box_high - metrics.box_low)
-                    * Decimal("100")
-                )
+                continue
+            if (
+                flow_status != "READY"
+                or combined_net_qty <= 0
+                or flow_strength_pct < MIN_INTRADAY_COMBINED_FLOW_STRENGTH_PCT
+            ):
+                continue
             grade_priority = 0 if metrics.ai_grade == "STRONG_RECOMMEND" else 1
             live_candidates.append(
                 (
@@ -367,6 +369,8 @@ class AutonomousCampaignController:
                     position_pct,
                     candidate,
                     live_price,
+                    discount_from_high_pct,
+                    flow_strength_pct,
                 )
             )
             overlay_rows.append(
@@ -379,6 +383,9 @@ class AutonomousCampaignController:
                     "ai_grade": metrics.ai_grade,
                     "base_rank_14d": metrics.rank,
                     "live_rank_14d": live_rank,
+                    "discount_from_window_high_pct": str(discount_from_high_pct),
+                    "intraday_combined_net_qty": combined_net_qty,
+                    "intraday_flow_strength_pct": str(flow_strength_pct),
                 }
             )
         # AI approval remains mandatory, but repeated-rise rank must decide which
@@ -387,7 +394,9 @@ class AutonomousCampaignController:
         live_candidates.sort(
             key=lambda item: (
                 0 if item[3].code in preference_order else 1,
-                preference_order.get(item[3].code, item[0]),
+                preference_order.get(item[3].code, 999),
+                -item[5],
+                -item[6],
                 item[0],
                 item[1],
                 item[2],
@@ -493,7 +502,8 @@ class AutonomousCampaignController:
             },
         )
         selected_positions = {
-            candidate.code: position_pct for _, _, position_pct, candidate, _ in selected
+            candidate.code: position_pct
+            for _, _, position_pct, candidate, _, _, _ in selected
         }
         await self._notify_selections(
             authorization,
@@ -532,6 +542,16 @@ class AutonomousCampaignController:
                     live_rank_14d=int(str(item["live_rank_14d"])),
                     live_price=int(str(item["live_price"])),
                     live_position_pct=Decimal(str(item["live_position_pct"])),
+                    discount_from_window_high_pct=Decimal(
+                        str(item["discount_from_window_high_pct"])
+                    ),
+                    intraday_flow_status=str(item["intraday_flow_status"]),
+                    intraday_combined_net_qty=int(
+                        str(item["intraday_combined_net_qty"])
+                    ),
+                    intraday_flow_strength_pct=Decimal(
+                        str(item["intraday_flow_strength_pct"])
+                    ),
                 )
                 if (
                     len(row["symbol"]) != 6

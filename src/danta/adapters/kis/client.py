@@ -29,6 +29,12 @@ INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"
 MARKET_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor-time-by-market"
 PROGRAM_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/investor-program-trade-today"
 DAILY_MARKET_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor-daily-by-market"
+STOCK_INVESTOR_DAILY_PATH = (
+    "/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily"
+)
+STOCK_INVESTOR_ESTIMATE_PATH = (
+    "/uapi/domestic-stock/v1/quotations/investor-trend-estimate"
+)
 
 
 class KisApiError(RuntimeError):
@@ -61,6 +67,34 @@ class KisMinuteBar:
     close: int
     volume: int
     accumulated_trading_value: int
+
+
+@dataclass(frozen=True, slots=True)
+class KisStockInvestorFlow:
+    """One stock's cumulative investor net buying for a trading date.
+
+    KIS reports the monetary fields in KRW million.  The observation is an
+    intraday cumulative snapshot when the requested trading date is today; it
+    is not a tick-by-tick investor feed.
+    """
+
+    trading_date: str
+    personal_million: int
+    foreign_million: int
+    institution_million: int
+    financial_investment_million: int
+    investment_trust_million: int
+    pension_fund_million: int
+
+
+@dataclass(frozen=True, slots=True)
+class KisStockInvestorEstimate:
+    """Latest KIS intraday foreign/institution estimated net-buy quantities."""
+
+    observation_label: str
+    foreign_net_quantity: int
+    institution_net_quantity: int
+    combined_net_quantity: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +447,83 @@ class KisClient:
         if not result:
             raise KisApiError("KIS daily market investor response contained no rows")
         return result
+
+    async def stock_investor_flow(
+        self,
+        symbol: str,
+        *,
+        trading_date: str,
+    ) -> KisStockInvestorFlow:
+        """Return the requested day's cumulative investor flow for one stock."""
+        self._validate_symbol(symbol)
+        self._validate_date(trading_date)
+        body = await self._authorized_request(
+            "GET",
+            STOCK_INVESTOR_DAILY_PATH,
+            tr_id="FHPTJ04160001",
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": trading_date,
+                "FID_ORG_ADJ_PRC": "",
+                "FID_ETC_CLS_CODE": "",
+            },
+        )
+        rows = body.get("output2")
+        if not isinstance(rows, list):
+            raise KisApiError("KIS stock investor response did not include output2")
+        row = next(
+            (
+                item
+                for item in rows
+                if isinstance(item, dict)
+                and str(item.get("stck_bsop_date", "")) == trading_date
+            ),
+            None,
+        )
+        if row is None:
+            raise KisApiError(
+                f"KIS stock investor response did not include {symbol} {trading_date}"
+            )
+        return KisStockInvestorFlow(
+            trading_date=trading_date,
+            personal_million=_response_int(row, "prsn_ntby_tr_pbmn"),
+            foreign_million=_response_int(row, "frgn_ntby_tr_pbmn"),
+            institution_million=_response_int(row, "orgn_ntby_tr_pbmn"),
+            financial_investment_million=_response_int(row, "scrt_ntby_tr_pbmn"),
+            investment_trust_million=_response_int(row, "ivtr_ntby_tr_pbmn"),
+            pension_fund_million=_response_int(row, "fund_ntby_tr_pbmn"),
+        )
+
+    async def stock_investor_estimate(
+        self,
+        symbol: str,
+    ) -> KisStockInvestorEstimate:
+        """Return the latest intraday KIS foreign/institution estimate.
+
+        KIS publishes manually aggregated snapshots a few times per session,
+        rather than a continuous real-time feed.  The most recent output row is
+        therefore used as a freshness-bounded entry signal.
+        """
+        self._validate_symbol(symbol)
+        body = await self._authorized_request(
+            "GET",
+            STOCK_INVESTOR_ESTIMATE_PATH,
+            tr_id="HHPTJ04160200",
+            params={"MKSC_SHRN_ISCD": symbol},
+        )
+        rows = body.get("output2")
+        if not isinstance(rows, list) or not rows:
+            raise KisApiError("KIS stock investor estimate did not include output2")
+        row = next((item for item in rows if isinstance(item, dict)), None)
+        if row is None:
+            raise KisApiError("KIS stock investor estimate output2 is empty")
+        return KisStockInvestorEstimate(
+            observation_label=str(row.get("bsop_hour_gb", "")),
+            foreign_net_quantity=_response_int(row, "frgn_fake_ntby_qty"),
+            institution_net_quantity=_response_int(row, "orgn_fake_ntby_qty"),
+            combined_net_quantity=_response_int(row, "sum_fake_ntby_qty"),
+        )
 
     async def daily_bars(
         self,

@@ -67,6 +67,7 @@ class IntradayCandidateOverlay:
         trading_date = local.strftime("%Y%m%d")
         end_time = min(local.time(), time(15, 30)).strftime("%H%M%S")
         analyses = []
+        current_session_volumes: dict[str, int] = {}
         failures: list[str] = []
         delay = float(self.settings.intraday_overlay_request_interval_seconds)
         for candidate in candidates:
@@ -78,6 +79,7 @@ class IntradayCandidateOverlay:
                 merged = {bar.trading_time: bar for bar in existing}
                 merged.update({bar.trading_time: bar for bar in recent})
                 today = sorted(merged.values(), key=lambda item: item.trading_time)
+                current_session_volumes[candidate.code] = sum(bar.volume for bar in today)
                 self.store.save(candidate.code, trading_date, today)
                 historical = self._historical_bars(candidate.code, trading_date, days=13)
                 analyses.append(_analyze_symbol(candidate.code, [*historical, *today]))
@@ -87,11 +89,34 @@ class IntradayCandidateOverlay:
         if len(analyses) < 180:
             raise RuntimeError(f"intraday overlay coverage too low: {len(analyses)}/200")
         ranked = _score_all(analyses, {})
+        flow_estimates: dict[str, tuple[str, int, int, int, Decimal]] = {}
+        for analysis in ranked[:50]:
+            try:
+                estimate = await self.broker.stock_investor_estimate(analysis.symbol)
+                session_volume = current_session_volumes.get(analysis.symbol, 0)
+                if session_volume <= 0:
+                    raise ValueError("current session volume is not positive")
+                strength = (
+                    Decimal(estimate.combined_net_quantity)
+                    / Decimal(session_volume)
+                    * Decimal("100")
+                )
+                flow_estimates[analysis.symbol] = (
+                    estimate.observation_label,
+                    estimate.foreign_net_quantity,
+                    estimate.institution_net_quantity,
+                    estimate.combined_net_quantity,
+                    strength,
+                )
+            except (KisApiError, ValueError):
+                failures.append(f"{analysis.symbol}:FLOW")
+            await asyncio.sleep(delay)
         by_code = {item.code: item for item in candidates}
         rows: list[dict[str, object]] = []
         for rank, analysis in enumerate(ranked, start=1):
             candidate = by_code[analysis.symbol]
             metrics = candidate.windows["14"]
+            flow = flow_estimates.get(analysis.symbol)
             rows.append({
                 "symbol": analysis.symbol, "name": candidate.name,
                 "live_rank_14d": rank, "live_price": int(analysis.hourly_closes[-1]),
@@ -120,9 +145,20 @@ class IntradayCandidateOverlay:
                 "reach_days_10pct": analysis.reach_days_10,
                 "reach_days_15pct": analysis.reach_days_15,
                 "current_vs_window_high_pct": str(
+                    (-analysis.current_to_window_high).quantize(Decimal("0.01"))
+                ),
+                "discount_from_window_high_pct": str(
                     analysis.current_to_window_high.quantize(Decimal("0.01"))
                 ),
                 "lower_trend_pct": str(analysis.lower_trend.quantize(Decimal("0.01"))),
+                "intraday_flow_status": "READY" if flow is not None else "UNAVAILABLE",
+                "intraday_flow_observation": flow[0] if flow is not None else None,
+                "intraday_foreign_net_qty": flow[1] if flow is not None else None,
+                "intraday_institution_net_qty": flow[2] if flow is not None else None,
+                "intraday_combined_net_qty": flow[3] if flow is not None else None,
+                "intraday_flow_strength_pct": (
+                    str(flow[4].quantize(Decimal("0.01"))) if flow is not None else None
+                ),
                 "closes": [str(value) for value in analysis.hourly_closes],
                 "chart_bars": [
                     {
@@ -140,7 +176,7 @@ class IntradayCandidateOverlay:
                 "context_status": candidate.context_status,
             })
         payload: dict[str, object] = {
-            "schema_version": 2, "revision": f"{trading_date}-{local.strftime('%H%M')}",
+            "schema_version": 3, "revision": f"{trading_date}-{local.strftime('%H%M')}",
             "observed_at": now.isoformat(), "report_data_as_of": report.data_as_of.isoformat(),
             "coverage": len(rows), "failed_symbols": failures, "rows": rows,
         }

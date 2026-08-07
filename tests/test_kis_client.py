@@ -154,6 +154,80 @@ async def test_market_wide_kis_contracts_are_mapped(
 
 
 @pytest.mark.asyncio
+async def test_stock_investor_flow_maps_requested_trading_day(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.headers["tr_id"] == "FHPTJ04160001"
+        assert request.url.params["FID_COND_MRKT_DIV_CODE"] == "J"
+        assert request.url.params["FID_INPUT_ISCD"] == "005930"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output2": [
+                    {
+                        "stck_bsop_date": "20260807",
+                        "prsn_ntby_tr_pbmn": "1200",
+                        "frgn_ntby_tr_pbmn": "-900",
+                        "orgn_ntby_tr_pbmn": "-300",
+                        "scrt_ntby_tr_pbmn": "-200",
+                        "ivtr_ntby_tr_pbmn": "50",
+                        "fund_ntby_tr_pbmn": "25",
+                    }
+                ],
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        flow = await client.stock_investor_flow(
+            "005930", trading_date="20260807"
+        )
+    finally:
+        await client.close()
+    assert flow.foreign_million == -900
+    assert flow.institution_million == -300
+    assert flow.pension_fund_million == 25
+
+
+@pytest.mark.asyncio
+async def test_stock_investor_estimate_maps_latest_snapshot(
+    credentials: KisCredentials,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth2/tokenP":
+            return httpx.Response(200, json={"access_token": "token", "expires_in": 3600})
+        assert request.headers["tr_id"] == "HHPTJ04160200"
+        assert request.url.params["MKSC_SHRN_ISCD"] == "005930"
+        return httpx.Response(
+            200,
+            json={
+                "rt_cd": "0",
+                "output2": [
+                    {
+                        "bsop_hour_gb": "0930",
+                        "frgn_fake_ntby_qty": "-9000",
+                        "orgn_fake_ntby_qty": "2500",
+                        "sum_fake_ntby_qty": "-6500",
+                    }
+                ],
+            },
+        )
+
+    client = KisClient(credentials, transport=httpx.MockTransport(handler))
+    try:
+        estimate = await client.stock_investor_estimate("005930")
+    finally:
+        await client.close()
+    assert estimate.observation_label == "0930"
+    assert estimate.foreign_net_quantity == -9000
+    assert estimate.combined_net_quantity == -6500
+
+
+@pytest.mark.asyncio
 async def test_invalid_symbol_never_calls_network(credentials: KisCredentials) -> None:
     client = KisClient(credentials, transport=httpx.MockTransport(lambda _: None))
     try:
