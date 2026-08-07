@@ -255,7 +255,7 @@ class TradingRuntimeCore:
         observed_now = now or datetime.now(UTC)
         entry_market_risk = (
             MarketRisk.RISK_OFF
-            if self.market_entry_resume_required
+            if not self.market_guard_initialized or self.market_entry_resume_required
             else self.market_risk
         )
         snapshot = signal.snapshot(

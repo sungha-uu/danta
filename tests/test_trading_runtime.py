@@ -106,6 +106,26 @@ async def test_market_guard_is_not_initialized_until_first_snapshot() -> None:
     assert core.market_guard_initialized
 
 
+@pytest.mark.asyncio
+async def test_uninitialized_market_guard_blocks_entry_until_first_snapshot() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+    await orchestrator.reconcile_complete(safe_for_new_entries=True)
+    core = TradingRuntimeCore(
+        orchestrator=orchestrator,
+        entry_policy=entry_policy(),
+        exit_policy=exit_policy(),
+    )
+    await core.activate_mandate(mandate(), orderable_cash=1_000_000)
+    now = regular_session_time()
+
+    assert await core.process_event(trade(99_000, now), now=now) is None
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0.1"))
+    assert await core.process_event(trade(99_000, now), now=now) is not None
+
+
 def trade(price: int, now: datetime) -> TradeTick:
     return TradeTick(
         symbol="005930",
@@ -175,6 +195,7 @@ async def test_runtime_enters_tracks_fill_and_hard_stops() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
     now = regular_session_time()
     assert await core.process_event(orderbook(99000, now), now=now) is None
     buy = await core.process_event(trade(99000, now), now=now)
@@ -307,6 +328,7 @@ async def test_box_break_does_not_cancel_pending_entry_approval() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
     now = regular_session_time()
     buy = await core.process_event(trade(99000, now), now=now)
     assert buy is not None
@@ -351,6 +373,7 @@ async def test_deteriorated_pending_buy_cancels_and_rearms_at_lower_price() -> N
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
     now = regular_session_time()
     first = await core.process_event(trade(99000, now), now=now)
     assert first is not None
@@ -421,6 +444,7 @@ async def test_partial_fill_cancel_keeps_position_and_does_not_rearm() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1000000)
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
     now = regular_session_time()
     buy = await core.process_event(trade(99000, now), now=now)
     assert buy is not None
@@ -515,6 +539,7 @@ async def test_recovered_partial_order_does_not_replay_old_fills() -> None:
         exit_policy=exit_policy(),
     )
     await core.activate_mandate(mandate(), orderable_cash=1_000_000)
+    core.set_market_guard(MarketRisk.NORMAL, stress_score=Decimal("0"))
     now = regular_session_time()
     await core.process_event(orderbook(99_000, now), now=now)
     intent = await core.process_event(trade(99_000, now), now=now)
