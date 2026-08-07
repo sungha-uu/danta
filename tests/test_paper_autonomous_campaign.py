@@ -417,12 +417,13 @@ def test_candidate_preference_rejects_duplicate_or_invalid_symbols() -> None:
 
 
 @pytest.mark.asyncio
-async def test_market_change_during_quote_collection_blocks_submission(
+async def test_market_caution_allows_selection_but_blocks_submission(
     tmp_path: Path,
 ) -> None:
     report = tmp_path / "reviewed.json"
     shutil.copy(Path("data/candidate_intraday_ai_report.json"), report)
     authorization_path = tmp_path / "campaign.json"
+    overlay_path = tmp_path / "overlay.json"
     now = datetime(2026, 8, 6, 1, 0, tzinfo=UTC)
     write_campaign_authorization(
         create_campaign_authorization(now=now - timedelta(minutes=1)),
@@ -432,11 +433,13 @@ async def test_market_change_during_quote_collection_blocks_submission(
         paper_autonomous_campaign_path=authorization_path,
         paper_autonomous_kill_switch_path=tmp_path / "STOP",
         paper_autonomous_report_path=report,
+        intraday_overlay_path=overlay_path,
     )
+    _write_ready_flow_overlay(report, overlay_path, now)
     core = SimpleNamespace(
         positions={},
         submitted={},
-        market_risk=MarketRisk.NORMAL,
+        market_risk=MarketRisk.CAUTION,
         market_guard_initialized=True,
         market_entry_resume_required=False,
         orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
@@ -448,11 +451,74 @@ async def test_market_change_during_quote_collection_blocks_submission(
         command_store=store,
         core=core,  # type: ignore[arg-type]
         repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
-        broker=_RiskChangingBroker(core),  # type: ignore[arg-type]
+        broker=_LiveQuoteBroker(),  # type: ignore[arg-type]
     )
 
     assert await controller.tick(now) is None
     assert store.load_active() is None
+    snapshot = json.loads(
+        (tmp_path / "autonomous_next_selection.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["execution_status"] == "WATCHING"
+    assert snapshot["blocked_reason"] == "MARKET_RISK_NOT_NORMAL"
+
+
+@pytest.mark.asyncio
+async def test_active_position_does_not_stop_next_candidate_selection(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "reviewed.json"
+    shutil.copy(Path("data/candidate_intraday_ai_report.json"), report)
+    authorization_path = tmp_path / "campaign.json"
+    overlay_path = tmp_path / "overlay.json"
+    now = datetime(2026, 8, 6, 1, 0, tzinfo=UTC)
+    write_campaign_authorization(
+        create_campaign_authorization(now=now - timedelta(minutes=1)),
+        authorization_path,
+    )
+    _write_ready_flow_overlay(report, overlay_path, now)
+    settings = AppSettings(
+        paper_autonomous_campaign_path=authorization_path,
+        paper_autonomous_kill_switch_path=tmp_path / "STOP",
+        paper_autonomous_report_path=report,
+        intraday_overlay_path=overlay_path,
+    )
+    notifier = _RecordingNotifier()
+    store = FileCommandStore(tmp_path / "commands")
+    controller = PaperAutonomousCampaignController(
+        settings=settings,
+        credentials=_credentials(),
+        command_store=store,
+        core=SimpleNamespace(  # type: ignore[arg-type]
+            positions={"000660": object()},
+            submitted={},
+            market_risk=MarketRisk.NORMAL,
+            market_guard_initialized=True,
+            market_entry_resume_required=False,
+            orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
+        ),
+        repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
+        notifier=notifier,  # type: ignore[arg-type]
+        broker=_LiveQuoteBroker(),  # type: ignore[arg-type]
+    )
+
+    assert await controller.tick(now) is None
+    assert store.load_active() is None
+    snapshot_path = tmp_path / "autonomous_next_selection.json"
+    assert snapshot_path.exists()
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert snapshot["execution_status"] == "WATCHING"
+    assert snapshot["blocked_reason"] == "ACCOUNT_NOT_FLAT"
+    assert snapshot["selections"]
+    assert all("ai_grade" not in row for row in snapshot["selections"])
+    assert notifier.calls == ["selection", "prices"]
+
+    # A fresh overlay with the same symbols refreshes the watch snapshot but
+    # must not repeat selection/price emails.
+    later = now + timedelta(minutes=1)
+    _write_ready_flow_overlay(report, overlay_path, later, revision="revision-2")
+    assert await controller.tick(later) is None
+    assert notifier.calls == ["selection", "prices"]
 
 
 @pytest.mark.asyncio
@@ -495,6 +561,9 @@ async def test_market_pause_email_is_sent_once_per_trading_day(
     tmp_path: Path,
 ) -> None:
     authorization_path = tmp_path / "campaign.json"
+    report = tmp_path / "reviewed.json"
+    shutil.copy(Path("data/candidate_intraday_ai_report.json"), report)
+    overlay_path = tmp_path / "overlay.json"
     now = datetime(2026, 8, 6, 1, 0, tzinfo=UTC)  # 10:00 KST
     write_campaign_authorization(
         create_campaign_authorization(now=now - timedelta(minutes=1)),
@@ -503,7 +572,10 @@ async def test_market_pause_email_is_sent_once_per_trading_day(
     settings = AppSettings(
         paper_autonomous_campaign_path=authorization_path,
         paper_autonomous_kill_switch_path=tmp_path / "STOP",
+        paper_autonomous_report_path=report,
+        intraday_overlay_path=overlay_path,
     )
+    _write_ready_flow_overlay(report, overlay_path, now)
     notifier = _RecordingNotifier()
     controller = PaperAutonomousCampaignController(
         settings=settings,
@@ -518,10 +590,11 @@ async def test_market_pause_email_is_sent_once_per_trading_day(
         ),
         repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
         notifier=notifier,  # type: ignore[arg-type]
+        broker=_LiveQuoteBroker(),  # type: ignore[arg-type]
     )
 
     assert await controller.tick(now) is None
     assert await controller.tick(now + timedelta(minutes=1)) is None
 
     assert notifier.paused_reasons == ["MARKET_RISK_NOT_NORMAL"]
-    assert notifier.calls == ["paused"]
+    assert notifier.calls == ["selection", "prices", "paused"]

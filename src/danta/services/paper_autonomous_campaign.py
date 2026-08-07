@@ -109,6 +109,8 @@ class AutonomousCampaignState(BaseModel):
     submitted_reports: list[str] = Field(default_factory=list, max_length=100)
     daily_batches: dict[str, int] = Field(default_factory=dict)
     notification_keys: list[str] = Field(default_factory=list, max_length=100)
+    last_selection_signature: str | None = None
+    last_selection_revision: str | None = None
     updated_at: datetime
 
 
@@ -281,7 +283,7 @@ class AutonomousCampaignController:
         if authorization is None:
             return None
         state = self._load_state(authorization)
-        reason = self._blocking_reason(authorization, now)
+        reason = self._selection_blocking_reason(authorization, now)
         if reason is not None:
             if reason != self._last_block_reason:
                 await self.repository.audit(
@@ -320,11 +322,6 @@ class AutonomousCampaignController:
             f"{report_key}|{overlay_revision}" if overlay_revision is not None else report_key
         )
         trading_day = now.astimezone(KST).date().isoformat()
-        if submission_key in state.submitted_reports:
-            return None
-        if state.daily_batches.get(trading_day, 0) >= authorization.max_daily_batches:
-            await self._blocked(authorization, "DAILY_BATCH_LIMIT")
-            return None
 
         all_candidates = [*report.candidates, *report.extended_watchlist]
         safety_eligible = [
@@ -459,8 +456,37 @@ class AutonomousCampaignController:
         if not selections:
             await self._blocked(authorization, "NO_VALID_SELECTIONS")
             return None
-        # Quote collection may overlap a market-state transition. Re-check at
-        # the durable command boundary instead of trusting the earlier state.
+        selected_positions = {
+            item.candidate.code: item.position_pct for item in selected
+        }
+        # Candidate discovery is independent from order execution. An active
+        # command or a cautious market can delay the order but must not freeze
+        # the next watch list and target-price calculation.
+        reason = self._blocking_reason(authorization, now)
+        await self._record_next_selection(
+            authorization=authorization,
+            state=state,
+            selections=selections,
+            selected_positions=selected_positions,
+            overlay_revision=overlay_revision or report_key,
+            report_key=report_key,
+            blocked_reason=reason,
+            now=now,
+        )
+        if reason is not None:
+            if reason != self._last_block_reason:
+                await self._blocked(authorization, reason)
+                await self._notify_entry_paused(authorization, state, reason, now)
+                self._last_block_reason = reason
+            return None
+        self._last_block_reason = None
+        if submission_key in state.submitted_reports:
+            return None
+        if state.daily_batches.get(trading_day, 0) >= authorization.max_daily_batches:
+            await self._blocked(authorization, "DAILY_BATCH_LIMIT")
+            return None
+        # Quote collection and selection persistence may overlap another market
+        # transition. Re-check again at the durable command boundary.
         reason = self._blocking_reason(authorization, now)
         if reason is not None:
             await self._blocked(authorization, reason)
@@ -512,16 +538,71 @@ class AutonomousCampaignController:
                 ),
             },
         )
-        selected_positions = {
-            item.candidate.code: item.position_pct for item in selected
-        }
+        return mandate
+
+    async def _record_next_selection(
+        self,
+        *,
+        authorization: AutonomousCampaignAuthorization,
+        state: AutonomousCampaignState,
+        selections: list[EntrySelection],
+        selected_positions: dict[str, Decimal],
+        overlay_revision: str,
+        report_key: str,
+        blocked_reason: str | None,
+        now: datetime,
+    ) -> None:
+        signature = "|".join(selection.symbol for selection in selections)
+        _atomic_json(
+            self.settings.autonomous_campaign_path.with_name(
+                "autonomous_next_selection.json"
+            ),
+            {
+                "schema_version": 1,
+                "observed_at": now.isoformat(),
+                "report_data_as_of": report_key,
+                "overlay_revision": overlay_revision,
+                "selection_version": AUTONOMOUS_SELECTION_VERSION,
+                "execution_status": "READY" if blocked_reason is None else "WATCHING",
+                "blocked_reason": blocked_reason,
+                "selections": [
+                    {
+                        **selection.model_dump(mode="json", exclude={"ai_grade"}),
+                        "position_pct": str(
+                            selected_positions[selection.symbol].quantize(
+                                Decimal("0.01")
+                            )
+                        ),
+                    }
+                    for selection in selections
+                ],
+            },
+        )
+        await self.repository.audit(
+            "AUTONOMOUS_CANDIDATES_SELECTED",
+            correlation_id=authorization.campaign_id,
+            payload={
+                "symbols": [selection.symbol for selection in selections],
+                "overlay_revision": overlay_revision,
+                "blocked_reason": blocked_reason,
+                "selection_changed": signature != state.last_selection_signature,
+            },
+        )
+        if signature == state.last_selection_signature:
+            state.last_selection_revision = overlay_revision
+            state.updated_at = now
+            _atomic_json(self.state_path, state.model_dump(mode="json"))
+            return
         await self._notify_selections(
             authorization,
             selections,
             selected_positions,
         )
         await self._notify_prices(authorization, selections)
-        return mandate
+        state.last_selection_signature = signature
+        state.last_selection_revision = overlay_revision
+        state.updated_at = now
+        _atomic_json(self.state_path, state.model_dump(mode="json"))
 
     def _load_intraday_overlay(
         self,
@@ -605,6 +686,19 @@ class AutonomousCampaignController:
             return "MARKET_RESUME_CONFIRMATION_REQUIRED"
         if self.core.market_risk is not MarketRisk.NORMAL:
             return "MARKET_RISK_NOT_NORMAL"
+        return None
+
+    def _selection_blocking_reason(
+        self,
+        authorization: AutonomousCampaignAuthorization,
+        now: datetime,
+    ) -> str | None:
+        if not authorization.permits_new_entries(now):
+            return "CAMPAIGN_DISABLED_OR_EXPIRED"
+        if self.settings.autonomous_kill_switch_path.exists():
+            return "KILL_SWITCH_ACTIVE"
+        if trading_session_phase(now) is not TradingSessionPhase.KRX_REGULAR:
+            return "OUTSIDE_REGULAR_SESSION"
         return None
 
     async def _blocked(
