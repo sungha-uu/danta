@@ -60,6 +60,11 @@ def test_dashboard_mandate_preserves_symbols_and_builds_stable_command_id() -> N
 
     assert [item.symbol for item in first.selections] == ["005930", "000660", "005380"]
     assert first.command_id == second.command_id
+    assert first.command_id == "entry-10ad79b713269c120e4919fc866384fc"
+    assert all(
+        item.selection_basis == "QUANTITATIVE_OPPORTUNITY"
+        for item in first.selections
+    )
     assert first.hard_stop_pct == Decimal("-7.0")
 
 

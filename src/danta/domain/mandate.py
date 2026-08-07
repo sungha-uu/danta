@@ -89,8 +89,14 @@ class EntryMandate(BaseModel):
 
     @property
     def command_id(self) -> str:
+        # `selection_basis` was added after live mandates already existed. It
+        # is descriptive metadata, not execution intent, so excluding it from
+        # the idempotency hash preserves restart recovery for those mandates.
         canonical = json.dumps(
-            self.model_dump(mode="json"),
+            self.model_dump(
+                mode="json",
+                exclude={"selections": {"__all__": {"selection_basis"}}},
+            ),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
