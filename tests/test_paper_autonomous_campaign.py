@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,12 +19,39 @@ from danta.services.command_store import CommandStatus, FileCommandStore
 from danta.services.paper_autonomous_campaign import (
     AutonomousCandidatePreference,
     PaperAutonomousCampaignController,
+    _autonomous_opportunity_score,
     candidate_preference_path,
     create_campaign_authorization,
     load_campaign_authorization,
     write_campaign_authorization,
     write_candidate_preference,
 )
+
+
+def test_intraday_flow_is_weighted_without_becoming_an_absolute_positive_gate() -> None:
+    same_price_positive = _autonomous_opportunity_score(
+        live_rank=10,
+        discount_from_high_pct=Decimal("20"),
+        flow_strength_pct=Decimal("1"),
+    )
+    same_price_mild_outflow = _autonomous_opportunity_score(
+        live_rank=10,
+        discount_from_high_pct=Decimal("20"),
+        flow_strength_pct=Decimal("-1"),
+    )
+    strong_price_opportunity_with_mild_outflow = _autonomous_opportunity_score(
+        live_rank=1,
+        discount_from_high_pct=Decimal("40"),
+        flow_strength_pct=Decimal("-1"),
+    )
+    weak_price_opportunity_with_inflow = _autonomous_opportunity_score(
+        live_rank=45,
+        discount_from_high_pct=Decimal("5"),
+        flow_strength_pct=Decimal("1"),
+    )
+
+    assert same_price_positive > same_price_mild_outflow
+    assert strong_price_opportunity_with_mild_outflow > weak_price_opportunity_with_inflow
 
 
 class _RecordingNotifier:

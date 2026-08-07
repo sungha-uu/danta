@@ -26,9 +26,25 @@ from danta.services.runtime_repository import SqlRuntimeRepository
 from danta.services.trading_runtime import TradingRuntimeCore
 
 AUTONOMOUS_GRADES = frozenset({"STRONG_RECOMMEND", "RECOMMEND"})
-AUTONOMOUS_SELECTION_VERSION = "autonomous-intraday-flow-gated-v3"
-MIN_INTRADAY_COMBINED_FLOW_STRENGTH_PCT = Decimal("0.50")
+AUTONOMOUS_SELECTION_VERSION = "autonomous-intraday-flow-weighted-v4"
+SEVERE_INTRADAY_OUTFLOW_STRENGTH_PCT = Decimal("-3.00")
 KST = ZoneInfo("Asia/Seoul")
+
+
+def _autonomous_opportunity_score(
+    *,
+    live_rank: int,
+    discount_from_high_pct: Decimal,
+    flow_strength_pct: Decimal,
+) -> Decimal:
+    """Score live entry opportunities without making positive flow mandatory."""
+    bounded_discount = min(max(discount_from_high_pct, Decimal("0")), Decimal("50"))
+    bounded_rank = min(max(live_rank, 1), 50)
+    bounded_flow = min(max(flow_strength_pct, Decimal("-3")), Decimal("3"))
+    discount_score = bounded_discount / Decimal("50") * Decimal("40")
+    rank_score = Decimal(50 - bounded_rank) / Decimal("49") * Decimal("40")
+    flow_score = (bounded_flow + Decimal("3")) / Decimal("6") * Decimal("20")
+    return (discount_score + rank_score + flow_score).quantize(Decimal("0.0001"))
 
 
 class IntradayOverlayRow(TypedDict):
@@ -332,7 +348,7 @@ class AutonomousCampaignController:
             ]
             eligible.extend(required)
         live_candidates: list[
-            tuple[int, int, Decimal, CandidateView, int, Decimal, Decimal]
+            tuple[int, int, Decimal, CandidateView, int, Decimal, Decimal, Decimal]
         ] = []
         overlay_rows: list[dict[str, object]] = []
         live_rows = (
@@ -355,13 +371,19 @@ class AutonomousCampaignController:
                 flow_strength_pct = live_row["intraday_flow_strength_pct"]
             else:
                 continue
-            if (
-                flow_status != "READY"
-                or combined_net_qty <= 0
-                or flow_strength_pct < MIN_INTRADAY_COMBINED_FLOW_STRENGTH_PCT
+            # Fresh flow data is mandatory so that broad capital flight is not
+            # missed. Positive foreign+institution flow is a preference, not a
+            # pass/fail gate; only severe estimated outflow blocks a new entry.
+            if flow_status != "READY" or (
+                flow_strength_pct <= SEVERE_INTRADAY_OUTFLOW_STRENGTH_PCT
             ):
                 continue
             grade_priority = 0 if metrics.ai_grade == "STRONG_RECOMMEND" else 1
+            opportunity_score = _autonomous_opportunity_score(
+                live_rank=live_rank,
+                discount_from_high_pct=discount_from_high_pct,
+                flow_strength_pct=flow_strength_pct,
+            )
             live_candidates.append(
                 (
                     live_rank,
@@ -371,6 +393,7 @@ class AutonomousCampaignController:
                     live_price,
                     discount_from_high_pct,
                     flow_strength_pct,
+                    opportunity_score,
                 )
             )
             overlay_rows.append(
@@ -386,17 +409,18 @@ class AutonomousCampaignController:
                     "discount_from_window_high_pct": str(discount_from_high_pct),
                     "intraday_combined_net_qty": combined_net_qty,
                     "intraday_flow_strength_pct": str(flow_strength_pct),
+                    "autonomous_opportunity_score": str(opportunity_score),
                 }
             )
-        # AI approval remains mandatory, but repeated-rise rank must decide which
-        # approved opportunities receive scarce autonomous slots. Otherwise a
-        # low-position rank-40 candidate can displace a rank-2 candidate.
+        # User preference remains first. Otherwise price discount and repeated-rise
+        # rank carry 80% of the score; live flow contributes a 20% preference.
         live_candidates.sort(
             key=lambda item: (
                 0 if item[3].code in preference_order else 1,
                 preference_order.get(item[3].code, 999),
-                -item[5],
+                -item[7],
                 -item[6],
+                -item[5],
                 item[0],
                 item[1],
                 item[2],
@@ -503,7 +527,7 @@ class AutonomousCampaignController:
         )
         selected_positions = {
             candidate.code: position_pct
-            for _, _, position_pct, candidate, _, _, _ in selected
+            for _, _, position_pct, candidate, _, _, _, _ in selected
         }
         await self._notify_selections(
             authorization,
