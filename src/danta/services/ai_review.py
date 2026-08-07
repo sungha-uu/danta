@@ -112,16 +112,11 @@ def apply_ai_review(report: DashboardReport, review: AiReviewBatch) -> Dashboard
                 windows[key] = metrics
                 continue
             window_review = candidate_review.windows[key]
-            ai_score = Decimal(window_review.ai_score)
             windows[key] = metrics.model_copy(
                 update={
-                    "ai_grade": window_review.ai_grade,
-                    "ai_score": ai_score,
-                    "final_score": (
-                        metrics.quant_score + ai_score
-                    ) / 2
-                    if metrics.quant_score is not None
-                    else ai_score,
+                    "ai_grade": None,
+                    "ai_score": None,
+                    "final_score": metrics.quant_score,
                     "ai_comment": window_review.ai_comment,
                     "reasons": window_review.reasons,
                     "risks": window_review.risks,

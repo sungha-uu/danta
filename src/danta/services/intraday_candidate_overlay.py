@@ -172,7 +172,7 @@ class IntradayCandidateOverlay:
                     }
                     for bar in analysis.hour_bars
                 ],
-                "base_rank_14d": metrics.rank, "ai_grade": metrics.ai_grade,
+                "base_rank_14d": metrics.rank,
                 "context_status": candidate.context_status,
             })
         payload: dict[str, object] = {

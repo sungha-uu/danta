@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -25,9 +26,7 @@ from danta.services.notifier import NotificationError, SmtpNotifier
 from danta.services.runtime_repository import SqlRuntimeRepository
 from danta.services.trading_runtime import TradingRuntimeCore
 
-AUTONOMOUS_GRADES = frozenset({"STRONG_RECOMMEND", "RECOMMEND"})
-AUTONOMOUS_SELECTION_VERSION = "autonomous-intraday-flow-weighted-v4"
-SEVERE_INTRADAY_OUTFLOW_STRENGTH_PCT = Decimal("-3.00")
+AUTONOMOUS_SELECTION_VERSION = "quant-discount-live-flow-v5"
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -63,6 +62,17 @@ class IntradayOverlayPayload(TypedDict):
     rows: list[IntradayOverlayRow]
 
 
+@dataclass(frozen=True, slots=True)
+class _LiveCandidate:
+    live_rank: int
+    position_pct: Decimal
+    candidate: CandidateView
+    live_price: int
+    discount_from_high_pct: Decimal
+    flow_strength_pct: Decimal
+    opportunity_score: Decimal
+
+
 class AutonomousCampaignAuthorization(BaseModel):
     schema_version: Literal[1] = 1
     authority: Literal["AUTONOMOUS_TRADING_CAMPAIGN"]
@@ -74,10 +84,6 @@ class AutonomousCampaignAuthorization(BaseModel):
     max_concurrent_positions: int = Field(default=3, ge=1, le=3)
     max_daily_batches: int = Field(default=3, ge=1, le=3)
     max_capital_pct: Decimal = Field(default=Decimal("100.0"), gt=0, le=100)
-    approved_grades: tuple[Literal["STRONG_RECOMMEND", "RECOMMEND"], ...] = (
-        "STRONG_RECOMMEND",
-        "RECOMMEND",
-    )
 
     @model_validator(mode="after")
     def validate_window(self) -> AutonomousCampaignAuthorization:
@@ -86,8 +92,6 @@ class AutonomousCampaignAuthorization(BaseModel):
         duration = self.expires_at.astimezone(UTC) - self.approved_at.astimezone(UTC)
         if duration <= timedelta(0) or duration > timedelta(days=90):
             raise ValueError("campaign duration must be positive and at most 90 days")
-        if len(set(self.approved_grades)) != len(self.approved_grades):
-            raise ValueError("approved_grades must be unique")
         return self
 
     def permits_new_entries(self, now: datetime) -> bool:
@@ -291,8 +295,12 @@ class AutonomousCampaignController:
         self._last_block_reason = None
 
         report = load_dashboard_report(self.settings.autonomous_report_path)
-        if not report.model_id.startswith("agent-"):
-            await self._blocked(authorization, "REPORT_NOT_AGENT_REVIEWED")
+        if (
+            report.strategy_status != "ACTIVE"
+            or report.source_bar_interval_minutes != 1
+            or report.analysis_bar_interval_minutes not in {10, 30, 60}
+        ):
+            await self._blocked(authorization, "REPORT_NOT_ACTIVE_INTRADAY")
             return None
         report_key = report.data_as_of.isoformat()
         expected_date = _latest_expected_report_date(now)
@@ -332,24 +340,8 @@ class AutonomousCampaignController:
             if preference is not None
             else {}
         )
-        eligible = [
-            candidate
-            for candidate in safety_eligible
-            if candidate.windows["14"].ai_grade in authorization.approved_grades
-            and candidate.windows["14"].rank is not None
-            and candidate.windows["14"].rank <= 50
-        ]
-        if preference is not None and preference.selection_policy == "REQUIRE_INCLUDE":
-            eligible_codes = {candidate.code for candidate in eligible}
-            required = [
-                candidate
-                for candidate in safety_eligible
-                if candidate.code in preference_order and candidate.code not in eligible_codes
-            ]
-            eligible.extend(required)
-        live_candidates: list[
-            tuple[int, int, Decimal, CandidateView, int, Decimal, Decimal, Decimal]
-        ] = []
+        eligible = safety_eligible
+        live_candidates: list[_LiveCandidate] = []
         overlay_rows: list[dict[str, object]] = []
         live_rows = (
             {str(row["symbol"]): row for row in overlay["rows"]}
@@ -371,29 +363,25 @@ class AutonomousCampaignController:
                 flow_strength_pct = live_row["intraday_flow_strength_pct"]
             else:
                 continue
-            # Fresh flow data is mandatory so that broad capital flight is not
-            # missed. Positive foreign+institution flow is a preference, not a
-            # pass/fail gate; only severe estimated outflow blocks a new entry.
-            if flow_status != "READY" or (
-                flow_strength_pct <= SEVERE_INTRADAY_OUTFLOW_STRENGTH_PCT
-            ):
+            # Fresh flow data is mandatory, but its sign is not an isolated
+            # pass/fail rule. Outflow lowers the combined opportunity score;
+            # account-wide market emergency gates remain authoritative.
+            if flow_status != "READY":
                 continue
-            grade_priority = 0 if metrics.ai_grade == "STRONG_RECOMMEND" else 1
             opportunity_score = _autonomous_opportunity_score(
                 live_rank=live_rank,
                 discount_from_high_pct=discount_from_high_pct,
                 flow_strength_pct=flow_strength_pct,
             )
             live_candidates.append(
-                (
-                    live_rank,
-                    grade_priority,
-                    position_pct,
-                    candidate,
-                    live_price,
-                    discount_from_high_pct,
-                    flow_strength_pct,
-                    opportunity_score,
+                _LiveCandidate(
+                    live_rank=live_rank,
+                    position_pct=position_pct,
+                    candidate=candidate,
+                    live_price=live_price,
+                    discount_from_high_pct=discount_from_high_pct,
+                    flow_strength_pct=flow_strength_pct,
+                    opportunity_score=opportunity_score,
                 )
             )
             overlay_rows.append(
@@ -403,7 +391,6 @@ class AutonomousCampaignController:
                     "base_price": str(candidate.current_price),
                     "live_price": live_price,
                     "live_position_pct": str(position_pct.quantize(Decimal("0.01"))),
-                    "ai_grade": metrics.ai_grade,
                     "base_rank_14d": metrics.rank,
                     "live_rank_14d": live_rank,
                     "discount_from_window_high_pct": str(discount_from_high_pct),
@@ -412,18 +399,18 @@ class AutonomousCampaignController:
                     "autonomous_opportunity_score": str(opportunity_score),
                 }
             )
-        # User preference remains first. Otherwise price discount and repeated-rise
-        # rank carry 80% of the score; live flow contributes a 20% preference.
+        # User preference remains first. Otherwise repeated-rise rank and price
+        # discount carry 80%; current capital flow contributes 20% without
+        # becoming a single-factor eligibility gate.
         live_candidates.sort(
             key=lambda item: (
-                0 if item[3].code in preference_order else 1,
-                preference_order.get(item[3].code, 999),
-                -item[7],
-                -item[6],
-                -item[5],
-                item[0],
-                item[1],
-                item[2],
+                0 if item.candidate.code in preference_order else 1,
+                preference_order.get(item.candidate.code, 999),
+                -item.opportunity_score,
+                -item.flow_strength_pct,
+                -item.discount_from_high_pct,
+                item.live_rank,
+                item.position_pct,
             )
         )
         selected = live_candidates[: authorization.max_concurrent_positions]
@@ -447,14 +434,14 @@ class AutonomousCampaignController:
         allocations[-1] += authorization.max_capital_pct - sum(allocations, Decimal("0"))
         selections: list[EntrySelection] = []
         for live_item, allocation_pct in zip(selected, allocations, strict=True):
-            candidate = live_item[3]
-            live_price = live_item[4]
+            candidate = live_item.candidate
+            live_price = live_item.live_price
             metrics = candidate.windows["14"]
             if metrics.box_low is None or metrics.box_high is None or metrics.rank is None:
                 continue
             selections.append(
                 EntrySelection(
-                    rank=live_item[0],
+                    rank=live_item.live_rank,
                     symbol=candidate.code,
                     name=candidate.name,
                     entry_target_price_krw=live_price,
@@ -464,7 +451,7 @@ class AutonomousCampaignController:
                         else "PAPER_AUTONOMOUS_REPORT_PRICE"
                     ),
                     allocation_pct=allocation_pct,
-                    ai_grade=str(metrics.ai_grade),
+                    selection_basis="QUANTITATIVE_OPPORTUNITY",
                     box_low=metrics.box_low,
                     box_high=metrics.box_high,
                 )
@@ -526,8 +513,7 @@ class AutonomousCampaignController:
             },
         )
         selected_positions = {
-            candidate.code: position_pct
-            for _, _, position_pct, candidate, _, _, _, _ in selected
+            item.candidate.code: item.position_pct for item in selected
         }
         await self._notify_selections(
             authorization,
@@ -748,7 +734,6 @@ class AutonomousCampaignController:
         rows = [
             (
                 selection.name,
-                selection.ai_grade,
                 selection.entry_target_price_krw,
                 selected_positions[selection.symbol],
             )

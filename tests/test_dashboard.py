@@ -255,14 +255,13 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert ">기간고점 대비<" in html
     assert "하단 방향" not in header_html
     assert "상승세" in header_html
-    assert header_html.count('data-sort-key="') == 6
+    assert header_html.count('data-sort-key="') == 5
     for sort_key in (
         "lowerTrend",
         "averageUpSwing",
         "upSwingCount",
         "flowStrength",
         "quantScore",
-        "agentScore",
     ):
         assert f'data-sort-key="{sort_key}"' in header_html
     assert 'data-rank-reset' in header_html
@@ -315,10 +314,11 @@ def test_dashboard_build_is_self_contained_and_global_windowed(tmp_path: Path) -
     assert "extended_watchlist" in html
     assert "extended-watch-row" in html
     assert "extended-badge" in html
-    assert "AI 코멘트" in html
-    assert "정량 등급" in html
+    assert "AI 종합 코멘트" in html
+    assert "AI 등급" not in header_html
+    assert "에이전트 점수" not in header_html
     assert "AI 정성 검토는 아직 미연결입니다." in html
-    assert "reviewGradeLabel" in html
+    assert "reviewGradeLabel" not in html
     assert "최신 뉴스" in html
     assert ">종목토론</th>" in html
     assert ">토론 요약</th>" not in html

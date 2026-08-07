@@ -46,7 +46,6 @@
       upSwingCount: item.up_swing_count,
       flowStrength: item.flows?.strength_pct,
       quantScore: item.quant_score,
-      agentScore: item.ai_score,
     })[state.sortKey];
   };
   const ranked = () => [...candidates].sort((a, b) => {
@@ -61,24 +60,6 @@
     if (difference !== 0) return state.sortDirection === "asc" ? difference : -difference;
     return baseRank(a) - baseRank(b);
   });
-  const gradeLabel = (grade) => ({
-    STRONG_RECOMMEND: "적극 추천", RECOMMEND: "추천",
-    NOT_RECOMMEND: "비추천", STRONG_NOT_RECOMMEND: "적극 비추천",
-  })[grade] || grade;
-  const reviewGradeLabel = (grade) => (
-    !grade
-      ? "AI 심층검토 대상 외"
-      : quantBaseline
-      ? `정량 ${gradeLabel(grade)}`
-      : agentContextReview
-      ? `에이전트 ${gradeLabel(grade)}`
-      : gradeLabel(grade)
-  );
-  const gradeClass = (grade) => ({
-    STRONG_RECOMMEND: "grade-strong", RECOMMEND: "grade-recommend",
-    NOT_RECOMMEND: "grade-avoid", STRONG_NOT_RECOMMEND: "grade-strong-avoid",
-  })[grade] || "";
-  const recommended = (grade) => grade === "STRONG_RECOMMEND" || grade === "RECOMMEND";
   const signed = (value, suffix = "") => {
     const number = n(value);
     return `${flowOne.format(number)}${suffix}`;
@@ -153,15 +134,8 @@
         return false;
       }
       if (item.structure_status === "WARMING_UP") return true;
-      return (!$("#recommendedOnly").checked || recommended(item.ai_grade))
-        && (!$("#lowerOnly").checked || n(item.position_pct) <= 35);
+      return !$("#lowerOnly").checked || n(item.position_pct) <= 35;
     });
-  }
-
-  function grade(item) {
-    if (item.structure_status === "WARMING_UP") return structureCell(item, "");
-    if (!item.ai_grade) return '<span class="structure-warming">AI 심층검토 대상 외</span>';
-    return `<span class="grade ${gradeClass(item.ai_grade)}">${h(reviewGradeLabel(item.ai_grade))}</span>`;
   }
 
   function stockCell(candidate, extra = "") {
@@ -308,7 +282,6 @@
         <td class="sticky-select"><input class="candidate-check" data-select-code="${h(candidate.code)}" type="checkbox" aria-label="${h(selectionLabel)}" ${selection.has(candidate.code) ? "checked" : ""} ${selectable ? "" : "disabled"}></td>
         <td class="sticky-rank">${structureCell(item, `${item.rank}${official ? "" : '<small class="extended-badge">관찰</small>'}`)}</td>
         ${stockCell(candidate)}
-        <td>${grade(item)}</td>
         <td>${won.format(n(candidate.current_price))}</td>
         <td class="${tone(item.return_pct)}"><b>${percent(item.return_pct)}</b></td>
         <td class="${tone(item.current_vs_window_high_pct)}">${structureCell(item, `<b>${percent(item.current_vs_window_high_pct)}</b>`)}</td>
@@ -328,8 +301,7 @@
         <td class="${tone(flows.pension)}">${signed(flows.pension)}</td>
         <td class="${tone(flows.strength_pct)}"><b>${percent(flows.strength_pct)}</b></td>
         <td>${structureCell(item, one.format(n(item.quant_score)))}</td>
-        <td>${structureCell(item, item.ai_score == null ? "-" : one.format(n(item.ai_score)))}</td>
-        <td class="wrap">${structureCell(item, item.ai_comment ? h(item.ai_comment) : "AI 심층검토 대상 외")}</td>
+        <td class="wrap">${structureCell(item, item.ai_comment ? h(item.ai_comment) : "AI 종합 코멘트 대상 외")}</td>
         <td class="news-cell">${newsHtml(candidate)}</td>
         <td class="discussion">${discussionHtml(candidate)}</td>
         <td><a class="chart-link" href="${h(candidate.naver_url)}" target="_blank" rel="noopener noreferrer">차트보기</a></td>
@@ -530,7 +502,7 @@
     $("#selectionCount").textContent = items.length;
     $("#selectionItems").innerHTML = items.map((candidate) => `
       <div class="selection-item">
-        <strong>${h(candidate.name)}</strong><small>${h(reviewGradeLabel(metric(candidate).ai_grade))}</small>
+        <strong>${h(candidate.name)}</strong><small>정량 기회 후보</small>
         <div class="selection-fields">
           <label><span>진입 목표가(원)</span>
             <input class="price-input tray-price" data-tray-code="${h(candidate.code)}" type="text" inputmode="numeric" aria-label="${h(candidate.name)} 진입 목표가" value="${won.format(selection.get(candidate.code).entryTargetPrice)}">
@@ -589,7 +561,7 @@
         `  entry_target_price_krw: ${draft.entryTargetPrice}`,
         `  entry_price_source: ${draft.auto ? "BOX_LOW_AUTO" : "USER_EDITED"}`,
         `  allocation_pct: ${allocationOne.format(draft.allocationPct)}`,
-        `  ai_grade: ${reviewGradeLabel(item.ai_grade)}`,
+        "  selection_basis: QUANTITATIVE_OPPORTUNITY",
         `  box_low: ${item.box_low}`, `  box_high: ${item.box_high}`,
       );
     });
@@ -685,7 +657,7 @@
     refreshAutoTargets();
     renderAll();
   }));
-  ["#recommendedOnly", "#lowerOnly"].forEach((selector) => {
+  ["#lowerOnly"].forEach((selector) => {
     $(selector).addEventListener("change", renderAll);
   });
   $("#candidateSearch").addEventListener("submit", (event) => {
@@ -773,17 +745,11 @@
     if (actionable) {
       $("#analysisDescription").textContent = "박스·수익률·차트·수급·정량 기준선을 한 행에서 비교합니다. AI 정성 검토는 아직 미연결입니다.";
     }
-    $("#recommendFilterLabel").textContent = "정량 추천 이상";
-    $("#reviewGradeHeader").textContent = "정량 등급";
-    $("#reviewScoreHeader .sort-label").textContent = "검토점수";
     $("#reviewCommentHeader").textContent = "정량 코멘트";
   }
   if (agentContextReview) {
     $("#analysisDescription").textContent = "시가총액 상위 200개는 모두 주문 선택 가능하며, 정량 상위 50개의 수급·뉴스·공시·종목토론을 심층 검토합니다.";
-    $("#recommendFilterLabel").textContent = "에이전트 추천 이상";
-    $("#reviewGradeHeader").textContent = "에이전트 등급";
-    $("#reviewScoreHeader .sort-label").textContent = "에이전트 점수";
-    $("#reviewCommentHeader").textContent = "에이전트 코멘트";
+    $("#reviewCommentHeader").textContent = "AI 종합 코멘트";
   }
   renderAll();
   void refreshIntradayOverlay();

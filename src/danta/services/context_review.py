@@ -53,6 +53,14 @@ NEGATIVE_WORDS = (
     "신저가",
     "손실",
 )
+
+
+def _qualitative_opinion(score: Decimal) -> str:
+    if score >= Decimal("60"):
+        return "종합 의견: 단기 변동성 후보로 우선 검토할 만합니다."
+    if score >= Decimal("45"):
+        return "종합 의견: 가격 안정과 장중 자금 흐름을 확인하는 조건부 관찰이 적절합니다."
+    return "종합 의견: 현재는 신규 진입보다 관찰이 적절해 보입니다."
 BULLISH_DISCUSSION_WORDS = ("상승", "반등", "급등", "상한가", "매수", "호재")
 BEARISH_DISCUSSION_WORDS = ("하락", "급락", "폭락", "손절", "매도", "악재")
 TOPIC_WORDS = (
@@ -705,6 +713,7 @@ def build_context_review(
                 ),  # type: ignore[arg-type]
                 ai_score=int(score.quantize(Decimal("1"))),
                 ai_comment=(
+                    f"{_qualitative_opinion(score)} "
                     f"{metrics.days}일 기준 {gate_text}, {flow_text} 강도 "
                     f"{flow_strength.quantize(Decimal('0.1'))}%, {news_text}. "
                     f"{financial_text}. "

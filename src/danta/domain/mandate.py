@@ -23,7 +23,10 @@ class EntrySelection(BaseModel):
         "AUTONOMOUS_REPORT_PRICE",
     ]
     allocation_pct: Decimal = Field(gt=0, le=100)
-    ai_grade: str = Field(min_length=1, max_length=40)
+    selection_basis: Literal["QUANTITATIVE_OPPORTUNITY"] = "QUANTITATIVE_OPPORTUNITY"
+    # Backward-compatible read support for mandates created before AI grades
+    # were removed from the active selection and order path.
+    ai_grade: str | None = Field(default=None, min_length=1, max_length=40)
     box_low: Decimal = Field(gt=0)
     box_high: Decimal = Field(gt=0)
 

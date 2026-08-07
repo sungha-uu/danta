@@ -57,13 +57,13 @@ def test_intraday_flow_is_weighted_without_becoming_an_absolute_positive_gate() 
 class _RecordingNotifier:
     def __init__(self) -> None:
         self.prices: list[tuple[str, int]] = []
-        self.selections: list[tuple[str, str, int, object]] = []
+        self.selections: list[tuple[str, int, object]] = []
         self.paused_reasons: list[str] = []
         self.calls: list[str] = []
 
     def send_autonomous_selection_completed(
         self,
-        selections: list[tuple[str, str, int, object]],
+        selections: list[tuple[str, int, object]],
     ) -> SimpleNamespace:
         self.selections = selections
         self.calls.append("selection")
@@ -234,7 +234,11 @@ async def test_controller_submits_one_agent_reviewed_batch_per_report(
 
     assert mandate is not None
     assert 1 <= len(mandate.selections) <= 3
-    assert all(item.ai_grade in {"STRONG_RECOMMEND", "RECOMMEND"} for item in mandate.selections)
+    assert all(item.ai_grade is None for item in mandate.selections)
+    assert all(
+        item.selection_basis == "QUANTITATIVE_OPPORTUNITY"
+        for item in mandate.selections
+    )
     assert [item.rank for item in mandate.selections] == sorted(
         item.rank for item in mandate.selections
     )
@@ -273,9 +277,7 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
         for candidate in candidates
         if candidate.context_status == "READY"
         and candidate.windows["14"].structure_status == "READY"
-        and candidate.windows["14"].ai_grade in {"STRONG_RECOMMEND", "RECOMMEND"}
         and candidate.windows["14"].rank is not None
-        and candidate.windows["14"].rank <= 50
     ]
     assert len(candidates) == 200
     assert eligible
@@ -299,9 +301,9 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
         for candidate in candidates
     ]
     chosen = eligible[-1]
-    rejected_outflow = eligible[0]
-    rejected_row = next(row for row in rows if row["symbol"] == rejected_outflow.code)
-    rejected_row.update(
+    discounted_outflow = eligible[0]
+    discounted_row = next(row for row in rows if row["symbol"] == discounted_outflow.code)
+    discounted_row.update(
         {
             "live_rank_14d": 1,
             "discount_from_window_high_pct": "40.0",
@@ -358,8 +360,7 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
 
     first = await controller.tick(now)
     assert first is not None
-    assert first.selections[0].symbol == chosen.code
-    assert all(item.symbol != rejected_outflow.code for item in first.selections)
+    assert discounted_outflow.code in {item.symbol for item in first.selections}
     assert first.selections[0].rank == 1
     store.accept_next()
     store.archive_active(first.command_id, status=CommandStatus.COMPLETED, reason="TEST")
@@ -368,7 +369,7 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
     preferred = next(
         candidate
         for candidate in eligible
-        if candidate.code not in {chosen.code, rejected_outflow.code}
+        if candidate.code not in {chosen.code, discounted_outflow.code}
     )
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     report_rows = [
@@ -395,7 +396,8 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
     assert second is not None
     assert second.command_id != first.command_id
     assert second.selections[0].symbol == preferred.code
-    assert second.selections[0].ai_grade == "NOT_RECOMMEND"
+    assert second.selections[0].ai_grade is None
+    assert second.selections[0].selection_basis == "QUANTITATIVE_OPPORTUNITY"
 
 
 def test_candidate_preference_rejects_duplicate_or_invalid_symbols() -> None:

@@ -143,8 +143,8 @@ def test_autonomous_selection_notification_is_simple_and_exact(
 
     SmtpNotifier(_config(use_ssl=True)).send_autonomous_selection_completed(
         [
-            ("SK하이닉스", "STRONG_RECOMMEND", 1_450_000, Decimal("18.24")),
-            ("삼성전자", "RECOMMEND", 208_500, Decimal("31.05")),
+            ("SK하이닉스", 1_450_000, Decimal("18.24")),
+            ("삼성전자", 208_500, Decimal("31.05")),
         ]
     )
 
@@ -154,8 +154,8 @@ def test_autonomous_selection_notification_is_simple_and_exact(
     plain_body = message.get_body(preferencelist=("plain",))
     assert plain_body is not None
     assert plain_body.get_content().strip() == (
-        "SK하이닉스 STRONG_RECOMMEND 1,450,000원 박스위치 18.2%\n"
-        "삼성전자 RECOMMEND 208,500원 박스위치 31.0%"
+        "SK하이닉스 1,450,000원 박스위치 18.2%\n"
+        "삼성전자 208,500원 박스위치 31.0%"
     )
 
 

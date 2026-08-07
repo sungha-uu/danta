@@ -112,18 +112,18 @@ class SmtpNotifier:
 
     def send_autonomous_selection_completed(
         self,
-        selections: list[tuple[str, str, int, Decimal]],
+        selections: list[tuple[str, int, Decimal]],
     ) -> NotificationReceipt:
         if not selections:
             raise ValueError("at least one autonomous selection is required")
         lines: list[str] = []
-        for name, grade, price, position_pct in selections:
-            if not name.strip() or not grade.strip():
-                raise ValueError("selection name and grade must not be blank")
+        for name, price, position_pct in selections:
+            if not name.strip():
+                raise ValueError("selection name must not be blank")
             if price <= 0:
                 raise ValueError("selection price must be positive")
             lines.append(
-                f"{name.strip()} {grade.strip()} {price:,}원 "
+                f"{name.strip()} {price:,}원 "
                 f"박스위치 {position_pct.quantize(Decimal('0.1'))}%"
             )
         message = EmailMessage()
