@@ -337,6 +337,16 @@ class AutonomousCampaignController:
             if preference is not None
             else {}
         )
+        occupied_symbols = set(self.core.positions)
+        for submitted_order in self.core.submitted.values():
+            intent = getattr(submitted_order, "intent", None)
+            symbol = getattr(intent, "symbol", None)
+            if isinstance(symbol, str):
+                occupied_symbols.add(symbol)
+        available_slots = max(
+            0,
+            authorization.max_concurrent_positions - len(occupied_symbols),
+        )
         eligible = safety_eligible
         live_candidates: list[_LiveCandidate] = []
         overlay_rows: list[dict[str, object]] = []
@@ -410,7 +420,14 @@ class AutonomousCampaignController:
                 item.position_pct,
             )
         )
-        selected = live_candidates[: authorization.max_concurrent_positions]
+        selected = [
+            item
+            for item in live_candidates
+            if item.candidate.code not in occupied_symbols
+        ][:available_slots]
+        if available_slots == 0:
+            await self._blocked(authorization, "NO_AVAILABLE_POSITION_SLOTS")
+            return None
         if not selected:
             await self._blocked(authorization, "NO_APPROVED_CANDIDATES")
             return None

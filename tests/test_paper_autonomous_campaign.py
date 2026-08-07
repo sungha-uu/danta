@@ -591,7 +591,8 @@ async def test_active_position_does_not_stop_next_candidate_selection(
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     assert snapshot["execution_status"] == "WATCHING"
     assert snapshot["blocked_reason"] == "ACCOUNT_NOT_FLAT"
-    assert snapshot["selections"]
+    assert len(snapshot["selections"]) == 2
+    assert all(row["symbol"] != "000660" for row in snapshot["selections"])
     assert all("ai_grade" not in row for row in snapshot["selections"])
     assert notifier.calls == ["selection", "prices"]
 
