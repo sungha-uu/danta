@@ -8,12 +8,15 @@ from typing import Any
 import pytest
 
 from danta.adapters.kis.client import KisApiError
-from danta.domain.trading_session import IntentSide
+from danta.domain.trading_session import IntentSide, SymbolState
 from danta.ports.broker import AccountPosition
 from danta.services import paper_trading_application as application_module
+from danta.services.capital_allocator import CapitalAllocator
 from danta.services.command_store import CommandStatus, StoredCommand
 from danta.services.paper_trading_application import PaperTradingApplication
+from danta.services.priority_intent_scheduler import PriorityIntentScheduler
 from danta.services.trade_notification_outbox import TradeNotificationOutbox
+from danta.services.trading_orchestrator import TradingOrchestrator
 
 
 def test_market_monitor_error_latches_only_during_regular_session() -> None:
@@ -39,6 +42,35 @@ def test_recovery_capital_includes_held_cost_without_exposing_it_as_cash() -> No
     )
 
     assert recovered == 125_000 + (30 * 54_800) + (12 * 129_500)
+
+
+def test_recovered_cancelled_buy_advances_attempt_number() -> None:
+    assert application_module._next_entry_attempt("entry-1:000660:BUY:A0") == 1
+    assert application_module._next_entry_attempt("entry-1:000660:BUY:A12") == 13
+    assert application_module._next_entry_attempt("entry-1:000660:SELL") is None
+
+
+class _GenerationRepository:
+    async def latest_generations(self, symbols: list[str]) -> dict[str, int]:
+        assert symbols == ["322000", "000660"]
+        return {"322000": 0}
+
+
+async def test_live_mandate_seeds_closed_generation_before_activation() -> None:
+    orchestrator = TradingOrchestrator(
+        capital_allocator=CapitalAllocator(),
+        scheduler=PriorityIntentScheduler(),
+    )
+
+    await application_module._seed_latest_closed_generations(
+        orchestrator,
+        _GenerationRepository(),  # type: ignore[arg-type]
+        ["322000", "000660"],
+    )
+
+    assert orchestrator.sessions["322000"].generation == 0
+    assert orchestrator.sessions["322000"].state is SymbolState.CLOSED
+    assert "000660" not in orchestrator.sessions
 
 
 class _RateLimitedBroker:

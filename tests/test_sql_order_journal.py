@@ -11,9 +11,9 @@ from danta.domain.trading_session import (
 from danta.services.sql_order_journal import SqlOrderJournal
 
 
-def _intent() -> OrderIntent:
+def _intent(*, idempotency_key: str = "m1:005930:BUY") -> OrderIntent:
     return OrderIntent(
-        idempotency_key="m1:005930:BUY",
+        idempotency_key=idempotency_key,
         symbol="005930",
         generation=0,
         side=IntentSide.BUY,
@@ -40,6 +40,19 @@ async def test_sql_journal_persists_idempotency(tmp_path: object) -> None:
     submitted = await journal.mark_submitted(intent, broker_order_no="12345")
     assert submitted.broker_order_no == "12345"
     assert await journal.find(intent.idempotency_key) == submitted
+    await engine.dispose()
+
+
+async def test_sql_journal_restores_next_buy_attempt_across_restart() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    journal = SqlOrderJournal(factory)
+    assert await journal.next_buy_attempt(approval_id="m1", symbol="005930") == 0
+    assert await journal.mark_submitting(_intent(idempotency_key="m1:005930:BUY:A0"))
+    assert await journal.mark_submitting(_intent(idempotency_key="m1:005930:BUY:A2"))
+    assert await journal.next_buy_attempt(approval_id="m1", symbol="005930") == 3
     await engine.dispose()
 
 

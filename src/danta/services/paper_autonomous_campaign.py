@@ -94,6 +94,9 @@ class AutonomousCandidatePreference(BaseModel):
     authority: Literal["USER_CANDIDATE_PREFERENCE"] = "USER_CANDIDATE_PREFERENCE"
     trading_date: date
     symbols: tuple[str, ...] = Field(min_length=1, max_length=3)
+    selection_policy: Literal["PRIORITIZE_ELIGIBLE", "REQUIRE_INCLUDE"] = (
+        "PRIORITIZE_ELIGIBLE"
+    )
     created_at: datetime
 
     @field_validator("symbols")
@@ -292,14 +295,12 @@ class AutonomousCampaignController:
             return None
 
         all_candidates = [*report.candidates, *report.extended_watchlist]
-        eligible = [
+        safety_eligible = [
             candidate
             for candidate in all_candidates
             if candidate.context_status == "READY"
             and candidate.windows["14"].structure_status == "READY"
-            and candidate.windows["14"].ai_grade in authorization.approved_grades
             and candidate.windows["14"].rank is not None
-            and candidate.windows["14"].rank <= 50
         ]
         preference = load_candidate_preference(self.settings, now)
         preference_order = (
@@ -307,6 +308,21 @@ class AutonomousCampaignController:
             if preference is not None
             else {}
         )
+        eligible = [
+            candidate
+            for candidate in safety_eligible
+            if candidate.windows["14"].ai_grade in authorization.approved_grades
+            and candidate.windows["14"].rank is not None
+            and candidate.windows["14"].rank <= 50
+        ]
+        if preference is not None and preference.selection_policy == "REQUIRE_INCLUDE":
+            eligible_codes = {candidate.code for candidate in eligible}
+            required = [
+                candidate
+                for candidate in safety_eligible
+                if candidate.code in preference_order and candidate.code not in eligible_codes
+            ]
+            eligible.extend(required)
         live_candidates: list[tuple[int, int, Decimal, CandidateView, int]] = []
         overlay_rows: list[dict[str, object]] = []
         live_rows = (
@@ -471,6 +487,9 @@ class AutonomousCampaignController:
                 "preferred_symbols_selected": [
                     item.symbol for item in selections if item.symbol in preference_order
                 ],
+                "preference_selection_policy": (
+                    preference.selection_policy if preference is not None else None
+                ),
             },
         )
         selected_positions = {

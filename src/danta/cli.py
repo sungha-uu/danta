@@ -305,6 +305,11 @@ def _parser() -> argparse.ArgumentParser:
         help="preference date in YYYY-MM-DD; defaults to the next weekday",
     )
     autonomy.add_argument(
+        "--require-include",
+        action="store_true",
+        help="include named READY symbols even when the AI grade is not approved",
+    )
+    autonomy.add_argument(
         "--execute",
         action="store_true",
         help="required for authorize and resume",
@@ -464,6 +469,9 @@ def main() -> None:
                 preference = AutonomousCandidatePreference(
                     trading_date=trading_date,
                     symbols=symbols,
+                    selection_policy=(
+                        "REQUIRE_INCLUDE" if args.require_include else "PRIORITIZE_ELIGIBLE"
+                    ),
                     created_at=local_now,
                 )
                 write_candidate_preference(

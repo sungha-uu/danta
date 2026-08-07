@@ -280,10 +280,22 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
 
     later = now + timedelta(minutes=30)
     preferred = next(candidate for candidate in eligible if candidate.code != chosen.code)
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    report_rows = [
+        *report_payload["candidates"],
+        *report_payload["extended_watchlist"],
+    ]
+    preferred_payload = next(row for row in report_rows if row["code"] == preferred.code)
+    preferred_payload["windows"]["14"]["ai_grade"] = "NOT_RECOMMEND"
+    report_path.write_text(
+        json.dumps(report_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
     write_candidate_preference(
         AutonomousCandidatePreference(
             trading_date=later.astimezone().date(),
             symbols=(preferred.code,),
+            selection_policy="REQUIRE_INCLUDE",
             created_at=later,
         ),
         candidate_preference_path(settings),
@@ -293,6 +305,7 @@ async def test_fresh_200_name_overlay_drives_rank_and_allows_later_flat_batch(
     assert second is not None
     assert second.command_id != first.command_id
     assert second.selections[0].symbol == preferred.code
+    assert second.selections[0].ai_grade == "NOT_RECOMMEND"
 
 
 def test_candidate_preference_rejects_duplicate_or_invalid_symbols() -> None:

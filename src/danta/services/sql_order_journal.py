@@ -44,6 +44,29 @@ class SqlOrderJournal:
                 status=order.status,
             )
 
+    async def next_buy_attempt(self, *, approval_id: str, symbol: str) -> int:
+        """Return a restart-safe attempt number for an active mandate leg."""
+        async with self._session_factory() as session:
+            keys = (
+                await session.scalars(
+                    select(OrderIntentModel.idempotency_key).where(
+                        OrderIntentModel.approval_id == approval_id,
+                        OrderIntentModel.symbol == symbol,
+                        OrderIntentModel.side == IntentSide.BUY.value,
+                    )
+                )
+            ).all()
+        attempts: list[int] = []
+        marker = ":BUY:A"
+        for key in keys:
+            if marker not in key:
+                continue
+            try:
+                attempts.append(int(key.rsplit(marker, 1)[1]))
+            except ValueError:
+                continue
+        return 0 if not attempts else max(attempts) + 1
+
     async def load_recoverable(self) -> list[RecoveredOrder]:
         """Load orders whose terminal broker outcome still matters."""
         async with self._session_factory() as session:

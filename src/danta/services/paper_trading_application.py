@@ -114,6 +114,33 @@ def _recovery_capital_snapshot(
     return available_cash + held_cost
 
 
+async def _seed_latest_closed_generations(
+    orchestrator: TradingOrchestrator,
+    repository: SqlRuntimeRepository,
+    symbols: list[str],
+) -> None:
+    """Prevent a later mandate from reusing a generation already closed in the DB."""
+    latest_generations = await repository.latest_generations(symbols)
+    for symbol, generation in latest_generations.items():
+        if symbol not in orchestrator.sessions:
+            orchestrator.sessions[symbol] = SymbolSession(
+                symbol=symbol,
+                generation=generation,
+                state=SymbolState.CLOSED,
+            )
+
+
+def _next_entry_attempt(idempotency_key: str) -> int | None:
+    """Return the next attempt number encoded by a durable BUY intent key."""
+    marker = ":BUY:A"
+    if marker not in idempotency_key:
+        return None
+    try:
+        return int(idempotency_key.rsplit(marker, 1)[1]) + 1
+    except ValueError:
+        return None
+
+
 class TradingApplication:
     """Environment-locked KIS executable composition root."""
 
@@ -326,16 +353,14 @@ class TradingApplication:
                 active_command = None
                 self.mandate = None
                 selection_names = {}
+            journal = SqlOrderJournal(session_factory)
             if reconciliation.safe_for_new_entries and self.mandate is not None:
                 mandate_symbols = [selection.symbol for selection in self.mandate.selections]
-                latest_generations = await repository.latest_generations(mandate_symbols)
-                for symbol, generation in latest_generations.items():
-                    if symbol not in orchestrator.sessions:
-                        orchestrator.sessions[symbol] = SymbolSession(
-                            symbol=symbol,
-                            generation=generation,
-                            state=SymbolState.CLOSED,
-                        )
+                await _seed_latest_closed_generations(
+                    orchestrator,
+                    repository,
+                    mandate_symbols,
+                )
                 reference = self.mandate.selections[0]
                 cash = await broker.orderable_cash(
                     reference.symbol,
@@ -350,6 +375,14 @@ class TradingApplication:
                     self.mandate,
                     orderable_cash=recovery_capital,
                 )
+                for selection in self.mandate.selections:
+                    core.entry_attempts[selection.symbol] = max(
+                        core.entry_attempts.get(selection.symbol, 0),
+                        await journal.next_buy_attempt(
+                            approval_id=self.mandate.command_id,
+                            symbol=selection.symbol,
+                        ),
+                    )
                 completed_symbols: set[str] = set()
                 if active_command is not None:
                     accepted_at = active_command.accepted_at
@@ -383,7 +416,6 @@ class TradingApplication:
                 )
             elif not reconciliation.safe_for_new_entries:
                 await orchestrator.reconcile_complete(safe_for_new_entries=False)
-            journal = SqlOrderJournal(session_factory)
             await self._recover_orders(
                 core,
                 broker,
@@ -680,6 +712,16 @@ class TradingApplication:
             )
             if recovered_status.remaining_quantity <= 0:
                 if (
+                    item.intent.side is IntentSide.BUY
+                    and recovered_status.filled_quantity == 0
+                ):
+                    next_attempt = _next_entry_attempt(item.intent.idempotency_key)
+                    if next_attempt is not None:
+                        core.entry_attempts[item.intent.symbol] = max(
+                            core.entry_attempts.get(item.intent.symbol, 0),
+                            next_attempt,
+                        )
+                if (
                     recovery_command_id is not None
                     and item.intent.approval_id == recovery_command_id
                     and item.intent.idempotency_key not in sent_notification_keys
@@ -796,19 +838,24 @@ class TradingApplication:
                         SymbolState.CLOSED,
                         SymbolState.INVALIDATED,
                     }
-                    terminal = all(
-                        core.orchestrator.sessions[selection.symbol].state in terminal_states
+                    mandate_sessions = [
+                        core.orchestrator.sessions.get(selection.symbol)
                         for selection in self.mandate.selections
+                    ]
+                    terminal = all(
+                        session is not None and session.state in terminal_states
+                        for session in mandate_sessions
                     )
                     pending = any(
-                        core.orchestrator.sessions[selection.symbol].state
+                        session is not None
+                        and session.state
                         in {
                             SymbolState.BUY_PENDING,
                             SymbolState.PARTIALLY_FILLED,
                             SymbolState.SELL_PENDING,
                             SymbolState.QUARANTINED,
                         }
-                        for selection in self.mandate.selections
+                        for session in mandate_sessions
                     )
                     if terminal and not pending:
                         completed_id = self.mandate.command_id
@@ -850,6 +897,11 @@ class TradingApplication:
                             payload={"reason": "ACCOUNT_SYMBOL_LIMIT_EXCEEDED"},
                         )
                     elif core.orchestrator.state is OrchestratorState.RUNNING:
+                        await _seed_latest_closed_generations(
+                            core.orchestrator,
+                            repository,
+                            [selection.symbol for selection in active.mandate.selections],
+                        )
                         reference = active.mandate.selections[0]
                         cash = await broker.orderable_cash(
                             reference.symbol,
