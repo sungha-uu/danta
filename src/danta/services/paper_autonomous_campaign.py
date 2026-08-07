@@ -628,22 +628,35 @@ class AutonomousCampaignController:
             for item in raw_rows:
                 if not isinstance(item, dict) or not item.get("symbol"):
                     continue
-                row = IntradayOverlayRow(
-                    symbol=str(item["symbol"]),
-                    live_rank_14d=int(str(item["live_rank_14d"])),
-                    live_price=int(str(item["live_price"])),
-                    live_position_pct=Decimal(str(item["live_position_pct"])),
-                    discount_from_window_high_pct=Decimal(
-                        str(item["discount_from_window_high_pct"])
-                    ),
-                    intraday_flow_status=str(item["intraday_flow_status"]),
-                    intraday_combined_net_qty=int(
-                        str(item["intraday_combined_net_qty"])
-                    ),
-                    intraday_flow_strength_pct=Decimal(
-                        str(item["intraday_flow_strength_pct"])
-                    ),
-                )
+                try:
+                    flow_status = str(item["intraday_flow_status"])
+                    # Investor flow is intentionally collected only for the
+                    # quantitative top 50. UNAVAILABLE rows still count toward
+                    # complete 200-name universe coverage.
+                    combined_net_qty = (
+                        int(str(item["intraday_combined_net_qty"]))
+                        if flow_status == "READY"
+                        else 0
+                    )
+                    flow_strength_pct = (
+                        Decimal(str(item["intraday_flow_strength_pct"]))
+                        if flow_status == "READY"
+                        else Decimal("0")
+                    )
+                    row = IntradayOverlayRow(
+                        symbol=str(item["symbol"]),
+                        live_rank_14d=int(str(item["live_rank_14d"])),
+                        live_price=int(str(item["live_price"])),
+                        live_position_pct=Decimal(str(item["live_position_pct"])),
+                        discount_from_window_high_pct=Decimal(
+                            str(item["discount_from_window_high_pct"])
+                        ),
+                        intraday_flow_status=flow_status,
+                        intraday_combined_net_qty=combined_net_qty,
+                        intraday_flow_strength_pct=flow_strength_pct,
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
                 if (
                     len(row["symbol"]) != 6
                     or not row["symbol"].isdigit()

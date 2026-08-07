@@ -153,6 +153,45 @@ def _write_ready_flow_overlay(
     )
 
 
+def _write_top50_flow_overlay(
+    report_path: Path,
+    overlay_path: Path,
+    observed_at: datetime,
+) -> None:
+    report = load_dashboard_report(report_path)
+    candidates = [*report.candidates, *report.extended_watchlist]
+    rows = []
+    for index, candidate in enumerate(candidates):
+        metrics = candidate.windows["14"]
+        flow_ready = index < 50
+        rows.append(
+            {
+                "symbol": candidate.code,
+                "live_rank_14d": metrics.rank or 200,
+                "live_price": int(candidate.current_price),
+                "live_position_pct": "25.0",
+                "discount_from_window_high_pct": "12.0",
+                "intraday_flow_status": "READY" if flow_ready else "UNAVAILABLE",
+                "intraday_combined_net_qty": 10_000 if flow_ready else None,
+                "intraday_flow_strength_pct": "1.0" if flow_ready else None,
+            }
+        )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "revision": "top50-flow-revision",
+                "observed_at": observed_at.isoformat(),
+                "report_data_as_of": report.data_as_of.isoformat(),
+                "coverage": len(rows),
+                "failed_symbols": [],
+                "rows": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _credentials(environment: str = "paper") -> KisCredentials:
     return KisCredentials(
         environment=environment,
@@ -262,6 +301,49 @@ async def test_controller_submits_one_agent_reviewed_batch_per_report(
         reason="TEST",
     )
     assert await controller.tick(now + timedelta(minutes=1)) is None
+
+
+@pytest.mark.asyncio
+async def test_top50_flow_overlay_keeps_full_universe_coverage(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "reviewed.json"
+    shutil.copy(Path("data/candidate_intraday_ai_report.json"), report)
+    authorization_path = tmp_path / "campaign.json"
+    overlay_path = tmp_path / "overlay.json"
+    now = datetime(2026, 7, 30, 1, 0, tzinfo=UTC)
+    write_campaign_authorization(
+        create_campaign_authorization(now=now - timedelta(minutes=1)),
+        authorization_path,
+    )
+    _write_top50_flow_overlay(report, overlay_path, now)
+    settings = AppSettings(
+        paper_autonomous_campaign_path=authorization_path,
+        paper_autonomous_kill_switch_path=tmp_path / "STOP",
+        paper_autonomous_report_path=report,
+        intraday_overlay_path=overlay_path,
+    )
+    controller = PaperAutonomousCampaignController(
+        settings=settings,
+        credentials=_credentials(),
+        command_store=FileCommandStore(tmp_path / "commands"),
+        core=SimpleNamespace(  # type: ignore[arg-type]
+            positions={},
+            submitted={},
+            market_risk=MarketRisk.NORMAL,
+            market_guard_initialized=True,
+            market_entry_resume_required=False,
+            orchestrator=SimpleNamespace(state=OrchestratorState.RUNNING),
+        ),
+        repository=SimpleNamespace(audit=AsyncMock()),  # type: ignore[arg-type]
+        broker=_LiveQuoteBroker(),  # type: ignore[arg-type]
+    )
+
+    mandate = await controller.tick(now)
+
+    assert mandate is not None
+    assert mandate.selections
+    assert all(selection.rank <= 50 for selection in mandate.selections)
 
 
 @pytest.mark.asyncio
