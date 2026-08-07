@@ -307,7 +307,7 @@ def _parser() -> argparse.ArgumentParser:
     autonomy.add_argument(
         "--require-include",
         action="store_true",
-        help="include named READY symbols even when the AI grade is not approved",
+        help="include named READY symbols ahead of the quantitative rank",
     )
     autonomy.add_argument(
         "--execute",
